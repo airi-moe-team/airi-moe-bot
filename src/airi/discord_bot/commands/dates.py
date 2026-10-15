@@ -1,11 +1,7 @@
-"""Comando !cita: propone escenas y abre el selector de cita."""
+"""Comando !cita: abre la invitación y pide la escena por texto libre."""
 
 import time
 
-import aiohttp
-
-from airi.discord_bot import embeds
-from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import can_date, entry_points, is_winner
 from airi.domain.constants import DATE_COOLDOWN
 
@@ -56,13 +52,7 @@ async def handle(ctx, message):
         )
         return
 
-    timeout = aiohttp.ClientTimeout(total=ctx.request_timeout)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with message.channel.typing():
-            scenes = await ctx.propose_scenes(session, message.author)
-
-    embed = embeds.scene_select_embed(date_views.DATE_EMBED_COLOR)
-    view = date_views.SceneSelectView(
-        uid, scenes, ctx.handle_scene_choice, timeout=120
-    )
-    await message.channel.send(embed=embed, view=view)
+    # Ya no se proponen planes con botones: Airi pregunta y el jugador
+    # responde en su próximo mensaje con la escena que quiera.
+    text = ctx.request_scene(uid)
+    await message.channel.send(text)

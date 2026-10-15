@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import logging
+import random
 
-from airi.domain.dates import last_chance_recovery, step_date
+from airi.domain.constants import DATE_QUESTION_DELTA_MAX
+from airi.domain.dates import (
+    last_chance_recovery,
+    question_failed_hard,
+    question_option,
+    roll_question,
+    step_date,
+)
 from airi.domain.texts import DATE_CRISIS_TEXT, DATE_END_KEYWORDS, date_final_text
 from airi.services.state import AppState
 
@@ -35,10 +43,12 @@ def _finish_diary_text(event, name, scene):
 class DateService:
     """Avanza y cierra citas; notifica vía el Notifier (no conoce Discord)."""
 
-    def __init__(self, *, state: AppState, notifier=None, clock=None):
+    def __init__(self, *, state: AppState, notifier=None, clock=None, rng=None):
         self.state = state
         self.notifier = notifier
         self.clock = clock
+        # RNG inyectable para tests deterministas del turno de la pregunta.
+        self.rng = rng if rng is not None else random.Random()
 
     def _now(self, now):
         if now is not None:
@@ -61,6 +71,8 @@ class DateService:
         date_reason,
         last_chance_result,
         now=None,
+        question=None,
+        allow_crisis_drop=True,
     ):
         """Avanza un turno de la cita, comunica el resultado y cierra si toca.
 
@@ -78,6 +90,8 @@ class DateService:
             last_chance_result=last_chance_result,
             end_keyword=end_keyword,
             now=now,
+            question=question,
+            allow_crisis_drop=allow_crisis_drop,
         )
         log.info(
             "Cita de %s: turno %s → estado %s (evento=%s)",
@@ -98,7 +112,7 @@ class DateService:
             self.state.save_dates()
             return event
 
-        if event == "continue":
+        if event in ("continue", "question"):
             self.state.save_dates()
             return event
 
@@ -108,6 +122,63 @@ class DateService:
             await self.notifier.send(date_final_text(event))
         self.finish_date(user.id, session, event, now=now)
         return event
+
+    # ------------------------------------------------------------------
+    # Pregunta decisiva
+    # ------------------------------------------------------------------
+
+    def resolve_question(self, session, index):
+        """Tira el dado de la alternativa `index`. Devuelve el resultado o None.
+
+        El resultado es un dict con `index`, `label`, `action`, `win`, `delta`
+        y `hard_fail` (fallo grave: entra en última oportunidad).
+        """
+        option = question_option(session, index)
+        if option is None:
+            return None
+        win, delta = roll_question(option, self.rng)
+        return {
+            "index": int(index),
+            "label": option.get("label", ""),
+            "action": option.get("action", ""),
+            "win": bool(win),
+            "delta": int(delta),
+            "hard_fail": (not win) and question_failed_hard(delta),
+        }
+
+    def apply_question_result(self, session, result, *, user_id, now=None):
+        """Aplica el swing ya resuelto y deja la sesión para el turno de reacción.
+
+        Marca `force_crisis` si el fallo es grave para que el turno de reacción
+        (con `allow_crisis_drop=False`) entre en última oportunidad. Devuelve el
+        delta realmente aplicado.
+        """
+        now = self._now(now)
+        delta = int(result.get("delta", 0) or 0)
+        applied = 0
+        if delta:
+            applied = self.state.apply_affinity(
+                user_id,
+                delta,
+                now=now,
+                delta_max=DATE_QUESTION_DELTA_MAX,
+                delta_min=-DATE_QUESTION_DELTA_MAX,
+            )
+        session["question_pending"] = False
+        session["question_result"] = {
+            "index": int(result.get("index", -1)),
+            "win": bool(result.get("win")),
+            "delta": delta,
+            "label": str(result.get("label", "")),
+        }
+        if result.get("hard_fail"):
+            session["force_crisis"] = True
+        self.state.save_dates()
+        log.info(
+            "Pregunta de %s resuelta: %s delta=%+d (aplicado %+d)",
+            user_id, "acierto" if result.get("win") else "fallo", delta, applied,
+        )
+        return applied
 
     def finish_date(self, user_id, session, event, *, now):
         """Cierra la cita: registra el resultado en el diario y la elimina."""

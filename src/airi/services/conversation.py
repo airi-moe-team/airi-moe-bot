@@ -74,8 +74,10 @@ class TurnContext:
     allow_web: bool = True
     now: float | None = None  # None → reloj del servicio (testeable)
     correlation_id: str | None = None  # None → se genera uno por turno
-    kind: str = "message"  # message | gift | date_action | scene_select | command
+    kind: str = "message"  # message | gift | scene_select | date_question_result | command
     raw_input: str | None = None  # None → se une de `messages`
+    extra_note: str | None = None  # nota interna extra para el system prompt
+    suppress_affinity: bool = False  # ignora el delta que devuelva el modelo
     on_trace: Callable[[TurnEvent], None] | None = None  # hook post-turno
 
 
@@ -96,7 +98,7 @@ class TurnResult:
     date_decision: str = "continue"
     date_reason: str = "none"
     last_chance_result: str = "none"
-    date_actions: list = field(default_factory=list)
+    date_question: object = None
     grounded: bool = True
     web_context: str | None = None
     memory_saved: bool = False
@@ -219,8 +221,13 @@ class ConversationService:
             delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
-                history, web_context, user, date_session, delta_max
+                history, web_context, user, date_session, delta_max,
+                extra_note=ctx.extra_note,
             )
+            # Turnos internos (p. ej. la reacción a la pregunta): el motor ya
+            # aplicó el swing, así que se ignora lo que devuelva el modelo.
+            if ctx.suppress_affinity:
+                output = output._replace(affinity_delta=0, affinity_event="none")
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.prompt_system = system_prompt
             ev.raw_llm = raw_llm
@@ -239,7 +246,7 @@ class ConversationService:
                 "date_decision": output.date_decision,
                 "date_reason": output.date_reason,
                 "last_chance_result": output.last_chance_result,
-                "actions": list(output.actions),
+                "date_question": output.date_question,
             }
             answer = remove_repeated_previous_reply(output.reply, history)
             answer = strip_repetition_loop(answer)
@@ -264,7 +271,8 @@ class ConversationService:
                 )
                 answer = GROUNDED_FALLBACK_TEXT
                 output = ModelOutput(
-                    answer, "none", "none", "none", 0, "continue", "none", "none", [],
+                    answer, "none", "none", "none", 0, "continue", "none", "none",
+                    None,
                 )
                 grounded = False
             ev.grounded = grounded
@@ -358,7 +366,7 @@ class ConversationService:
                 date_decision=output.date_decision,
                 date_reason=output.date_reason,
                 last_chance_result=output.last_chance_result,
-                date_actions=list(output.actions) if in_date else [],
+                date_question=output.date_question if in_date else None,
                 grounded=grounded,
                 web_context=web_context,
                 memory_saved=memory_saved,
@@ -388,7 +396,9 @@ class ConversationService:
 
     # ------------------------------------------------------------------
 
-    async def _generate(self, history, web_context, user, date_session, delta_max):
+    async def _generate(
+        self, history, web_context, user, date_session, delta_max, extra_note=None
+    ):
         now = self.clock()
         state = self.state
         points = state.entry_points(user.id)
@@ -417,6 +427,8 @@ class ConversationService:
             ),
             domain_prompts.diary_prompt_section(state.diary, user.id, now),
         ]
+        if extra_note:
+            sections.append(f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n")
         system_prompt = domain_prompts.build_system_prompt(web_context, sections)
         messages = [{"role": "system", "content": system_prompt}, *history]
         if hasattr(self.llm, "chat_with_meta"):
@@ -446,7 +458,7 @@ class ConversationService:
                 meta,
                 ModelOutput(
                     None, "none", "none", "none", 0,
-                    "continue", "none", "none", [],
+                    "continue", "none", "none", None,
                 ),
             )
         return system_prompt, raw if isinstance(raw, str) else None, meta, output

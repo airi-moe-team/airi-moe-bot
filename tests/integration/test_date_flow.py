@@ -30,6 +30,27 @@ def step(service, session, **kw):
     return run(service.process_turn(session, **defaults))
 
 
+QUESTION = {
+    "text": "Oye... ¿qué es lo que más te gusta de mí?",
+    "options": [
+        {"label": "Cómo me escuchas", "action": "le escuchas atentamente",
+         "up_chance": 1.0, "delta_up": 20, "delta_down": -5},
+        {"label": "Eres guapa", "action": "le dices que es guapa",
+         "up_chance": 0.0, "delta_up": 6, "delta_down": -22},
+        {"label": "No sé...", "action": "dudas", "up_chance": 0.55,
+         "delta_up": 12, "delta_down": -12},
+    ],
+}
+
+
+def _question_session(state, turns=2):
+    session = new_date_session("paseo", 40, now=NOW)
+    session["turns"] = turns
+    state.dates["1"] = session
+    state.users["1"] = {"name": "Ana"}
+    return session
+
+
 def test_continue_saves_without_messages():
     state, counters = make_state()
     session = new_date_session("paseo", 40, now=NOW)
@@ -135,3 +156,102 @@ def test_full_date_happy_path():
     assert session["state"] == "closed"
     assert "1" not in state.dates
     assert notifier.sent  # hubo mensaje de cierre
+
+
+# --- turno de la pregunta -----------------------------------------------------
+
+def test_question_turn_stores_question_without_affinity_swing():
+    state, counters = make_state()
+    session = _question_session(state)
+    notifier = FakeNotifier()
+    service = make_service(state, notifier)
+
+    event = step(service, session, date_decision="question",
+                 date_reason="quiere saberlo", question=QUESTION)
+
+    assert event == "question"
+    assert session["question_pending"] is True
+    assert session["question_used"] is True
+    assert session["state"] == "active"
+    # El motor no tira el dado aquí: no hay mensajes ni cambios.
+    assert notifier.sent == []
+    assert counters["affinity"] == 0
+    assert counters["dates"] == 1
+    assert "1" in state.dates
+
+
+def test_question_answer_win_applies_swing_and_clears_pending():
+    state, counters = make_state(
+        affinity={"1": {"points": 40, "last_interaction": NOW,
+                          "last_gain": 0.0, "milestones": []}}
+    )
+    session = _question_session(state)
+    service = make_service(state, FakeNotifier())
+    step(service, session, date_decision="question",
+         date_reason="quiere saberlo", question=QUESTION)
+
+    # El jugador pulsa la opción 0 (up_chance=1.0 → acierto seguro +20).
+    result = service.resolve_question(session, 0)
+    applied = service.apply_question_result(
+        session, result, user_id=1, now=NOW
+    )
+
+    assert result["win"] is True
+    assert applied == 20
+    assert state.entry_points(1) == 60
+    assert session["question_pending"] is False
+    assert "1" in state.dates  # la cita sigue
+    assert counters["affinity"] == 1
+
+
+def test_question_answer_hard_fail_marks_force_crisis():
+    state, _ = make_state()
+    session = _question_session(state)
+    service = make_service(state, FakeNotifier())
+    step(service, session, date_decision="question",
+         date_reason="quiere saberlo", question=QUESTION)
+
+    # Opción 1 (up_chance=0.0 → fallo -22: supera el umbral -20).
+    result = service.resolve_question(session, 1)
+    service.apply_question_result(session, result, user_id=1, now=NOW)
+
+    assert result["win"] is False
+    assert result["hard_fail"] is True
+    assert session["force_crisis"] is True
+
+
+def test_reaction_turn_after_hard_fail_enters_last_chance():
+    state, _ = make_state(
+        affinity={"1": {"points": 40, "last_interaction": NOW,
+                          "last_gain": 0.0, "milestones": []}}
+    )
+    session = _question_session(state)
+    notifier = FakeNotifier()
+    service = make_service(state, notifier)
+    step(service, session, date_decision="question",
+         date_reason="quiere saberlo", question=QUESTION)
+    # El pulso ya resolvió: swing -22 aplicado + `force_crisis`.
+    result = service.resolve_question(session, 1)
+    service.apply_question_result(session, result, user_id=1, now=NOW)
+
+    # Turno extra de reacción: el LLM solo comenta (delta 0, sin caída por
+    # afinidad). run_user_turn manda `decision="crisis"` si hay `force_crisis`.
+    event = step(service, session, text="reacciona dolida",
+                 date_decision="crisis", date_reason="none",
+                 allow_crisis_drop=False)
+
+    assert event == "crisis"
+    assert session["state"] == "last_chance"
+    assert notifier.sent == [DATE_CRISIS_TEXT]
+
+
+def test_question_ignored_before_min_turns():
+    state, _ = make_state()
+    session = _question_session(state, turns=0)
+    service = make_service(state, FakeNotifier())
+
+    event = step(service, session, date_decision="question",
+                 date_reason="demasiado pronto", question=QUESTION)
+
+    assert event == "continue"
+    assert session["question_used"] is False

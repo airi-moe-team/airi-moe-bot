@@ -9,6 +9,10 @@ from airi.domain.constants import (
     DATE_LAST_CHANCE_MAX_RECOVERY,
     DATE_MAX_SECONDS,
     DATE_MAX_TURNS,
+    DATE_QUESTION_CRISIS_DROP,
+    DATE_QUESTION_DELTA_MAX,
+    DATE_QUESTION_FORCE_TURN,
+    DATE_QUESTION_MIN_TURNS,
     DATE_STATES,
     LAST_CHANCE_RESULTS,
 )
@@ -37,6 +41,10 @@ def new_date_session(scene, affinity_start, now):
         "crisis_reason": "none",
         "last_chance_used": False,
         "last_chance_result": "none",
+        "question": None,
+        "question_used": False,
+        "question_pending": False,
+        "question_forced": False,
         "history": [],
         "started_at": float(now),
     }
@@ -54,6 +62,11 @@ def normalize_date_session(session):
     session.setdefault("crisis_reason", "none")
     session.setdefault("last_chance_used", False)
     session.setdefault("last_chance_result", "none")
+    session.setdefault("question", None)
+    session.setdefault("question_used", False)
+    session.setdefault("question_pending", False)
+    session.setdefault("question_forced", False)
+    session.setdefault("question_asked_at", 0.0)
     session.setdefault("history", [])
     session.setdefault("started_at", 0.0)
     if session.get("state") not in DATE_STATES:
@@ -138,6 +151,96 @@ def end_allowed(session):
     return turns >= DATE_END_MIN_TURNS
 
 
+# ============================================================
+# PREGUNTA DECISIVA (única por cita)
+# ============================================================
+
+
+def question_allowed(session):
+    """La IA puede hacer la pregunta decisiva (una sola vez, pasados unos turnos)."""
+    if not isinstance(session, dict):
+        return False
+    if session.get("state") != "active":
+        return False
+    if session.get("question_used") or session.get("question_pending"):
+        return False
+    try:
+        turns = int(session.get("turns", 0) or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    return turns >= DATE_QUESTION_MIN_TURNS
+
+
+def should_force_question(session):
+    """True si ya toca forzar la pregunta (la IA no la hizo por su cuenta)."""
+    if not isinstance(session, dict):
+        return False
+    if session.get("state") != "active":
+        return False
+    if session.get("question_used") or session.get("question_pending"):
+        return False
+    try:
+        turns = int(session.get("turns", 0) or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    return turns >= DATE_QUESTION_FORCE_TURN
+
+
+def question_failed_hard(delta):
+    """Un fallo en la pregunta es grave si el desplome llega al umbral."""
+    try:
+        value = int(delta)
+    except (TypeError, ValueError):
+        return False
+    return value <= -DATE_QUESTION_CRISIS_DROP
+
+
+def roll_question(option, rng):
+    """Tira el dado de una alternativa. Devuelve `(acierto, delta)`.
+
+    `option` es un dict con `up_chance` (0..1), `delta_up` y `delta_down`.
+    El delta queda acotado a `±DATE_QUESTION_DELTA_MAX`, con signo coherente.
+    """
+    if not isinstance(option, dict):
+        return False, 0
+    try:
+        chance = float(option.get("up_chance", 0.0))
+    except (TypeError, ValueError):
+        chance = 0.0
+    chance = max(0.0, min(1.0, chance))
+    win = rng.random() < chance
+    raw = option.get("delta_up") if win else option.get("delta_down")
+    try:
+        delta = int(raw)
+    except (TypeError, ValueError):
+        delta = 0
+    if win:
+        delta = max(0, min(DATE_QUESTION_DELTA_MAX, delta))
+    else:
+        delta = min(0, max(-DATE_QUESTION_DELTA_MAX, delta))
+    return win, delta
+
+
+def question_option(session, index):
+    """Devuelve la alternativa `index` de la pregunta pendiente, o None."""
+    if not isinstance(session, dict):
+        return None
+    question = session.get("question")
+    if not isinstance(question, dict):
+        return None
+    options = question.get("options")
+    if not isinstance(options, list):
+        return None
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or index >= len(options):
+        return None
+    option = options[index]
+    return option if isinstance(option, dict) else None
+
+
 def resolve_date_at_limit(session, points=0):
     """Agota los turnos: fuerza el cierre y devuelve el evento final.
 
@@ -189,6 +292,8 @@ def step_date(
     last_chance_result="none",
     end_keyword=False,
     now=None,
+    question=None,
+    allow_crisis_drop=True,
 ):
     """Avanza un turno la máquina de estados de la cita. Muta `session`.
 
@@ -205,14 +310,23 @@ def step_date(
         return "closed", "closed"
 
     if state == "active":
-        if decision == "crisis" and crisis_allowed(session):
+        if decision == "question" and question_allowed(session) and isinstance(question, dict):
+            session["question"] = question
+            session["question_used"] = True
+            session["question_pending"] = True
+            session["question_asked_at"] = float(now) if now is not None else 0.0
+            return "active", "question"
+        forced_crisis = bool(session.get("force_crisis"))
+        if decision == "crisis" and (forced_crisis or crisis_allowed(session)):
+            session["force_crisis"] = False
             session["state"] = "last_chance"
             session["affinity_crisis"] = int(points)
-            session["crisis_reason"] = str(reason or "none")[:300]
+            default_reason = "la pregunta importante salió mal" if forced_crisis else "none"
+            session["crisis_reason"] = str(reason or default_reason)[:300]
             session["last_chance_used"] = True
             return "last_chance", "crisis"
         drop = int(session.get("affinity_start", 0) or 0) - int(points)
-        if drop >= DATE_CRISIS_DROP and crisis_allowed(session):
+        if allow_crisis_drop and drop >= DATE_CRISIS_DROP and crisis_allowed(session):
             session["state"] = "last_chance"
             session["affinity_crisis"] = int(points)
             session["crisis_reason"] = str(reason or "la afinidad cayó")[:300]

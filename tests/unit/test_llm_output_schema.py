@@ -15,8 +15,11 @@ def test_response_schema_disallows_additional_properties():
     assert RESPONSE_SCHEMA["additionalProperties"] is False
 
 
-def test_response_schema_actions_items_are_strict_too():
-    items = RESPONSE_SCHEMA["properties"]["actions"]["items"]
+def test_response_schema_date_question_is_strict_too():
+    question = RESPONSE_SCHEMA["properties"]["date_question"]
+    assert question["additionalProperties"] is False
+    assert set(question["required"]) == set(question["properties"])
+    items = question["properties"]["options"]["items"]
     assert items["additionalProperties"] is False
     assert set(items["required"]) == set(items["properties"])
 

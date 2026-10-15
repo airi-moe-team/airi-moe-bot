@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from airi.domain.constants import SEARCH_QUERY_MAX_TOKENS
+from airi.domain.constants import DATE_QUESTION_MIN_TURNS, SEARCH_QUERY_MAX_TOKENS
 from airi.domain.dates import new_date_session
 from airi.services.conversation import (
     GROUNDED_FALLBACK_TEXT,
@@ -350,18 +350,23 @@ def test_turn_fetches_gif_when_model_selects_one():
     assert gifs.requested == ["happy"]
 
 
-def test_turn_in_date_keeps_actions_and_uses_date_delta_max():
+def test_turn_in_date_keeps_question_and_uses_date_delta_max():
     state, counters = make_state()
     session = new_date_session("cena romántica", 10, now=NOW)
+    session["turns"] = DATE_QUESTION_MIN_TURNS  # turno mínimo para preguntar
     state.dates["42"] = session
     llm = FakeLLM(replies=[llm_json(
         "Airi se sonroja",
         affinity_delta=99,
         affinity_event="cena increíble",
-        actions=[
-            {"label": "Tomar la mano", "action": "le tomas la mano"},
-            {"label": "Brindar", "action": "brindas por los dos"},
-        ],
+        date_decision="question",
+        date_question={
+            "text": "¿Qué es lo que más te gusta de mí?",
+            "options": [
+                {"label": "Cómo me escuchas", "action": "la escuchas",
+                 "up_chance": 0.85, "delta_up": 22, "delta_down": -6},
+            ],
+        },
     )])
     svc = make_service(llm, state, notifier=FakeNotifier(), date_delta_max=8)
 
@@ -369,25 +374,30 @@ def test_turn_in_date_keeps_actions_and_uses_date_delta_max():
 
     assert result.in_date is True
     assert result.affinity_applied == 8  # tope ampliado durante la cita
-    assert len(result.date_actions) == 2
+    assert result.date_decision == "question"
+    assert result.date_question["text"] == "¿Qué es lo que más te gusta de mí?"
     # El historial de la cita queda aislado en la sesión.
     assert session["history"][-1]["role"] == "assistant"
     assert counters["dates"] == 1
     assert 0 not in state.histories
 
 
-def test_turn_outside_date_drops_actions():
+def test_turn_outside_date_drops_question():
     state, _ = make_state()
     llm = FakeLLM(replies=[llm_json(
         "hola",
-        actions=[{"label": "x", "action": "y"}],
+        date_question={
+            "text": "¿pregunta fuera de cita?",
+            "options": [{"label": "x", "action": "y", "up_chance": 0.5,
+                         "delta_up": 1, "delta_down": -1}],
+        },
     )])
     svc = make_service(llm, state, notifier=FakeNotifier())
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
     assert result.in_date is False
-    assert result.date_actions == []
+    assert result.date_question is None
 
 
 def test_system_prompt_includes_affinity_and_user():

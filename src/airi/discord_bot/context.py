@@ -26,6 +26,10 @@ def _noop_bool(*args, **kwargs) -> bool:
     return False
 
 
+def _expire_list(*args, **kwargs) -> list:
+    return []
+
+
 async def _anoop(*args, **kwargs):
     return None
 
@@ -52,15 +56,22 @@ class BotContext:
     send_long_message: Callable[..., Any] = _anoop
     send_gif_bytes: Callable[..., Any] = _anoop
     judge_gift: Callable[..., Any] = _anoop
-    propose_scenes: Callable[..., Any] = _anoop
+    request_scene: Callable[..., str] = lambda user_id, now=None: ""
+    pending_scene: Callable[..., Any] = _noop_bool
+    take_pending_scene: Callable[..., Any] = _noop_bool
+    clear_scene_request: Callable[..., Any] = _noop
+    resolve_question: Callable[..., Any] = _noop
+    apply_question_result: Callable[..., Any] = _noop
+    expire_question: Callable[..., Any] = _noop
     reset_conversation: Callable[..., Any] = _noop
     affinity_footer: Callable[..., str] = lambda user: ""
     busy_date_owner: Callable[..., Any] = _noop
     notify_busy: Callable[..., Any] = _anoop
     date_busy_text: Callable[..., Any] = _noop
     expire_stale_dates: Callable[..., Any] = _noop
-    handle_scene_choice: Callable[..., Any] = _anoop
-    handle_date_action: Callable[..., Any] = _anoop
+    expire_scene_requests: Callable[..., Any] = _expire_list
+    expire_stale_questions: Callable[..., Any] = _expire_list
+    handle_question_answer: Callable[..., Any] = _anoop
     log_diary_event: Callable[..., Any] = _noop_bool
 
     def remember_trace(self, trace):

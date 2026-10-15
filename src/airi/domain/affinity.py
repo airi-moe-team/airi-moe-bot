@@ -18,13 +18,13 @@ from airi.domain.constants import (
 # ============================================================
 
 
-def clamp_delta(delta, delta_max=AFFINITY_DELTA_MAX):
+def clamp_delta(delta, delta_max=AFFINITY_DELTA_MAX, delta_min=AFFINITY_DELTA_MIN):
     """Limita el cambio de afinidad al rango permitido."""
     try:
         value = int(delta)
     except (TypeError, ValueError):
         return 0
-    return max(AFFINITY_DELTA_MIN, min(int(delta_max), value))
+    return max(int(delta_min), min(int(delta_max), value))
 
 
 def affinity_level(points):
@@ -126,7 +126,9 @@ def entry_points(entry):
 # ============================================================
 
 
-def apply_affinity_delta(entry, delta, now, delta_max=AFFINITY_DELTA_MAX):
+def apply_affinity_delta(
+    entry, delta, now, delta_max=AFFINITY_DELTA_MAX, delta_min=AFFINITY_DELTA_MIN
+):
     """Aplica decay por inactividad y el cambio juzgado por Airi.
 
     La afinidad solo cambia por decisión de Airi (el bot ya exige un motivo
@@ -136,7 +138,7 @@ def apply_affinity_delta(entry, delta, now, delta_max=AFFINITY_DELTA_MAX):
     if not isinstance(entry, dict):
         raise TypeError("entry debe ser un dict")
 
-    delta = clamp_delta(delta, delta_max)
+    delta = clamp_delta(delta, delta_max, delta_min)
 
     # 1) Decay por inactividad (días completos sin interactuar).
     #    Si nunca hubo interacción (last == 0), no se aplica decay.

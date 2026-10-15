@@ -9,7 +9,7 @@ from airi.domain.constants import (
     DIARY_PROMPT_MAX_USER,
     KNOWN_USERS_PROMPT_MAX,
 )
-from airi.domain.dates import normalize_date_session
+from airi.domain.dates import normalize_date_session, question_allowed, should_force_question
 from airi.domain.diary import diary_for_user, format_relative_time
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 
@@ -150,9 +150,11 @@ GIF_DECISION_PROMPT = (
     '- "affinity_delta": número entero entre -5 y 5. Solo cuenta si rellenas\n'
     '  "affinity_event" con un motivo; si dejas el motivo, se ignora.\n'
     '- "affinity_event": string con el motivo de tu decisión, o "none".\n'
-    '- "actions": lista de propuestas para el jugador. Solo durante una cita;\n'
-    '  fuera de ella devuélvela como []. Cada elemento es un objeto\n'
-    '  {"label": "texto corto del botón", "action": "qué haría o diría el jugador"}.\n\n'
+    '- "date_question": objeto con la PREGUNTA DECISIVA. Solo se usa UNA vez por\n'
+    '  cita, cuando el momento lo pida (ver regla 14). Fuera de ese momento\n'
+    '  devuélvelo como {"text": "", "options": []}. Cuando la hagas, "text" es la\n'
+    '  pregunta completa de Airi y "options" son 2 o 3 alternativas; cada una es\n'
+    '  {"label", "action", "up_chance", "delta_up", "delta_down"}.\n\n'
     "REGLAS:\n\n"
     '1. Escribe todo el diálogo y las acciones de roleplay dentro de "reply".\n'
     "2. No escribas texto, explicaciones ni bloques Markdown fuera del objeto JSON.\n"
@@ -197,25 +199,34 @@ GIF_DECISION_PROMPT = (
     '     muere). Solo puedes usarlo tras unos turnos; a partir de ahí tendrás\n'
     '     UNA única oportunidad de reconducirlo.\n'
     '   · "end": queréis cerrar la cita (has decidido que ya fue suficiente).\n'
+    '   · "question": haces la PREGUNTA DECISIVA (una sola vez por cita). Si el\n'
+    '     contexto te dice que puedes o que DEBES hacerla, usa esta decisión y\n'
+    '     rellena "date_question" (regla 14).\n'
     '   Escribe el motivo breve en "date_reason". Fuera de una cita deja\n'
     '   "date_decision" en "continue" y "date_reason" en "none".\n'
     '13. En "last_chance_result" (solo durante la última oportunidad, cuando el\n'
     '   contexto lo indique) resume cómo quedó: "success" si él te reconquista\n'
     '   de verdad, "partial" si lo intenta pero queda a medias, "fail" si no lo\n'
     '   consigue. Fuera de ese momento déjalo en "none".\n'
-    '14. El campo "actions" son SUGERENCIAS para que el jugador continúe, no\n'
-    '   órdenes ni tu diálogo. Úsalo solo DURANTE una cita: propón entre 2 y 4\n'
-    '   acciones cortas, concretas y distintas entre sí, coherentes con la\n'
-    '   escena y con tu último mensaje (lo que él podría decir o hacer ahora).\n'
-    '   "label" es un botón muy breve (máx. 60 caracteres); "action" describe\n'
-    '   con algo más de detalle la acción desde el punto de vista del jugador.\n'
-    '   No incluyas acciones que suban la afinidad por sí solas. Fuera de una\n'
-    '   cita, devuelve "actions": [].\n\n'
+    '14. LA PREGUNTA DECISIVA. Durante una cita puedes hacer UNA sola pregunta\n'
+    '   importante (el contexto te dirá si puedes o si DEBES hacerla ya). Cuando\n'
+    '   la hagas, rellena "date_question": "text" es la pregunta que le haces a\n'
+    '   él (algo que de verdad te importe según lo que habéis vivido) y\n'
+    '   "options" son 2 o 3 respuestas posibles que él podría darte. Para cada\n'
+    '   opción: "label" (botón muy breve, máx. 60 caracteres), "action" (qué\n'
+    '   diría o haría él, con algo de detalle), "up_chance" (probabilidad de 0.0\n'
+    '   a 1.0 de que esa opción te acerque de verdad), "delta_up" (cuánto sube\n'
+    '   la afinidad si acierta, de +1 a +25) y "delta_down" (cuánto baja si\n'
+    '   falla, de -1 a -25). Reserva los valores grandes (±20 o más) para la\n'
+    '   opción que toca tu fibra; sé justa: una opción claramente mala debe\n'
+    '   tener poco "up_chance" y un "delta_down" fuerte. Si el contexto NO te\n'
+    '   pide la pregunta, devuelve {"text": "", "options": []}.\n'
+    '   El resto de turnos de la cita son conversación normal SIN botones.\n\n'
 
     "Guía rápida de cada valor de gif:\n"
     f"{GIF_EMOTION_GUIDE}\n\n"
     "Ejemplo de estructura (fuera de una cita):\n\n"
-    '{"reply":"Ehhh... *inclina la cabeza con curiosidad* ¿Qué quieres hacer hoy?","gif":"none","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","date_decision":"continue","date_reason":"none","last_chance_result":"none","actions":[]}\n\n'
+    '{"reply":"Ehhh... *inclina la cabeza con curiosidad* ¿Qué quieres hacer hoy?","gif":"none","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","date_decision":"continue","date_reason":"none","last_chance_result":"none","date_question":{"text":"","options":[]}}\n\n'
     "Devuelve exclusivamente el objeto JSON, sin texto antes ni después.\n"
 )
 
@@ -301,28 +312,6 @@ GIFT_JUDGE_PROMPT = (
     "valor negativo (de -1 a -5).\n"
     "- Ten en cuenta tus gustos y los regalos recientes que ya te ha hecho."
 )
-
-# [CAMBIO] Propuesta de escenas iniciales de la cita: la IA elige 3-4 planes
-# que luego se ofrecen como botones (además de "Sorpréndeme").
-SCENE_PROPOSAL_PROMPT = (
-    "Eres Airi, una chica dulce, cercana y un poco tímida. Alguien a quien "
-    "aprecias te acaba de invitar a una cita. Propón entre 3 y 4 PLANES de cita "
-    "DIFERENTES entre sí, breves (máximo 60 caracteres cada uno), en español, "
-    "atractivos y variados: alguno tranquilo, alguno divertido y alguno más "
-    "romántico. Deben ser planes concretos y realizables (por ejemplo 'un paseo "
-    "por el parque al atardecer'). Devuelve SOLO un objeto JSON con la clave "
-    '"scenes", que es una lista de frases. No escribas nada más.'
-)
-
-SCENE_PROPOSAL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "scenes": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["scenes"],
-    "additionalProperties": False,
-}
-
 
 # ============================================================
 # CONSTRUCCIÓN DEL SYSTEM PROMPT (pura: estado → string)
@@ -439,10 +428,28 @@ def date_context_section(session):
         "\n\n=== CITA EN CURSO ===\n"
         f"Estás en una cita: {scene}. Turno {turns + 1} de {DATE_MAX_TURNS} "
         f"(quedan ~{remaining}). Rellena \"date_decision\" para decidir el rumbo.\n"
-        "Rellena también \"actions\" con 2-4 ideas cortas y distintas de lo que el "
-        "jugador podría hacer o decir ahora (label = botón breve, action = la "
-        "acción completa). Son sugerencias, no decides tú por él.\n"
+        "El resto de turnos son conversación normal: NO hay botones, solo tu "
+        "respuesta. Los botones se reservan para la pregunta decisiva.\n"
     )
+    if session.get("question_pending") and isinstance(session.get("question"), dict):
+        head += (
+            "TIENES UNA PREGUNTA IMPORTANTE PLANTEADA y esperas su respuesta en "
+            "los botones. No avances la escena: reacciona brevemente a lo que "
+            "acaba de ocurrir.\n"
+        )
+    elif state == "active" and should_force_question(session):
+        head += (
+            "MOMENTO DE LA PREGUNTA: ya toca. Haz AHORA tu pregunta decisiva "
+            "(date_decision = \"question\") y rellena \"date_question\" con la "
+            "pregunta y 2-3 alternativas (regla 14). Es tu única oportunidad de "
+            "preguntar en esta cita.\n"
+        )
+    elif state == "active" and question_allowed(session):
+        head += (
+            "Puedes hacer tu pregunta decisiva cuando lo sientas de verdad "
+            "(date_decision = \"question\" + \"date_question\", regla 14). "
+            "Solo dispones de UNA.\n"
+        )
     if state == "last_chance":
         head += (
             "ÚLTIMA OPORTUNIDAD: esta es la ÚNICA posibilidad de reconducir la "
@@ -451,7 +458,7 @@ def date_context_section(session):
             "turno y rellena \"last_chance_result\" con \"success\", \"partial\" "
             "o \"fail\".\n"
         )
-    else:
+    elif not session.get("question_pending"):
         head += (
             "Mantente en la escena y deja que el momento fluya de forma romántica "
             "y espontánea. Si algo se tuerce de verdad, marca \"crisis\"; si ya "

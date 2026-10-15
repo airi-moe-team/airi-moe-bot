@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 import uuid
 from io import BytesIO
@@ -21,7 +20,7 @@ import discord
 from airi.discord_bot import embeds
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import can_date, entry_points
-from airi.domain.constants import DATE_COOLDOWN, DATE_SCENES
+from airi.domain.constants import DATE_COOLDOWN, DATE_SCENE_TEXT_MAX
 from airi.domain.dates import (
     date_expired,
     date_seconds_left,
@@ -30,11 +29,17 @@ from airi.domain.dates import (
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
 from airi.domain.text_filters import clean_reply
-from airi.domain.texts import date_intro
+from airi.domain.texts import date_intro, date_question_result_note
 from airi.observability.instrumentation import turn_event
 from airi.services.conversation import TurnContext
 
 log = logging.getLogger(__name__)
+
+
+def sanitize_scene(scene, limit=DATE_SCENE_TEXT_MAX):
+    """Normaliza la escena escrita por el jugador (una línea, recortada)."""
+    text = " ".join(str(scene or "").split())
+    return text[:limit].strip()
 
 
 async def send_long_message(channel, content):
@@ -81,10 +86,16 @@ async def run_user_turn(
     allow_web=True,
     reply_target=None,
     kind="message",
+    extra_note=None,
+    suppress_affinity=False,
+    allow_crisis_drop=None,
 ):
-    """Procesa un turno (texto libre o botón de cita) y lo traduce a Discord."""
+    """Procesa un turno (texto libre o reacción a la pregunta) y lo traduce a Discord."""
     channel_id = channel.id
     author_id = author.id
+    reaction = kind == "date_question_result"
+    if allow_crisis_drop is None:
+        allow_crisis_drop = not reaction
 
     async def _reply(text):
         await channel.send(text, reference=reply_target, mention_author=False)
@@ -114,6 +125,8 @@ async def run_user_turn(
                             allow_web=allow_web,
                             correlation_id=cid,
                             kind=kind,
+                            extra_note=extra_note,
+                            suppress_affinity=suppress_affinity,
                         ),
                     )
                     ctx.remember_trace(result.trace)
@@ -152,6 +165,15 @@ async def run_user_turn(
                 await ctx.settle_relationship(channel, now, session=session, user=author)
 
                 if in_date:
+                    decision = result.date_decision
+                    last_chance_result = result.last_chance_result
+                    question = result.date_question
+                    if reaction:
+                        # Turno interno: el motor ya aplicó el swing. Solo puede
+                        # forzar la crisis (fallo grave); nunca cierra ni re-pregunta.
+                        decision = "crisis" if date_session.get("force_crisis") else "continue"
+                        last_chance_result = "none"
+                        question = None
                     date_event = await ctx.process_date_turn(
                         channel,
                         author,
@@ -159,10 +181,12 @@ async def run_user_turn(
                         text=merged_text,
                         delta=result.affinity_delta,
                         points=state.entry_points(uid),
-                        date_decision=result.date_decision,
+                        date_decision=decision,
                         date_reason=result.date_reason,
-                        last_chance_result=result.last_chance_result,
+                        last_chance_result=last_chance_result,
                         now=now,
+                        question=question,
+                        allow_crisis_drop=allow_crisis_drop,
                     )
                     # El paso de cita ocurre fuera de `run_turn`; volcamos el
                     # evento a la traza y la reescribimos para que el replay
@@ -182,17 +206,11 @@ async def run_user_turn(
                         and result.diary_action.lower() != "none"
                     ):
                         ctx.add_diary_reflection(uid, result.diary_action, now=now)
-                    if date_event == "continue" and result.date_actions:
-                        remaining = int(date_seconds_left(date_session, now))
-                        view = date_views.DateChoiceView(
-                            uid,
-                            result.date_actions,
-                            ctx.handle_date_action,
-                            timeout=max(1, remaining),
-                        )
-                        await channel.send(
-                            embed=embeds.date_prompt_embed(date_views.DATE_EMBED_COLOR),
-                            view=view,
+                    if date_event == "question" and isinstance(
+                        date_session.get("question"), dict
+                    ):
+                        await _send_question(
+                            ctx, channel, uid, date_session, now=now
                         )
 
         except asyncio.TimeoutError:
@@ -223,79 +241,116 @@ async def run_user_turn(
             await _reply("¡Ay! Ha ocurrido un error inesperado al responder.")
 
 
-async def handle_scene_choice(ctx, interaction, scene):
-    """Arranca la cita cuando el jugador elige (o sortea) una escena."""
-    user = interaction.user
+async def _send_question(ctx, channel, uid, date_session, *, now):
+    """Publica la pregunta decisiva con sus botones (una sola vez por cita)."""
+    question = date_session.get("question") or {}
+    options = question.get("options") or []
+    remaining = int(date_seconds_left(date_session, now))
+    view = date_views.DateQuestionView(
+        uid,
+        options,
+        ctx.handle_question_answer,
+        timeout=max(30, min(remaining or 180, 180)),
+        on_expire=lambda: ctx.expire_question(uid),
+    )
+    await channel.send(
+        embed=date_views.build_question_embed(question.get("text", "")),
+        view=view,
+    )
+
+
+async def start_date_with_scene(ctx, channel, user, scene):
+    """Arranca la cita con la escena escrita por el jugador.
+
+    Revalida los requisitos (nadie más en cita, nivel mínimo, cooldown) porque
+    entre el `!cita` y la respuesta puede pasar tiempo.
+    """
     uid = user.id
     state = ctx.state
     owner_id, owner_session = ctx.busy_date_owner(exclude_id=uid)
     if owner_id is not None:
-        await interaction.followup.send(
-            ctx.date_busy_text(owner_id, owner_session), ephemeral=True
-        )
-        return
+        await channel.send(ctx.date_busy_text(owner_id, owner_session))
+        return False
     if str(uid) in state.dates:
-        await interaction.followup.send(
-            "¡Ya estáis en una cita! *se ríe* concéntrate en el momento~",
-            ephemeral=True,
+        await channel.send(
+            "¡Ya estáis en una cita! *se ríe* concéntrate en el momento~"
         )
-        return
+        return False
     entry = state.affinity_entry(uid)
     points = entry_points(entry)
     if not can_date(points):
-        await interaction.followup.send(
+        await channel.send(
             "Ehh... *se rasca la mejilla* todavía no te conozco lo suficiente "
-            "para una cita. Llega a ser mi **amiga** y te diré que sí, ¿vale?",
-            ephemeral=True,
+            "para una cita. Llega a ser mi **amiga** y te diré que sí, ¿vale?"
         )
-        return
+        return False
+    scene = sanitize_scene(scene)
+    if not scene:
+        return False
     now = time.time()
     last_date = float(entry.get("last_date", 0.0) or 0.0)
     if now - last_date < DATE_COOLDOWN:
         remaining = int((DATE_COOLDOWN - (now - last_date)) // 3600)
-        await interaction.followup.send(
+        await channel.send(
             f"Airi ya ha salido contigo hace poco... dale un respiro "
-            f"(en ~{remaining} h).",
-            ephemeral=True,
+            f"(en ~{remaining} h)."
         )
-        return
-    if not scene:
-        scene = random.choice(DATE_SCENES)
+        return False
     async with turn_event(
         state,
         kind="scene_select",
         user=user,
-        channel_id=getattr(interaction.channel, "id", ""),
+        channel_id=getattr(channel, "id", ""),
         raw_input=scene,
     ):
         state.dates[str(uid)] = new_date_session(scene, points, now)
         entry["last_date"] = now
         state.save_affinity()
         state.save_dates()
-        await interaction.channel.send(date_intro(scene))
+        await channel.send(date_intro(scene))
+    return True
 
 
-async def handle_date_action(ctx, interaction, action_text):
-    """Ejecuta un turno de cita a partir de un botón de acción de Airi."""
+async def handle_question_answer(ctx, interaction, option_index):
+    """Resuelve la pregunta decisiva cuando el jugador pulsa un botón.
+
+    El motor tira el dado y aplica el swing (±25); después Airi reacciona en un
+    turno extra (sin volver a mover la afinidad ni repetir la pregunta).
+    """
     user = interaction.user
     uid = str(user.id)
     state = ctx.state
     session = state.dates.get(uid)
-    if not isinstance(session, dict) or session.get("state") == "closed":
-        await interaction.followup.send("Esa cita ya ha terminado~", ephemeral=True)
+    if (
+        not isinstance(session, dict)
+        or session.get("state") != "active"
+        or not session.get("question_pending")
+    ):
+        await interaction.followup.send(
+            "Esa pregunta ya no está esperando respuesta~", ephemeral=True
+        )
         return
     now = time.time()
     if date_expired(session, now):
         ctx.expire_stale_dates(now)
         await interaction.followup.send("Esa cita ya ha terminado~", ephemeral=True)
         return
-    if not action_text:
+    result = ctx.resolve_question(session, option_index)
+    if result is None:
+        await interaction.followup.send(
+            "Esa opción ya no está disponible~", ephemeral=True
+        )
         return
+    ctx.apply_question_result(session, result, user_id=user.id, now=now)
+    note = date_question_result_note(result["win"], result["delta"])
+    action = result.get("action") or result.get("label") or "responde"
     await run_user_turn(
         ctx,
         interaction.channel,
         user,
-        [(user, action_text)],
+        [(user, action)],
         allow_web=False,
-        kind="date_action",
+        kind="date_question_result",
+        extra_note=note,
+        suppress_affinity=True,
     )

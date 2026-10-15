@@ -30,9 +30,12 @@ HELP_TEXT = (
     "• `!afinidad` — tus puntos y nivel\n"
     "• `!relacion` — vuestro estado (días juntos, etc.)\n"
     "• `!ranking` — quién va ganando\n"
-    "• `!cita` — invitarla a una cita (nivel Amiga, 1 cada 6 h). Son varios "
-    "turnos (máx. ~5 min): si la cosa se tuerce tendrás una última oportunidad "
-    "para reconducirla. Mientras Airi está en una cita, nadie más puede "
+    "• `!cita` — invitarla a una cita (nivel Amiga, 1 cada 6 h). Ella te "
+    "pregunta adónde la llevas y tú escribes el plan. Son varios turnos "
+    "(máx. ~5 min) y en uno de ellos Airi te hará UNA pregunta importante: "
+    "elígele respuesta con los botones y la afinidad puede subir o bajar "
+    "muchísimo. Si la cosa se tuerce tendrás una última oportunidad para "
+    "reconducirla. Mientras Airi está en una cita, nadie más puede "
     "hablarle hasta que termine.\n"
     "• `!regalo <item>` — regalarle algo (1/día). Prueba: flores, chocolate, collar...\n"
     "• `!memorias` / `!olvidar <número>` — ver o borrar sus recuerdos sobre ti\n"
@@ -133,24 +136,4 @@ def users_embed(description):
         title="👋 Personas del canal",
         description=description,
         color=GIF_EMBED_COLOR,
-    )
-
-
-def scene_select_embed(color):
-    return discord.Embed(
-        title="🌹 ¿Adónde la llevas?",
-        description=(
-            "👇 Elige un plan o déjate llevar por el azar."
-        ),
-        color=color,
-    )
-
-
-def date_prompt_embed(color):
-    return discord.Embed(
-        title="💭 ¿Qué haces?",
-        description=(
-            "👇 Elige una acción, o escribe con tus propias palabras lo que quieras hacer~"
-        ),
-        color=color,
     )

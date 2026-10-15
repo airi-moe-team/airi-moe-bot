@@ -73,13 +73,29 @@ class AppState:
     def entry_points(self, user_id) -> int:
         return _entry_points(self.affinity.get(str(user_id)))
 
-    def apply_affinity(self, user_id, delta, *, now, delta_max=AFFINITY_DELTA_MAX) -> int:
+    def apply_affinity(
+        self,
+        user_id,
+        delta,
+        *,
+        now,
+        delta_max=AFFINITY_DELTA_MAX,
+        delta_min=None,
+    ) -> int:
         """Aplica el cambio juzgado por Airi y persiste. Devuelve el aplicado."""
         if self.apply_affinity_fn is not None:
-            applied = self.apply_affinity_fn(user_id, delta, now=now, delta_max=delta_max)
+            kwargs = {"delta_max": delta_max}
+            if delta_min is not None:
+                kwargs["delta_min"] = delta_min
+            applied = self.apply_affinity_fn(user_id, delta, now=now, **kwargs)
             return int(applied or 0)
         entry = self.affinity_entry(user_id)
-        applied = apply_affinity_delta(entry, delta, now, delta_max=delta_max)
+        if delta_min is None:
+            applied = apply_affinity_delta(entry, delta, now, delta_max=delta_max)
+        else:
+            applied = apply_affinity_delta(
+                entry, delta, now, delta_max=delta_max, delta_min=delta_min
+            )
         self.save_affinity()
         return applied
 

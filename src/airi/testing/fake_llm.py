@@ -19,7 +19,7 @@ def llm_json(reply, **fields):
         "date_decision": "continue",
         "date_reason": "none",
         "last_chance_result": "none",
-        "actions": [],
+        "date_question": {"text": "", "options": []},
     }
     payload.update(fields)
     return json.dumps(payload, ensure_ascii=False)

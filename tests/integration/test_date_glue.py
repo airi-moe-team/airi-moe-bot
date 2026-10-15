@@ -12,9 +12,13 @@ import os
 import time
 
 from airi.discord_bot.client import build_date_glue
-from airi.domain.constants import DATE_MAX_SECONDS, DATE_SCENE_MAX_TOKENS, DATE_SCENES
+from airi.domain.constants import (
+    DATE_MAX_SECONDS,
+    DATE_QUESTION_TIMEOUT,
+    DATE_SCENE_TIMEOUT,
+)
 from airi.domain.dates import new_date_session
-from airi.domain.prompts import GIFT_JUDGE_SCHEMA, SCENE_PROPOSAL_SCHEMA
+from airi.domain.prompts import GIFT_JUDGE_SCHEMA
 from airi.testing import FakeUser, make_state
 
 ANA = FakeUser(1, "Ana")
@@ -80,59 +84,178 @@ def _glue(state):
     )
 
 
-# --- propose_scenes --------------------------------------------------------
+# --- escena por texto libre -------------------------------------------------
+
+OPTIONS = [
+    {"label": "Cómo me escuchas", "action": "la escuchas atentamente",
+     "up_chance": 1.0, "delta_up": 20, "delta_down": -5},
+    {"label": "Eres guapa", "action": "le dices que es guapa",
+     "up_chance": 0.0, "delta_up": 5, "delta_down": -22},
+]
 
 
-def test_propose_scenes_parses_model_scenes():
-    state, _ = make_state()
-    glue = _glue(state)
-    content = json.dumps({"scenes": ["un paseo", "un café", "el cine"]})
-
-    scenes = run(glue.propose_scenes(_FakeSession(content), ANA))
-
-    assert scenes == ["un paseo", "un café", "el cine"]
-
-
-def test_propose_scenes_falls_back_when_model_gives_garbage():
+def test_request_scene_marks_pending_scene():
     state, _ = make_state()
     glue = _glue(state)
 
-    scenes = run(glue.propose_scenes(_FakeSession("no es json"), ANA))
+    text = glue.request_scene(1, now=NOW)
 
-    assert len(scenes) == 3
-    assert len(set(scenes)) == 3
-    assert all(scene in DATE_SCENES for scene in scenes)
+    assert "adónde me llevas" in text
+    assert glue.pending_scene(1, now=NOW) is True
 
 
-def test_propose_scenes_falls_back_on_http_error():
+def test_take_pending_scene_consumes_request():
     state, _ = make_state()
     glue = _glue(state)
-    session = _FakeSession(exc=RuntimeError("no hay modelo"))
+    glue.request_scene(1, now=NOW)
 
-    scenes = run(glue.propose_scenes(session, ANA))
+    assert glue.take_pending_scene(1, now=NOW) is True
+    assert glue.pending_scene(1, now=NOW) is False
+    assert glue.take_pending_scene(1, now=NOW) is False
 
-    assert len(scenes) == 3
-    assert all(scene in DATE_SCENES for scene in scenes)
 
-
-def test_propose_scenes_sends_model_and_disables_thinking():
+def test_pending_scene_expires_after_timeout():
     state, _ = make_state()
     glue = _glue(state)
-    session = _FakeSession(json.dumps({"scenes": ["a", "b"]}))
+    glue.request_scene(1, now=NOW)
 
-    run(glue.propose_scenes(session, ANA))
+    assert glue.pending_scene(1, now=NOW + DATE_SCENE_TIMEOUT + 1) is False
 
-    payload = session.payloads[-1]
-    expected_model = os.environ.get("LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S")
-    assert payload["model"] == expected_model
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["response_format"]["type"] == "json_schema"
-    assert payload["response_format"]["json_schema"]["strict"] is True
-    assert payload["response_format"]["json_schema"]["name"] == "structured_output"
-    assert payload["response_format"]["json_schema"]["schema"] == SCENE_PROPOSAL_SCHEMA
-    assert "json_schema" not in payload
-    # Verifica que el límite de tokens de escenas se aplica.
-    assert payload["max_tokens"] == DATE_SCENE_MAX_TOKENS
+
+def test_clear_scene_request_discards_pending():
+    state, _ = make_state()
+    glue = _glue(state)
+    glue.request_scene(1, now=NOW)
+
+    glue.clear_scene_request(1)
+
+    assert glue.pending_scene(1, now=NOW) is False
+
+
+def test_expire_scene_requests_returns_expired_uids():
+    state, _ = make_state()
+    glue = _glue(state)
+    glue.request_scene(1, now=NOW)
+    glue.request_scene(2, now=NOW)
+
+    expired = glue.expire_scene_requests(now=NOW + DATE_SCENE_TIMEOUT + 1)
+
+    assert sorted(expired) == ["1", "2"]
+    assert glue.expire_scene_requests(now=NOW) == []
+
+
+# --- pregunta decisiva -----------------------------------------------------
+
+def _date_with_question(state, uid="1", now=NOW, asked_at=None):
+    session = new_date_session("paseo", 40, now=now)
+    session["turns"] = 3
+    session["question"] = {"text": "¿Qué eliges?", "options": OPTIONS}
+    session["question_used"] = True
+    session["question_pending"] = True
+    session["question_asked_at"] = now if asked_at is None else asked_at
+    state.dates[uid] = session
+    return session
+
+
+def test_resolve_question_rolls_and_returns_result():
+    state, _ = make_state()
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    result = glue.resolve_question(session, 0)
+
+    assert result["index"] == 0
+    assert result["label"] == "Cómo me escuchas"
+    assert result["win"] is True
+    assert result["delta"] == 20
+    assert result["hard_fail"] is False
+
+
+def test_resolve_question_hard_fail_on_bad_option():
+    state, _ = make_state()
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    result = glue.resolve_question(session, 1)
+
+    assert result["win"] is False
+    assert result["delta"] == -22
+    assert result["hard_fail"] is True  # -22 <= -20 → última oportunidad
+
+
+def test_resolve_question_invalid_index_returns_none():
+    state, _ = make_state()
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    assert glue.resolve_question(session, 5) is None
+
+
+def test_apply_question_result_applies_affinity_and_clears_pending():
+    state, counters = make_state(
+        affinity={"1": {"points": 40, "last_interaction": NOW,
+                        "last_gain": 0.0, "milestones": []}}
+    )
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    applied = glue.apply_question_result(
+        session, {"index": 0, "win": True, "delta": 20,
+                  "label": "Cómo me escuchas", "hard_fail": False},
+        user_id=1, now=NOW,
+    )
+
+    assert applied == 20
+    assert state.entry_points(1) == 60
+    assert session["question_pending"] is False
+    assert "force_crisis" not in session
+    assert counters["dates"] == 1
+
+
+def test_apply_question_result_marks_force_crisis_on_hard_fail():
+    state, _ = make_state()
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    glue.apply_question_result(
+        session, {"index": 1, "win": False, "delta": -22,
+                  "label": "Eres guapa", "hard_fail": True},
+        user_id=1, now=NOW,
+    )
+
+    assert session["force_crisis"] is True
+    assert session["question_pending"] is False
+
+
+def test_expire_question_clears_pending_without_affinity():
+    state, counters = make_state()
+    session = _date_with_question(state)
+    glue = _glue(state)
+
+    glue.expire_question(1)
+
+    assert session["question_pending"] is False
+    assert session["question_used"] is True  # la pregunta ya se gastó
+    assert counters["dates"] == 1  # se persistió
+
+
+def test_expire_stale_questions_sweeps_orphans_only():
+    state, _ = make_state()
+    # Huérfana: pendiente desde hace más del timeout (vista perdida).
+    _date_with_question(state, uid="1", asked_at=NOW - DATE_QUESTION_TIMEOUT - 10)
+    # Fresca: la vista sigue viva.
+    _date_with_question(state, uid="2", asked_at=NOW - 5)
+    # Sin pedir: ni la toca.
+    fresh = new_date_session("paseo", 40, now=NOW)
+    state.dates["3"] = fresh
+    glue = _glue(state)
+
+    expired = glue.expire_stale_questions(now=NOW)
+
+    assert expired == ["1"]
+    assert state.dates["1"]["question_pending"] is False
+    assert state.dates["2"]["question_pending"] is True
+    assert fresh["question_pending"] is False
 
 
 # --- judge_gift ------------------------------------------------------------

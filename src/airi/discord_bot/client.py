@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 from types import SimpleNamespace
 
@@ -18,6 +17,7 @@ import discord
 
 from airi.discord_bot import turn
 from airi.domain.constants import DATE_DELTA_MAX
+from airi.domain.texts import DATE_QUESTION_NUDGE_TEXT, DATE_SCENE_TIMEOUT_TEXT
 
 log = logging.getLogger(__name__)
 
@@ -83,10 +83,32 @@ def create_client(*, build_ctx, registry, channel_id):
                 "🌙 «Vaya, se me ha ido el tiempo... la cita termina aquí. "
                 "*se despide con la mano*»"
             )
+        ctx.expire_stale_questions()
+
+        # Peticiones de escena caducadas (el jugador nunca escribió el plan).
+        if str(message.author.id) in ctx.expire_scene_requests():
+            await message.channel.send(DATE_SCENE_TIMEOUT_TEXT)
 
         handler = registry.match(content)
         if handler is not None:
+            ctx.clear_scene_request(message.author.id)
             await handler(ctx, message)
+            return
+
+        if ctx.pending_scene(message.author.id):
+            ctx.take_pending_scene(message.author.id)
+            await turn.start_date_with_scene(
+                ctx, message.channel, message.author, content
+            )
+            return
+
+        session = ctx.state.dates.get(str(message.author.id))
+        if (
+            isinstance(session, dict)
+            and session.get("state") == "active"
+            and session.get("question_pending")
+        ):
+            await message.channel.send(DATE_QUESTION_NUDGE_TEXT)
             return
 
         owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
@@ -125,27 +147,30 @@ def build_date_glue(state, *, llm_url, request_timeout):
     from airi.domain.affinity import affinity_level, affinity_summary, clamp_delta
     from airi.domain.constants import (
         DATE_BUSY_NOTICE_COOLDOWN,
-        DATE_SCENE_MAX_TOKENS,
-        DATE_SCENES,
+        DATE_QUESTION_TIMEOUT,
+        DATE_SCENE_TIMEOUT,
         DIARY_REFLECTION_MIN_INTERVAL,
     )
     from airi.domain.dates import date_expired, date_seconds_left
     from airi.domain.diary import add_diary_entry, new_diary_entry
-    from airi.domain.llm_output import extract_json_object, parse_scene_list
+    from airi.domain.llm_output import extract_json_object
     from airi.domain.prompts import (
         GIFT_JUDGE_PROMPT,
         GIFT_JUDGE_SCHEMA,
-        SCENE_PROPOSAL_PROMPT,
-        SCENE_PROPOSAL_SCHEMA,
         SYSTEM_PROMPT,
         affinity_prompt_section,
         preferences_prompt_section,
         relationship_status_section,
     )
     from airi.domain.text_filters import clean_reply
+    from airi.domain.texts import DATE_SCENE_REQUEST_TEXT
     from airi.services.date_service import DateService
 
     busy_notice_at = {}  # uid -> timestamp del último aviso (anti-spam).
+    pending_scenes = {}  # uid -> timestamp de la petición de escena.
+    # Motor de citas reutilizable: conserva el RNG entre llamadas (la pregunta
+    # decisiva tira el dado aquí, no en el modelo).
+    date_engine = DateService(state=state)
 
     async def request_llama(session, messages, *, schema, max_tokens=None, temperature):
         llm = HttpLlmClient(
@@ -163,40 +188,84 @@ def build_date_glue(state, *, llm_url, request_timeout):
         )
         return text
 
-    def fallback_scenes():
-        """Escenas de reserva si el modelo no responde bien."""
-        count = min(3, len(DATE_SCENES))
-        return random.sample(list(DATE_SCENES), k=count)
+    # --- Escena por texto libre -------------------------------------------
 
-    async def propose_scenes(session, user=None):
-        """Pide a la IA 3-4 planes de cita; si falla, usa escenas de reserva."""
-        who = state.display_name(user.id) if user is not None else "esa persona"
-        messages = [
-            {"role": "system", "content": SCENE_PROPOSAL_PROMPT},
-            {"role": "user", "content": f"Propón planes de cita con {who}."},
-        ]
-        try:
-            raw = await request_llama(
-                session,
-                messages,
-                schema=SCENE_PROPOSAL_SCHEMA,
-                max_tokens=DATE_SCENE_MAX_TOKENS,
-                temperature=0.9,
-            )
-            parsed = extract_json_object(raw) if isinstance(raw, str) else None
-            scenes = (
-                parse_scene_list(parsed.get("scenes"))
-                if isinstance(parsed, dict)
-                else []
-            )
-            if scenes:
-                return scenes
-            log.warning(
-                "El modelo no devolvió escenas válidas; uso escenas de reserva"
-            )
-        except Exception:
-            log.exception("Error proponiendo escenas; uso escenas de reserva")
-        return fallback_scenes()
+    def request_scene(user_id, now=None):
+        """Marca que se espera la escena del jugador y devuelve el texto."""
+        pending_scenes[str(user_id)] = time.time() if now is None else now
+        return DATE_SCENE_REQUEST_TEXT
+
+    def pending_scene(user_id, now=None):
+        """True si hay una petición de escena viva (no caducada) para ese usuario."""
+        uid = str(user_id)
+        ts = pending_scenes.get(uid)
+        if ts is None:
+            return False
+        now = time.time() if now is None else now
+        if now - float(ts) > DATE_SCENE_TIMEOUT:
+            pending_scenes.pop(uid, None)
+            return False
+        return True
+
+    def take_pending_scene(user_id, now=None):
+        """Consume la petición de escena (True si existía y no había caducado)."""
+        uid = str(user_id)
+        if not pending_scene(uid, now=now):
+            return False
+        pending_scenes.pop(uid, None)
+        return True
+
+    def clear_scene_request(user_id):
+        pending_scenes.pop(str(user_id), None)
+
+    def expire_scene_requests(now=None):
+        """Descarta peticiones de escena caducadas. Devuelve la lista de uids."""
+        now = time.time() if now is None else now
+        expired = []
+        for uid, ts in list(pending_scenes.items()):
+            if now - float(ts) > DATE_SCENE_TIMEOUT:
+                pending_scenes.pop(uid, None)
+                expired.append(uid)
+        return expired
+
+    # --- Pregunta decisiva -------------------------------------------------
+
+    def resolve_question(session, index):
+        return date_engine.resolve_question(session, index)
+
+    def apply_question_result(session, result, *, user_id, now=None):
+        return date_engine.apply_question_result(
+            session, result, user_id=user_id, now=now
+        )
+
+    def expire_question(user_id):
+        """La pregunta caducó sin respuesta: la cita sigue sin mover afinidad."""
+        session = state.dates.get(str(user_id))
+        if not isinstance(session, dict) or not session.get("question_pending"):
+            return
+        session["question_pending"] = False
+        state.save_dates()
+
+    def expire_stale_questions(now=None):
+        """Barrido de preguntas huérfanas (p. ej. tras un reinicio del bot).
+
+        Si la vista con los botones se perdió, la pregunta quedaría pendiente
+        para siempre y el nudge bloquearía al jugador. Devuelve los uids limpiados.
+        """
+        if now is None:
+            now = time.time()
+        expired = []
+        for uid, session in list(state.dates.items()):
+            if not isinstance(session, dict) or not session.get("question_pending"):
+                continue
+            asked = float(session.get("question_asked_at", 0.0) or 0.0)
+            if asked and now - asked > DATE_QUESTION_TIMEOUT:
+                session["question_pending"] = False
+                expired.append(uid)
+        if expired:
+            state.save_dates()
+            log.info("Preguntas caducadas: %s", ", ".join(expired))
+        return expired
 
     async def judge_gift(session, item, user, recent_gifts=None):
         """Airi juzga un regalo: su reacción y cuánta afinidad le llega.
@@ -279,13 +348,17 @@ def build_date_glue(state, *, llm_url, request_timeout):
         date_reason,
         last_chance_result,
         now,
+        question=None,
+        allow_crisis_drop=True,
     ):
         """Avanza un turno de la cita y cierra si toca.
 
         Devuelve el evento del turno (ver airi.domain.dates.step_date). La
         lógica vive en `airi.services.date_service.DateService`.
         """
-        service = DateService(state=state, notifier=DiscordNotifier(channel))
+        service = DateService(
+            state=state, notifier=DiscordNotifier(channel), rng=date_engine.rng
+        )
         return await service.process_turn(
             date_session,
             user=user,
@@ -296,6 +369,8 @@ def build_date_glue(state, *, llm_url, request_timeout):
             date_reason=date_reason,
             last_chance_result=last_chance_result,
             now=now,
+            question=question,
+            allow_crisis_drop=allow_crisis_drop,
         )
 
     def _finish_date(user_id, session, event, *, now):
@@ -409,7 +484,15 @@ def build_date_glue(state, *, llm_url, request_timeout):
         )
 
     return SimpleNamespace(
-        propose_scenes=propose_scenes,
+        request_scene=request_scene,
+        pending_scene=pending_scene,
+        take_pending_scene=take_pending_scene,
+        clear_scene_request=clear_scene_request,
+        expire_scene_requests=expire_scene_requests,
+        resolve_question=resolve_question,
+        apply_question_result=apply_question_result,
+        expire_question=expire_question,
+        expire_stale_questions=expire_stale_questions,
         judge_gift=judge_gift,
         process_date_turn=process_date_turn,
         busy_date_owner=busy_date_owner,
@@ -544,8 +627,10 @@ def run_bot(argv=None):
         save_diary=save_diary,
         save_memories=save_memories,
         save_users=save_users,
-        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None: (
-            lambda entry: apply_affinity_delta(entry, delta, now or time.time(), delta_max)
+        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None, delta_min=None: (
+            lambda entry: apply_affinity_delta(
+                entry, delta, now or time.time(), delta_max, delta_min
+            )
         )(state.affinity_entry(uid)),
         traces=trace_store,
     )
@@ -591,7 +676,15 @@ def run_bot(argv=None):
             process_date_turn=glue.process_date_turn,
             add_diary_reflection=glue.add_diary_reflection,
             judge_gift=glue.judge_gift,
-            propose_scenes=glue.propose_scenes,
+            request_scene=glue.request_scene,
+            pending_scene=glue.pending_scene,
+            take_pending_scene=glue.take_pending_scene,
+            clear_scene_request=glue.clear_scene_request,
+            resolve_question=glue.resolve_question,
+            apply_question_result=glue.apply_question_result,
+            expire_question=glue.expire_question,
+            expire_stale_questions=glue.expire_stale_questions,
+            expire_scene_requests=glue.expire_scene_requests,
             busy_date_owner=glue.busy_date_owner,
             notify_busy=glue.notify_busy,
             date_busy_text=glue.date_busy_text,
@@ -601,13 +694,8 @@ def run_bot(argv=None):
             ),
             log_diary_event=state.log_diary_event,
         )
-        ctx.handle_scene_choice = (
-            lambda interaction, payload: discord_turn.handle_scene_choice(
-                ctx, interaction, payload
-            )
-        )
-        ctx.handle_date_action = (
-            lambda interaction, payload: discord_turn.handle_date_action(
+        ctx.handle_question_answer = (
+            lambda interaction, payload: discord_turn.handle_question_answer(
                 ctx, interaction, payload
             )
         )
