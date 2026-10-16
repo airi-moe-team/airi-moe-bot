@@ -20,6 +20,7 @@ import os
 import sys
 from dataclasses import asdict, dataclass
 
+import airi.env_boot  # noqa: F401 — carga .env antes de fijar constantes
 from airi.domain.affinity import default_entry
 from airi.observability.trace import TurnEvent, load_turn_trace
 from airi.ports.llm import LLMMeta

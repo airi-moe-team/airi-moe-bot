@@ -8,14 +8,11 @@ Dispatch de subcomandos:
 
 import argparse
 
-from dotenv import load_dotenv
+import airi.env_boot  # noqa: F401 — carga .env ANTES de fijar constantes
 
-# Cargar .env ANTES de importar cualquier módulo de `airi`: hay constantes
+# Los imports de `airi.*` van dentro de cada comando (lazy): hay constantes
 # (p. ej. `airi.domain.constants`) que leen el entorno en el momento del
-# import, así que si se cargan primero se quedan con sus valores por defecto
-# e ignoran el .env. Los imports de `airi.*` van dentro de cada comando
-# (lazy) precisamente para respetar este orden.
-load_dotenv()
+# import, así que deben cargarse después de `airi.env_boot`.
 
 
 def cmd_run(argv=None):

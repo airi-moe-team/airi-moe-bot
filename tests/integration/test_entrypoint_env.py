@@ -11,18 +11,28 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 
 # Importa el entry point (que ejecuta `load_dotenv()`) y luego la constante.
 _PROBE = (
-    "import airi.__main__;"
+    "import {module};"
     "from airi.domain.constants import DATE_MAX_SECONDS;"
     "print(DATE_MAX_SECONDS)"
 )
 
 
-def test_entrypoint_loads_dotenv_before_constants(tmp_path):
+@pytest.mark.parametrize(
+    "module",
+    [
+        "airi.__main__",
+        "airi.observability.cli",
+        "airi.observability.replay",
+    ],
+)
+def test_entrypoint_loads_dotenv_before_constants(tmp_path, module):
     (tmp_path / ".env").write_text("DATE_MAX_SECONDS=600\n", encoding="utf-8")
 
     env = dict(os.environ)
@@ -30,7 +40,7 @@ def test_entrypoint_loads_dotenv_before_constants(tmp_path):
     env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
 
     result = subprocess.run(
-        [sys.executable, "-c", _PROBE],
+        [sys.executable, "-c", _PROBE.format(module=module)],
         cwd=tmp_path,
         env=env,
         capture_output=True,
