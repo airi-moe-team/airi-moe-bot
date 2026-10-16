@@ -178,6 +178,7 @@ async def run_user_turn(
                         channel,
                         author,
                         date_session,
+                        http_session=session,
                         text=merged_text,
                         delta=result.affinity_delta,
                         points=state.entry_points(uid),

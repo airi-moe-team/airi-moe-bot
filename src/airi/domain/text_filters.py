@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from airi.domain.constants import REPETITION_THRESHOLD
+from airi.domain.constants import DATE_SUMMARY_MAX_CHARS, REPETITION_THRESHOLD
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +48,19 @@ def clean_reply(text):
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+def clean_summary(text, max_chars=DATE_SUMMARY_MAX_CHARS):
+    """Normaliza el resumen libre del LLM (sin emojis/markdown, longitud tope).
+
+    Se usa para la entrada de diario que Airi escribe al cerrar una cita.
+    """
+    text = clean_reply(text)
+    if not text:
+        return ""
+    # Un resumen es una reflexión breve: una sola línea, sin comillas de fuera.
+    text = re.sub(r"\s*\n\s*", " ", text)
+    text = text.strip().strip('"').strip("'").strip()
+    return text[:max_chars].strip()
 
 def remove_repeated_previous_reply(answer, history):
     if not answer or len(history) < 2:

@@ -515,6 +515,75 @@ def diary_prompt_section(diary, user_id, now):
     )
 
 
+# Desenlace de la cita → frase que usa el resumen del diario.
+_DATE_EVENT_SUMMARY = {
+    "recovered": "La cita estuvo a punto de romperse pero logramos reconducirla.",
+    "partial_recovery": "La cita estuvo a punto de romperse; lo intentó, pero quedó en el aire.",
+    "failed_last_chance": "La cita salió mal y no consiguió reconducirla.",
+    "ending": "La cita terminó de forma natural.",
+    "crisis": "La cita se rompió.",
+}
+
+
+def _date_history_to_text(history):
+    """Renderiza el historial privado de la cita como transcripción legible."""
+    from airi.domain.llm_output import extract_reply_field
+
+    lines = []
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, str):
+            continue
+        if item.get("role") == "assistant":
+            content = extract_reply_field(content) or content
+            lines.append(f"Airi: {content}")
+        else:
+            lines.append(content)
+    return "\n".join(lines) if lines else "(sin diálogo registrado)"
+
+
+def date_summary_prompt(session, event, history):
+    """Prompt para que Airi resuma en su diario una cita que se cierra.
+
+    Devuelve el contenido del mensaje de usuario. La salida es texto libre en
+    primera persona (sin JSON).
+    """
+    scene = (session or {}).get("scene", "") or "un lugar sin concretar"
+    question = (session or {}).get("question")
+    result = (session or {}).get("question_result")
+    question_lines = []
+    if isinstance(question, dict) and question.get("text"):
+        question_lines.append(f"Le pregunté: «{question.get('text')}»")
+    if isinstance(result, dict):
+        label = str(result.get("label", "")).strip()
+        if label:
+            question_lines.append(f"Eligió: «{label}»")
+        if result.get("win") is True:
+            question_lines.append("Acertó y me llegó de verdad.")
+        else:
+            delta = int(result.get("delta", 0) or 0)
+            question_lines.append(f"Falló y me sentí dolida (afinidad {delta:+d}).")
+    question_block = "\n".join(question_lines) if question_lines else "(no hubo pregunta decisiva)"
+
+    outcome = _DATE_EVENT_SUMMARY.get(event, "La cita terminó.")
+
+    return (
+        "Eres Airi. Acabas de terminar una cita y vas a escribir en tu diario "
+        "íntimo un recuerdo breve para no olvidar lo que pasó.\n\n"
+        f"ESCENA: {scene}\n"
+        f"PREGUNTA DECISIVA:\n{question_block}\n"
+        f"DESENLACE: {outcome}\n\n"
+        "TRANSCRIPCIÓN DE LA CITA:\n"
+        f"{_date_history_to_text(history)}\n\n"
+        "Escribe 1-3 frases en primera persona, en español, como un recuerdo "
+        "subjetivo de cómo fue la cita y cómo te sientes. No inventes hechos que "
+        "no aparezcan en la transcripción. No uses listas ni comillas; responde "
+        "solo con el texto del diario."
+    )
+
+
 def latest_impression(diary, user_id):
     """Última impresión de Airi sobre alguien (para la sección de personas)."""
     rows = diary_for_user(diary, user_id, limit=6)

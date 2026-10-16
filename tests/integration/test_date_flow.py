@@ -12,8 +12,10 @@ ANA = FakeUser(1, "Ana")
 NOW = 1_000_000.0
 
 
-def make_service(state, notifier):
-    return DateService(state=state, notifier=notifier, clock=lambda: NOW)
+def make_service(state, notifier, llm_chat=None):
+    return DateService(
+        state=state, notifier=notifier, clock=lambda: NOW, llm_chat=llm_chat
+    )
 
 
 def run(coro):
@@ -101,6 +103,81 @@ def test_end_keyword_closes_and_logs_diary():
     assert session["state"] == "closed"
     assert any(e.get("kind") == "date" for e in state.diary)
     assert notifier.sent  # mensaje de cierre
+
+
+# --- resumen de cierre en el diario -----------------------------------------
+
+def test_date_ends_records_summary():
+    """Con LLM inyectado, el cierre guarda el resumen que devuelve el modelo."""
+    state, _ = make_state()
+    session = new_date_session("una cena a la luz de las velas", 40, now=NOW)
+    session["turns"] = 4
+    session["history"] = [
+        {"role": "user", "content": "Ana: llegué antes"},
+        {"role": "assistant", "content": '{"reply":"*sonríe* Yo también~"}'},
+    ]
+    state.dates["1"] = session
+    state.users["1"] = {"name": "Ana"}
+    captured = {}
+
+    async def fake_llm(messages, *, max_tokens=None):
+        captured["messages"] = messages
+        captured["max_tokens"] = max_tokens
+        return "Recordaré la cena con Ana: se portó de maravilla conmigo."
+
+    service = make_service(state, FakeNotifier(), llm_chat=fake_llm)
+
+    event = step(service, session, text="adiós")
+
+    assert event == "ending"
+    dates = [e for e in state.diary if e.get("kind") == "date"]
+    assert len(dates) == 1
+    assert dates[0]["text"] == "Recordaré la cena con Ana: se portó de maravilla conmigo."
+    # El prompt incluye la escena y el diálogo privado de la cita.
+    prompt = captured["messages"][0]["content"]
+    assert "una cena a la luz de las velas" in prompt
+    assert "llegué antes" in prompt
+    assert captured["max_tokens"] is not None
+
+
+def test_date_ends_falls_back_without_llm():
+    """Sin LLM inyectado, el cierre usa el texto genérico determinista."""
+    state, _ = make_state()
+    session = new_date_session("paseo", 40, now=NOW)
+    session["turns"] = 4
+    state.dates["1"] = session
+    state.users["1"] = {"name": "Ana"}
+    service = make_service(state, FakeNotifier())
+
+    step(service, session, text="adiós")
+
+    dates = [e for e in state.diary if e.get("kind") == "date"]
+    assert len(dates) == 1
+    assert "Ana" in dates[0]["text"]
+    assert "paseo" in dates[0]["text"]
+
+
+def test_date_ends_falls_back_on_llm_error():
+    """Si el resumen falla, el diario conserva el texto genérico (una entrada)."""
+    state, _ = make_state()
+    session = new_date_session("paseo", 40, now=NOW)
+    session["turns"] = 4
+    session["history"] = [{"role": "user", "content": "Ana: hola"}]
+    state.dates["1"] = session
+    state.users["1"] = {"name": "Ana"}
+
+    async def boom(messages, *, max_tokens=None):
+        raise RuntimeError("llama caído")
+
+    service = make_service(state, FakeNotifier(), llm_chat=boom)
+
+    event = step(service, session, text="adiós")
+
+    assert event == "ending"
+    assert "summary" not in session
+    dates = [e for e in state.diary if e.get("kind") == "date"]
+    assert len(dates) == 1
+    assert "paseo" in dates[0]["text"]
 
 
 def test_recovery_applies_affinity_and_closes():

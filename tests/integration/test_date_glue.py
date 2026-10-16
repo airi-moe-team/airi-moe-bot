@@ -465,3 +465,39 @@ def test_process_date_turn_continue_saves_state():
     assert "1" in state.dates
     assert counters["dates"] == 1
     assert channel.sent == []
+
+
+def test_process_date_turn_summarizes_on_close():
+    """Al cerrar con `http_session`, el glue pide el resumen y lo deja en diario."""
+    state, _ = make_state(users={"1": {"name": "Ana"}})
+    session = new_date_session("una cena a la luz de las velas", 40, now=NOW)
+    session["turns"] = 4
+    session["history"] = [{"role": "user", "content": "Ana: llegué pronto"}]
+    state.dates["1"] = session
+    glue = _glue(state)
+    channel = _FakeChannel()
+    http = _FakeSession("Recordaré esta cena con Ana toda la vida.")
+
+    event = run(
+        glue.process_date_turn(
+            channel,
+            ANA,
+            session,
+            http_session=http,
+            text="adiós, nos vemos",
+            delta=0,
+            points=40,
+            date_decision="continue",
+            date_reason="none",
+            last_chance_result="none",
+            now=NOW,
+        )
+    )
+
+    assert event == "ending"
+    assert "1" not in state.dates
+    dates = [e for e in state.diary if e.get("kind") == "date"]
+    assert dates and dates[-1]["text"] == "Recordaré esta cena con Ana toda la vida."
+    # El resumen se pidió como texto libre (sin schema JSON).
+    payload = http.payloads[-1]
+    assert "response_format" not in payload

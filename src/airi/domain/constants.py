@@ -97,6 +97,10 @@ DIARY_MAX_ENTRIES = env_int("DIARY_MAX_ENTRIES", 300)  # Tope global (FIFO).
 DIARY_KINDS = ("meet", "gift", "date", "level", "confession", "reflection")
 DIARY_VIEW_LIMIT = env_int("DIARY_VIEW_LIMIT", 10)  # Entradas mostradas en !diario.
 
+# Resumen de la cita al cerrarla (memoria que Airi guarda en su diario).
+DATE_SUMMARY_MAX_TOKENS = env_int("DATE_SUMMARY_MAX_TOKENS", 220)  # Salida LLM.
+DATE_SUMMARY_MAX_CHARS = env_int("DATE_SUMMARY_MAX_CHARS", 400)  # Longitud de la entrada.
+
 # Regalos: un regalo al día por usuario.
 GIFT_COOLDOWN = env_int("GIFT_COOLDOWN", 24 * 3600)
 MAX_RECENT_GIFTS = env_int("MAX_RECENT_GIFTS", 3)

@@ -341,6 +341,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         channel,
         user,
         date_session,
+        http_session=None,
         *,
         text,
         delta,
@@ -355,10 +356,25 @@ def build_date_glue(state, *, llm_url, request_timeout):
         """Avanza un turno de la cita y cierra si toca.
 
         Devuelve el evento del turno (ver airi.domain.dates.step_date). La
-        lógica vive en `airi.services.date_service.DateService`.
+        lógica vive en `airi.services.date_service.DateService`. `http_session`
+        (aiohttp.ClientSession) habilita el resumen de cierre en el diario.
         """
+        llm_chat = None
+        if http_session is not None:
+            async def llm_chat(messages, *, max_tokens=None):
+                return await request_llama(
+                    http_session,
+                    messages,
+                    schema=None,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                )
+
         service = DateService(
-            state=state, notifier=DiscordNotifier(channel), rng=date_engine.rng
+            state=state,
+            notifier=DiscordNotifier(channel),
+            rng=date_engine.rng,
+            llm_chat=llm_chat,
         )
         return await service.process_turn(
             date_session,

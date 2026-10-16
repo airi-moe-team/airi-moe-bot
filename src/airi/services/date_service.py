@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import random
 
-from airi.domain.constants import DATE_QUESTION_DELTA_MAX
+from airi.domain.constants import DATE_QUESTION_DELTA_MAX, DATE_SUMMARY_MAX_TOKENS
 from airi.domain.dates import (
     last_chance_recovery,
     question_failed_hard,
@@ -13,6 +13,8 @@ from airi.domain.dates import (
     roll_question,
     step_date,
 )
+from airi.domain.prompts import date_summary_prompt
+from airi.domain.text_filters import clean_summary
 from airi.domain.texts import DATE_CRISIS_TEXT, DATE_END_KEYWORDS, date_final_text
 from airi.services.state import AppState
 
@@ -43,12 +45,16 @@ def _finish_diary_text(event, name, scene):
 class DateService:
     """Avanza y cierra citas; notifica vía el Notifier (no conoce Discord)."""
 
-    def __init__(self, *, state: AppState, notifier=None, clock=None, rng=None):
+    def __init__(self, *, state: AppState, notifier=None, clock=None, rng=None,
+                 llm_chat=None):
         self.state = state
         self.notifier = notifier
         self.clock = clock
         # RNG inyectable para tests deterministas del turno de la pregunta.
         self.rng = rng if rng is not None else random.Random()
+        # Callable async opcional para pedir el resumen de la cita al LLM.
+        # Firma: `await llm_chat(messages, *, max_tokens=None) -> str`.
+        self.llm_chat = llm_chat
 
     def _now(self, now):
         if now is not None:
@@ -120,6 +126,9 @@ class DateService:
         # failed_last_chance / ending.
         if self.notifier is not None:
             await self.notifier.send(date_final_text(event))
+        # Resumen de lo vivido (si hay LLM) antes de cerrar: `finish_date` lo
+        # usa como texto del diario y cae al genérico si no existe.
+        await self.finalize_date_summary(user.id, session, event, now=now)
         self.finish_date(user.id, session, event, now=now)
         return event
 
@@ -185,10 +194,37 @@ class DateService:
         uid = str(user_id)
         name = self.state.display_name(uid)
         scene = session.get("scene", "")
-        self.state.log_diary_event(
-            "date", user_id, _finish_diary_text(event, name, scene)
-        )
+        # Si el resumen del LLM quedó en la sesión, mandan sus palabras; si no
+        # (sin LLM o fallo), se usa el texto genérico determinista.
+        text = session.get("summary") or _finish_diary_text(event, name, scene)
+        self.state.log_diary_event("date", user_id, text)
         session["state"] = "closed"
         self.state.dates.pop(uid, None)
         self.state.save_dates()
         log.info("Cita de %s finalizada (evento=%s)", uid, event)
+
+    async def finalize_date_summary(self, user_id, session, event, *, now=None):
+        """Genera el resumen de la cita desde el historial privado y lo guarda.
+
+        Deja el texto en `session["summary"]` para que `finish_date` lo use como
+        entrada del diario. Si no hay LLM inyectado o falla la llamada, no toca
+        la sesión (se conservará el texto genérico de cierre).
+        """
+        if self.llm_chat is None:
+            return None
+        history = session.get("history") or []
+        prompt = date_summary_prompt(session, event, history)
+        try:
+            raw = await self.llm_chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=DATE_SUMMARY_MAX_TOKENS,
+            )
+        except Exception:
+            log.exception("No se pudo resumir la cita de %s", user_id)
+            return None
+        text = clean_summary(raw)
+        if not text:
+            return None
+        session["summary"] = text
+        log.info("Resumen de la cita de %s guardado para el diario", user_id)
+        return text
