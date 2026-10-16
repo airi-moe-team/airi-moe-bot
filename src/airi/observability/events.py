@@ -126,6 +126,10 @@ class TurnEvent:
     level_after: str = ""
     leveled_up: bool = False
 
+    # Identidad mutable
+    self_changed: bool = False
+    self_update_action: dict | None = None
+
     # Cita
     date_decision: str = "continue"
     date_event: str | None = None

@@ -103,8 +103,79 @@ DATE_QUESTION_TIME_MARGIN = env_int("DATE_QUESTION_TIME_MARGIN", 15)
 
 # Diario de Airi.
 DIARY_MAX_ENTRIES = env_int("DIARY_MAX_ENTRIES", 300)  # Tope global (FIFO).
-DIARY_KINDS = ("meet", "gift", "date", "level", "confession", "reflection")
+DIARY_KINDS = (
+    "meet",
+    "gift",
+    "date",
+    "level",
+    "confession",
+    "reflection",
+    "discovery",
+)
 DIARY_VIEW_LIMIT = env_int("DIARY_VIEW_LIMIT", 10)  # Entradas mostradas en !diario.
+
+# ============================================================
+# IDENTIDAD DE AIRI (self model): banda maleable con guardarraíles
+# ============================================================
+#
+# El núcleo (nombre, rol, honestidad, contrato JSON) vive en SYSTEM_PROMPT y NO
+# es editable. El "yo" que Airi puede reescribir es la banda de abajo: rasgos,
+# valores, manías, gustos y un auto-concepto. Todos los cambios pasan por
+# `apply_self_update`, que impone allowlist, topes, motivo y rate-limit.
+
+# Rasgos numéricos con allowlist fija (int 1..5). El valor base es hacia donde
+# decae lentamente la identidad si nadie la moldea.
+SELF_TRAIT_MIN = env_int("SELF_TRAIT_MIN", 1)
+SELF_TRAIT_MAX = env_int("SELF_TRAIT_MAX", 5)
+SELF_TRAITS_ALLOWLIST = (
+    "expresiva",
+    "timida",
+    "juguetona",
+    "celosa",
+    "sarcastica",
+    "curiosa",
+)
+SELF_BASE_TRAITS = {
+    "expresiva": 4,
+    "timida": 3,
+    "juguetona": 5,
+    "celosa": 2,
+    "sarcastica": 2,
+    "curiosa": 4,
+}
+
+# Límites de contenido (topes + longitud por elemento).
+SELF_CONCEPT_MAX_CHARS = env_int("SELF_CONCEPT_MAX_CHARS", 400)
+SELF_MAX_VALUES = env_int("SELF_MAX_VALUES", 5)
+SELF_VALUE_MAX_CHARS = env_int("SELF_VALUE_MAX_CHARS", 40)
+SELF_MAX_QUIRKS = env_int("SELF_MAX_QUIRKS", 8)
+SELF_QUIRK_MAX_CHARS = env_int("SELF_QUIRK_MAX_CHARS", 80)
+SELF_MAX_TASTES = env_int("SELF_MAX_TASTES", 8)
+SELF_TASTE_MAX_CHARS = env_int("SELF_TASTE_MAX_CHARS", 40)
+SELF_DISCOVERY_MAX_CHARS = env_int("SELF_DISCOVERY_MAX_CHARS", 200)
+SELF_DISCOVERIES_MAX = env_int("SELF_DISCOVERIES_MAX", 50)
+SELF_HISTORY_MAX = env_int("SELF_HISTORY_MAX", 200)
+SELF_HISTORY_VIEW_LIMIT = env_int("SELF_HISTORY_VIEW_LIMIT", 10)
+
+# Guardarraíles temporales: entre dos cambios de identidad debe pasar este
+# intervalo; además, cada clave solo puede cambiar una vez al día.
+SELF_UPDATE_MIN_INTERVAL = env_int("SELF_UPDATE_MIN_INTERVAL", 3600)
+SELF_KEY_DAILY_LIMIT = env_int("SELF_KEY_DAILY_LIMIT", 1)
+SELF_KEY_DAILY_SECONDS = env_int("SELF_KEY_DAILY_SECONDS", 86400)
+
+# Deriva lenta: cada `SELF_DECAY_DAYS` completos sin refuerzo, cada rasgo se
+# acerca `SELF_DECAY_STEP` hacia su valor base.
+SELF_DECAY_DAYS = env_int("SELF_DECAY_DAYS", 7)
+SELF_DECAY_STEP = env_int("SELF_DECAY_STEP", 1)
+
+# Reflexión introspectiva: disparador cada N interacciones del usuario.
+SELF_REFLECTION_EVERY_N = env_int("SELF_REFLECTION_EVERY_N", 10)
+SELF_REFLECTION_MIN_INTERVAL = env_int("SELF_REFLECTION_MIN_INTERVAL", 3600)
+SELF_REFLECTION_MAX_TOKENS = env_int("SELF_REFLECTION_MAX_TOKENS", 300)
+
+# Operaciones permitidas sobre la identidad y sus fuentes auditables.
+SELF_UPDATE_OPS = ("add", "remove", "inc", "set", "rewrite_concept", "none")
+SELF_UPDATE_SOURCES = ("message", "gift", "date", "reflection", "season")
 
 # Resumen de la cita al cerrarla (memoria que Airi guarda en su diario).
 DATE_SUMMARY_MAX_TOKENS = env_int("DATE_SUMMARY_MAX_TOKENS", 220)  # Salida LLM.

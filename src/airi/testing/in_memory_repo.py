@@ -53,14 +53,14 @@ def make_state(*, now=1_000_000.0, **overrides):
         save_users=_count("users"),
     )
 
-    def log_diary_event(kind, user, text):
+    def log_diary_event(kind, user, text, **kwargs):
         if not text:
             return False
         uid = getattr(user, "id", user)
         name = getattr(user, "display_name", None) or str(user)
         counters["diary_logs"].append((kind, str(uid), text))
         entry = new_diary_entry(
-            kind, uid, name, text, now,
+            kind, uid, name, text, kwargs.get("now", now),
             season=int(state.world.get("season", 1) or 1),
         )
         return add_diary_entry(state.diary, entry)

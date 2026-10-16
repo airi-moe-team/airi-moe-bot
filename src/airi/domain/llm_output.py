@@ -16,6 +16,11 @@ from airi.domain.constants import (
     LAST_CHANCE_RESULTS,
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES
+from airi.domain.self_model import (
+    SELF_UPDATE_OPS,
+    SELF_UPDATE_SCHEMA,
+    self_update_none,
+)
 from airi.domain.text_filters import clean_reply
 
 log = logging.getLogger(__name__)
@@ -71,6 +76,7 @@ class ModelOutput(NamedTuple):
     last_chance_result: str
     date_question: object
     affinity_event: str = "none"
+    self_update: object = None
 
 
 def _model_output(
@@ -84,10 +90,11 @@ def _model_output(
     last_chance="none",
     question=None,
     event="none",
+    self_update=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
-        question, event,
+        question, event, self_update,
     )
 
 
@@ -112,6 +119,7 @@ def assistant_history_content(answer, output=None):
             "date_reason": "none",
             "last_chance_result": "none",
             "date_question": {"text": "", "options": []},
+            "self_update": self_update_none(),
         }
     else:
         payload = {
@@ -130,8 +138,51 @@ def assistant_history_content(answer, output=None):
             ),
             "date_question": getattr(output, "date_question", None)
             or {"text": "", "options": []},
+            # El cambio de identidad también es una acción única: no se repite.
+            "self_update": self_update_none(),
         }
     return json.dumps(payload, ensure_ascii=False)
+
+
+def parse_self_update(raw_update):
+    """Normaliza el `self_update` propuesto por el modelo (datos no fiables).
+
+    Devuelve un dict `{"key","op","value","reason","evidence"}` o `None` si no
+    hay cambio utilizable. La allowlist, los clamps, el motivo obligatorio y el
+    rate-limit se aplican después en `airi.domain.self_model.apply_self_update`.
+    """
+    if not isinstance(raw_update, dict):
+        return None
+    key = raw_update.get("key")
+    op = raw_update.get("op")
+    if not isinstance(key, str) or not isinstance(op, str):
+        return None
+    key = key.strip()
+    op = op.strip().lower()
+    if not key or key.lower() in ("none", "ninguno", "null"):
+        return None
+    if not op or op not in SELF_UPDATE_OPS or op == "none":
+        return None
+    raw_value = raw_update.get("value", "")
+    if isinstance(raw_value, bool):
+        value = str(raw_value)
+    elif isinstance(raw_value, str):
+        value = raw_value
+    elif isinstance(raw_value, (int, float)):
+        value = str(raw_value)
+    else:
+        value = ""
+    reason = raw_update.get("reason", "")
+    evidence = raw_update.get("evidence", "")
+    reason = reason.strip() if isinstance(reason, str) else ""
+    evidence = evidence.strip() if isinstance(evidence, str) else ""
+    return {
+        "key": key[:80],
+        "op": op[:40],
+        "value": value.strip()[:200],
+        "reason": reason[:300],
+        "evidence": evidence[:300],
+    }
 
 
 def parse_date_question(raw_question):
@@ -268,6 +319,8 @@ def parse_model_output(raw_output, delta_max=None):
         last_chance_result = "none"
     # [CAMBIO] Pregunta decisiva de la cita (una sola): texto + alternativas.
     date_question = parse_date_question(parsed.get("date_question"))
+    # [CAMBIO] Identidad: cambio de "yo" propuesto por Airi (opcional).
+    self_update = parse_self_update(parsed.get("self_update"))
     reply = clean_reply(reply)
     if not reply:
         log.warning("La respuesta quedó vacía después de limpiarla")
@@ -275,7 +328,7 @@ def parse_model_output(raw_output, delta_max=None):
     return ModelOutput(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
-        affinity_event,
+        affinity_event, self_update,
     )
 
 # Esquema JSON que la respuesta del modelo debe cumplir.
@@ -323,6 +376,7 @@ RESPONSE_SCHEMA = {
             "required": ["text", "options"],
             "additionalProperties": False,
         },
+        "self_update": SELF_UPDATE_SCHEMA,
     },
     # Modo estricto (json_schema): TODAS las propiedades deben ir en `required`
     # y `additionalProperties: false` en cada nivel. `parse_model_output` tolera
@@ -338,6 +392,7 @@ RESPONSE_SCHEMA = {
         "date_reason",
         "last_chance_result",
         "date_question",
+        "self_update",
     ],
     "additionalProperties": False,
 }

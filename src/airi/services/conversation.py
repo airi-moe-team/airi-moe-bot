@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import time
 import traceback
 import uuid
@@ -106,6 +107,8 @@ class TurnResult:
     web_context: str | None = None
     memory_saved: bool = False
     diary_saved: bool = False
+    self_changed: bool = False
+    self_update_action: object = None
     history: list = field(default_factory=list)
     skipped: bool = False
     trace: TurnEvent | None = None
@@ -167,7 +170,9 @@ class ConversationService:
 
             # Snapshots ANTES de cualquier mutación (replay fiel).
             ev.state_snapshot_affinity = dict(self.state.affinity.get(str(uid), {}))
-            ev.state_snapshot_world = dict(self.state.world)
+            # Deep-copy: el "self" y otros sub-dicts se mutan en el sitio; sin
+            # copia profunda el snapshot del replay se contaminaría.
+            ev.state_snapshot_world = copy.deepcopy(self.state.world)
             ev.state_snapshot_memories = list(self.state.memories.get(str(uid), []))
             ev.state_snapshot_diary = list(self.state.diary[-20:])
             _sess0 = self.state.dates.get(str(uid))
@@ -250,6 +255,7 @@ class ConversationService:
                 "date_reason": output.date_reason,
                 "last_chance_result": output.last_chance_result,
                 "date_question": output.date_question,
+                "self_update": output.self_update,
             }
             answer = remove_repeated_previous_reply(output.reply, history)
             answer = strip_repetition_loop(answer)
@@ -321,6 +327,30 @@ class ConversationService:
                     except Exception:
                         log.warning("No se pudo enviar el aviso de memoria guardada")
 
+            # Identidad: Airi puede reescribir UNA parte de su "yo". Los
+            # guardarraíles (allowlist, clamps, motivo, rate-limit) viven en
+            # `airi.domain.self_model.apply_self_update`.
+            self_changed = False
+            self_entry = None
+            if output.self_update:
+                self_entry = self.state.apply_self_change(
+                    output.self_update,
+                    now=now,
+                    user_id=uid,
+                    source="date" if in_date else "message",
+                )
+                if self_entry is not None:
+                    self_changed = True
+                    log.info(
+                        "Airi cambia de identidad: %s %s %s→%s (%s)",
+                        self_entry["key"], self_entry["op"],
+                        self_entry["from"], self_entry["to"], self_entry["reason"],
+                    )
+                else:
+                    log.info(
+                        "Cambio de identidad rechazado: %s", output.self_update
+                    )
+
             history.append({
                 "role": "assistant",
                 "content": assistant_history_content(answer, output),
@@ -344,6 +374,8 @@ class ConversationService:
             ev.affinity_after = points_now
             ev.affinity_applied = applied
             ev.affinity_event = output.affinity_event
+            ev.self_changed = self_changed
+            ev.self_update_action = self_entry
             ev.level_before = level_before
             ev.level_after = level_after
             ev.leveled_up = leveled_up
@@ -374,6 +406,8 @@ class ConversationService:
                 web_context=web_context,
                 memory_saved=memory_saved,
                 diary_saved=diary_saved,
+                self_changed=self_changed,
+                self_update_action=self_entry,
                 history=history,
                 trace=ev,
             )
@@ -418,6 +452,7 @@ class ConversationService:
                 now=now,
             ),
             domain_prompts.preferences_prompt_section(state.world),
+            domain_prompts.self_model_prompt_section(state.self_model()),
             domain_prompts.date_context_section(
                 date_session if isinstance(date_session, dict) else None
             ),

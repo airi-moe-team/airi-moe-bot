@@ -25,6 +25,8 @@ def build_registry() -> CommandRegistry:
     # defecto; !regalo usa kind="gift") en el TraceStore compartido.
     command = traced("command")
 
+    from airi.discord_bot.commands import identity
+
     registry.exact("!ayuda", "!help")(command(help_cmd.handle))
     registry.exact("!afinidad")(command(affinity.handle_afinidad))
     registry.exact("!relacion")(command(affinity.handle_relacion))
@@ -32,12 +34,16 @@ def build_registry() -> CommandRegistry:
     registry.exact("!cita")(command(dates.handle))
     registry.exact("!reiniciar-temporada", "!reiniciar_temporada")(command(season.handle))
     registry.exact("!reset")(command(reset.handle))
+    registry.exact("!yo")(command(identity.handle_yo))
+    registry.exact("!descubrir")(command(identity.handle_descubrir))
 
     registry.prefix("!regalo")(traced("gift")(gifts.handle))
     registry.prefix("!memorias")(command(memories.handle_memorias))
     registry.prefix("!olvidar")(command(memories.handle_olvidar))
     registry.prefix("!diario")(command(diary.handle))
     registry.prefix("!usuarios")(command(users.handle))
+    registry.prefix("!yo")(command(identity.handle_yo_historia))
+    registry.prefix("!yo revertir")(command(identity.handle_yo_revertir))
     # !debug NO se instrumenta: inspecciona el ring y no debe ensuciarlo
     # (si no, `!debug clear` nunca dejaría el ring vacío).
     registry.prefix("!debug")(debug.handle)

@@ -15,6 +15,15 @@ from airi.domain.affinity import (
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.memories import user_memories as _user_memories
+from airi.domain.self_model import (
+    add_discovery,
+    apply_decay,
+    apply_self_update,
+    mark_reflection,
+    migrate_from_world,
+    normalize_self,
+    should_reflect,
+)
 from airi.observability.trace_store import TraceStore
 
 
@@ -98,6 +107,71 @@ class AppState:
             )
         self.save_affinity()
         return applied
+
+    # ------------------------------------------------------------------
+    # Identidad ("self")
+    # ------------------------------------------------------------------
+
+    def self_model(self) -> dict:
+        """Devuelve `world["self"]`, sembrándolo/migrándolo si hace falta.
+
+        La identidad vive dentro de `world` para reutilizar `save_world` y los
+        snapshots de replay. La primera vez absorbe los gustos antiguos de
+        `world["preferences"]` (`migrate_from_world`).
+        """
+        if not isinstance(self.world, dict):
+            self.world = {}
+        model = self.world.get("self")
+        if not isinstance(model, dict):
+            model = migrate_from_world(self.world)
+            self.world["self"] = model
+            self.save_world()
+        return normalize_self(model)
+
+    def apply_self_change(self, update, *, now, user_id, source="message"):
+        """Aplica UN cambio de identidad juzgado por Airi y persiste el mundo.
+
+        Devuelve la entrada del historial o None si el cambio fue rechazado.
+        """
+        model = self.self_model()
+        entry = apply_self_update(
+            model, update, now=now, user_id=user_id, source=source
+        )
+        if entry is not None:
+            self.save_world()
+        return entry
+
+    def add_self_discovery(self, text, *, now, source="reflection"):
+        """Añade un autodescubrimiento y persiste. Devuelve la entrada o None."""
+        model = self.self_model()
+        entry = add_discovery(model, text, now=now, source=source)
+        if entry is not None:
+            self.save_world()
+        return entry
+
+    def mark_self_reflection(self, *, now) -> None:
+        """Sella el reloj de reflexión (aunque no produzca cambios)."""
+        model = self.self_model()
+        mark_reflection(model, now)
+        self.save_world()
+
+    def should_reflect_self(self, *, interactions, now, force=False) -> bool:
+        """True si toca una reflexión introspectiva ahora."""
+        return should_reflect(
+            interactions=interactions,
+            model=self.self_model(),
+            now=now,
+            force=force,
+        )
+
+    def decay_self(self, *, now) -> bool:
+        """Aplica la deriva lenta hacia la base. Devuelve si cambió algo."""
+        model = self.self_model()
+        before = model.get("last_decay_at")
+        changed = apply_decay(model, now)
+        if changed or model.get("last_decay_at") != before:
+            self.save_world()
+        return changed
 
     # ------------------------------------------------------------------
     # Diario
