@@ -419,3 +419,39 @@ def test_date_service_time_fallback_without_clock():
 
 
 
+
+
+# --- regresión: clamp_delta tolera límites None (TypeError visto en run_bot) ---
+
+def test_clamp_delta_tolerates_none_bounds():
+    # El wiring de run_bot puede reenviar delta_min=None: debe caer al
+    # mínimo del dominio en vez de reventar con TypeError.
+    assert A.clamp_delta(3, 5, None) == 3
+    assert A.clamp_delta(-99, 5, None) == A.AFFINITY_DELTA_MIN
+    assert A.clamp_delta(99, None, None) == A.AFFINITY_DELTA_MAX
+    assert A.clamp_delta(2, None, 0) == 2
+
+
+def test_apply_affinity_with_run_bot_wiring_and_no_delta_min():
+    # Replica el wiring de run_bot: el lambda solo recibe delta_max y el
+    # servicio lo llama sin delta_min (turno normal de conversación).
+    state, counters = make_state(
+        affinity={"42": {"points": 10, "last_interaction": NOW,
+                          "last_gain": 0.0, "milestones": []}}
+    )
+
+    def _wiring(uid, delta, now=None, delta_max=None, delta_min=None):
+        return A.apply_affinity_delta(
+            state.affinity_entry(uid), delta, now or NOW,
+            delta_max if delta_max is not None else A.AFFINITY_DELTA_MAX,
+            delta_min if delta_min is not None else A.AFFINITY_DELTA_MIN,
+        )
+
+    state.apply_affinity_fn = _wiring
+
+    applied = state.apply_affinity(42, 3, now=NOW, delta_max=5)
+
+    assert applied == 3
+    assert state.entry_points(42) == 13
+    # El wiring personalizado persiste por su cuenta: no pasa por save_affinity.
+    assert counters["affinity"] == 0

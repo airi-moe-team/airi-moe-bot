@@ -17,9 +17,12 @@ from airi.domain.affinity import (
     entry_points,
     level_rank,
 )
+from airi.domain.budget import estimate_tokens, fit_history
 from airi.domain.constants import (
     DATE_HISTORY_MAX,
     DIARY_REFLECTION_MIN_INTERVAL,
+    LLM_CONTEXT_TOKENS,
+    LLM_OUTPUT_TOKENS,
     MAX_HISTORY_MESSAGES,
     SEARCH_QUERY_MAX_TOKENS,
 )
@@ -222,7 +225,7 @@ class ConversationService:
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
                 history, web_context, user, date_session, delta_max,
-                extra_note=ctx.extra_note,
+                extra_note=ctx.extra_note, event=ev,
             )
             # Turnos internos (p. ej. la reacción a la pregunta): el motor ya
             # aplicó el swing, así que se ignora lo que devuelva el modelo.
@@ -397,7 +400,8 @@ class ConversationService:
     # ------------------------------------------------------------------
 
     async def _generate(
-        self, history, web_context, user, date_session, delta_max, extra_note=None
+        self, history, web_context, user, date_session, delta_max, extra_note=None,
+        event=None,
     ):
         now = self.clock()
         state = self.state
@@ -430,13 +434,27 @@ class ConversationService:
         if extra_note:
             sections.append(f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n")
         system_prompt = domain_prompts.build_system_prompt(web_context, sections)
+        # Presupuesto de contexto: recorta el historial (nunca el system)
+        # para que prompt + salida quepan en el techo del servidor.
+        history, history_trimmed = fit_history(
+            system_prompt,
+            history,
+            output_tokens=LLM_OUTPUT_TOKENS,
+            context_tokens=LLM_CONTEXT_TOKENS,
+        )
+        if history_trimmed:
+            log.warning(
+                "Historial recortado por techo de contexto (%d tokens)",
+                LLM_CONTEXT_TOKENS,
+            )
         messages = [{"role": "system", "content": system_prompt}, *history]
         if hasattr(self.llm, "chat_with_meta"):
             try:
                 # Salida estricta: la gramática del servidor garantiza JSON
                 # aunque el modelo quiera responder en texto plano.
                 raw, meta = await self.llm.chat_with_meta(
-                    messages, schema=RESPONSE_SCHEMA, strict_schema=True
+                    messages, schema=RESPONSE_SCHEMA, strict_schema=True,
+                    max_tokens=LLM_OUTPUT_TOKENS, disable_thinking=True,
                 )
             except Exception:
                 log.warning(
@@ -445,12 +463,28 @@ class ConversationService:
                     exc_info=True,
                 )
                 raw, meta = await self.llm.chat_with_meta(
-                    messages, schema=RESPONSE_SCHEMA
+                    messages, schema=RESPONSE_SCHEMA,
+                    max_tokens=LLM_OUTPUT_TOKENS, disable_thinking=True,
                 )
         else:
-            raw = await self.llm.chat(messages, schema=RESPONSE_SCHEMA)
+            raw = await self.llm.chat(
+                messages, schema=RESPONSE_SCHEMA,
+                max_tokens=LLM_OUTPUT_TOKENS, disable_thinking=True,
+            )
             meta = LLMMeta()
         output = parse_model_output(raw, delta_max=delta_max)
+        if event is not None:
+            event.prompt_tokens_est = estimate_tokens(system_prompt) + sum(
+                estimate_tokens(m.get("content", "") if isinstance(m, dict) else m)
+                for m in history
+            )
+            event.history_trimmed = bool(history_trimmed)
+            event.output_truncated = (meta.finish_reason == "length")
+            if event.output_truncated:
+                log.warning(
+                    "El modelo agotó max_tokens (%d): posible generación desbocada",
+                    LLM_OUTPUT_TOKENS,
+                )
         if not output.reply:
             return (
                 system_prompt,

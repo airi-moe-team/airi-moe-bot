@@ -50,6 +50,14 @@ def _summarize(trace):
         f"web: {'sí' if trace.web_context else 'no'} · llm: {trace.llm_ms} ms "
         f"· turno: {trace.turn_ms} ms",
     ]
+    if getattr(trace, "prompt_tokens_est", 0):
+        flags = []
+        if getattr(trace, "history_trimmed", False):
+            flags.append("historial recortado")
+        if getattr(trace, "output_truncated", False):
+            flags.append("salida truncada por length")
+        suffix = f" ({', '.join(flags)})" if flags else ""
+        lines.append(f"prompt: ~{trace.prompt_tokens_est} tokens{suffix}")
     if trace.web_query:
         lines.append(f"query: {trace.web_query[:200]}")
     if trace.error:

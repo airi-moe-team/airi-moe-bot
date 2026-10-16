@@ -138,6 +138,76 @@ def test_turn_falls_back_when_strict_schema_unsupported():
 
 
 # ---------------------------------------------------------------------------
+# Presupuesto de contexto: max_tokens y thinking acotados
+# ---------------------------------------------------------------------------
+
+
+def test_turn_sends_bounded_max_tokens_and_disables_thinking():
+    """El turno principal nunca pide salidas kilométricas ni thinking."""
+    from airi.domain import constants as C
+
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("hola")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert llm.calls[-1]["max_tokens"] == C.LLM_OUTPUT_TOKENS
+    assert llm.calls[-1]["disable_thinking"] is True
+
+
+def test_turn_trims_history_when_prompt_exceeds_budget(monkeypatch):
+    """Con un techo ridículo, el historial se recorta antes de llamar."""
+    import airi.services.conversation as conv
+
+    monkeypatch.setattr(conv, "LLM_CONTEXT_TOKENS", 200)
+    monkeypatch.setattr(conv, "LLM_OUTPUT_TOKENS", 50)
+    state, _ = make_state()
+    state.histories[0] = [
+        {"role": "user", "content": "David: " + "viejo " * 100},
+        {"role": "assistant", "content": "respuesta vieja " * 50},
+        {"role": "user", "content": "David: hola"},
+    ]
+    llm = FakeLLM(replies=[llm_json("hola")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    sent = llm.calls[-1]["messages"]
+    assert sent[0]["role"] == "system"  # el system prompt es intocable
+    contents = " ".join(
+        m.get("content", "") for m in sent if isinstance(m, dict)
+    )
+    assert "viejo" not in contents
+
+
+def test_turn_marks_output_truncated_on_length_finish_reason():
+    """Si el modelo agota max_tokens, la traza lo marca para !debug."""
+    from airi.ports.llm import LLMMeta
+
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("cortado...")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    async def _run():
+        events = []
+
+        async def _chat(messages, **kw):
+            content, _ = await FakeLLM.chat_with_meta(llm, messages, **kw)
+            return content, LLMMeta(finish_reason="length", usage={})
+
+        llm.chat_with_meta = _chat
+        ctx = TurnContext(on_trace=events.append)
+        result = await svc.run_turn(DAVID, [(DAVID, "hola")], ctx)
+        return result, events
+
+    result, events = run(_run())
+
+    assert result.reply == "cortado..."
+    assert events and events[0].output_truncated is True
+
+
+# ---------------------------------------------------------------------------
 # Historial de asistente en JSON (refuerzo del formato de salida)
 # ---------------------------------------------------------------------------
 

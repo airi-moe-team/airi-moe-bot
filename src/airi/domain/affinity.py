@@ -19,12 +19,25 @@ from airi.domain.constants import (
 
 
 def clamp_delta(delta, delta_max=AFFINITY_DELTA_MAX, delta_min=AFFINITY_DELTA_MIN):
-    """Limita el cambio de afinidad al rango permitido."""
+    """Limita el cambio de afinidad al rango permitido.
+
+    Los límites `None` se interpretan como "sin límite declarado" y caen a
+    los valores del dominio: evita `TypeError` si un wiring pasa `None`
+    posicionalmente (p. ej. desde `run_bot`).
+    """
     try:
         value = int(delta)
     except (TypeError, ValueError):
         return 0
-    return max(int(delta_min), min(int(delta_max), value))
+    try:
+        upper = int(delta_max)
+    except (TypeError, ValueError):
+        upper = AFFINITY_DELTA_MAX
+    try:
+        lower = int(delta_min)
+    except (TypeError, ValueError):
+        lower = AFFINITY_DELTA_MIN
+    return max(lower, min(upper, value))
 
 
 def affinity_level(points):

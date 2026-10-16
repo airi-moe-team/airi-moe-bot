@@ -92,6 +92,10 @@ class TurnEvent:
     llm_usage: dict | None = None
     llm_latency_ms: int = 0
     llm_ms: int = 0  # alias legacy de llm_latency_ms
+    # Presupuesto de contexto: estimación del prompt y si hubo recorte.
+    prompt_tokens_est: int = 0
+    history_trimmed: bool = False
+    output_truncated: bool = False  # finish_reason == "length"
 
     # Parseo
     parsed: dict = field(default_factory=dict)

@@ -150,6 +150,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         DATE_QUESTION_TIMEOUT,
         DATE_SCENE_TIMEOUT,
         DIARY_REFLECTION_MIN_INTERVAL,
+        LLM_OUTPUT_TOKENS,
     )
     from airi.domain.dates import date_expired, date_seconds_left
     from airi.domain.diary import add_diary_entry, new_diary_entry
@@ -181,7 +182,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         text, _meta = await llm.chat_with_meta(
             messages,
             schema=schema,
-            max_tokens=max_tokens,
+            max_tokens=max_tokens or LLM_OUTPUT_TOKENS,
             temperature=temperature,
             disable_thinking=True,
             strict_schema=True,
@@ -531,6 +532,7 @@ def run_bot(argv=None):
         apply_winner_lock,
         maybe_crown_winner,
     )
+    from airi.domain.constants import AFFINITY_DELTA_MAX, AFFINITY_DELTA_MIN
     from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
     from airi.domain.texts import confession_text
     from airi.logging_setup import install_correlation_format
@@ -627,11 +629,14 @@ def run_bot(argv=None):
         save_diary=save_diary,
         save_memories=save_memories,
         save_users=save_users,
-        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None, delta_min=None: (
-            lambda entry: apply_affinity_delta(
-                entry, delta, now or time.time(), delta_max, delta_min
-            )
-        )(state.affinity_entry(uid)),
+        apply_affinity_fn=(
+            lambda uid, delta, now=None, delta_max=AFFINITY_DELTA_MAX,
+            delta_min=AFFINITY_DELTA_MIN: (
+                lambda entry: apply_affinity_delta(
+                    entry, delta, now or time.time(), delta_max, delta_min
+                )
+            )(state.affinity_entry(uid))
+        ),
         traces=trace_store,
     )
 

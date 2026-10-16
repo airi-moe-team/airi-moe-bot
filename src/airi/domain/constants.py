@@ -105,6 +105,12 @@ MAX_RECENT_GIFTS = env_int("MAX_RECENT_GIFTS", 3)
 # LÍMITES DEL PIPELINE DE RESPUESTA (usados por el dominio)
 # ============================================================
 
+# Techo total del servidor LLM (`-c` en llama-server): prompt + generación.
+# El cliente recorta historial antes de llamar para no superar este techo.
+LLM_CONTEXT_TOKENS = env_int("LLM_CONTEXT_TOKENS", 57000)
+# Salida máxima que el bot pide por llamada principal (turno y juicio).
+LLM_OUTPUT_TOKENS = env_int("LLM_OUTPUT_TOKENS", 1200)
+
 DATE_ACTION_LABEL_MAX = env_int("DATE_ACTION_LABEL_MAX", 80)
 SEARCH_QUERY_MAX_TOKENS = env_int("SEARCH_QUERY_MAX_TOKENS", 64)  # Reformulación búsqueda.
 REPETITION_THRESHOLD = env_int("REPETITION_THRESHOLD", 4)
