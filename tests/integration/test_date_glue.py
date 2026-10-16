@@ -100,7 +100,8 @@ def test_request_scene_marks_pending_scene():
 
     text = glue.request_scene(1, now=NOW)
 
-    assert "adónde me llevas" in text
+    assert "Dime solo el lugar" in text
+    assert "solo el nombre del lugar" in text
     assert glue.pending_scene(1, now=NOW) is True
 
 

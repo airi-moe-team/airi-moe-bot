@@ -7,7 +7,20 @@ from __future__ import annotations
 
 import discord
 
+from airi.domain.constants import DATE_MAX_SECONDS
+
 GIF_EMBED_COLOR = discord.Color(0xFFB6D9)
+
+DATE_HELP_MINUTES_PLACEHOLDER = "{DATE_MINUTES}"
+
+
+def date_max_minutes():
+    """Minutos de la cita con redondeo al alza (p. ej. 300 s → 5)."""
+    try:
+        total = int(DATE_MAX_SECONDS)
+    except (TypeError, ValueError):
+        total = 0
+    return max(1, (total + 59) // 60)
 
 HELP_TEXT = (
     "**🎯 Objetivo**\n"
@@ -31,8 +44,8 @@ HELP_TEXT = (
     "• `!relacion` — vuestro estado (días juntos, etc.)\n"
     "• `!ranking` — quién va ganando\n"
     "• `!cita` — invitarla a una cita (nivel Amiga, 1 cada 6 h). Ella te "
-    "pregunta adónde la llevas y tú escribes el plan. Son varios turnos "
-    "(máx. ~5 min) y en uno de ellos Airi te hará UNA pregunta importante: "
+    "pregunta adónde la llevas y tú escribes el lugar. Son varios turnos "
+    f"(máx. ~{DATE_HELP_MINUTES_PLACEHOLDER} min) y en uno de ellos Airi te hará UNA pregunta importante: "
     "elígele respuesta con los botones y la afinidad puede subir o bajar "
     "muchísimo. Si la cosa se tuerce tendrás una última oportunidad para "
     "reconducirla. Mientras Airi está en una cita, nadie más puede "
@@ -59,9 +72,12 @@ HELP_TEXT = (
 
 
 def build_help_embed():
+    description = HELP_TEXT.replace(
+        DATE_HELP_MINUTES_PLACEHOLDER, str(date_max_minutes())
+    )
     return discord.Embed(
         title="💘 Cómo conquistar a Airi",
-        description=HELP_TEXT,
+        description=description,
         color=GIF_EMBED_COLOR,
     )
 

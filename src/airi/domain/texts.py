@@ -78,12 +78,15 @@ DATE_CRISIS_TEXT = (
     "importo de verdad?»"
 )
 
-# Escena inicial: la cita ya no se elige con botones, la escribes tú.
+# Escena inicial: la cita ya no se elige con botones; el jugador escribe
+# SOLO el nombre del lugar (p. ej. "la playa", "el cine").
 DATE_SCENE_REQUEST_TEXT = (
     "*Airi se ilusiona y te mira con una sonrisa nerviosa.*\n"
     "«¡¿En serio quieres una cita conmigo?! *se retuerce un mechón* "
-    "Entonces... ¿adónde me llevas? Cuéntamelo, quiero imaginarlo.»\n\n"
-    "*(Escríbela con tus palabras en tu próximo mensaje.)*"
+    "Entonces... ¿adónde me llevas? Dime solo el lugar, "
+    "quiero imaginarlo.»\n\n"
+    "*(Escríbelo con una o dos palabras en tu próximo mensaje: "
+    "solo el nombre del lugar.)*"
 )
 
 DATE_SCENE_TIMEOUT_TEXT = (
