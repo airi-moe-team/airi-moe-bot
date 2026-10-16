@@ -295,3 +295,74 @@ def test_debug_unknown_subcommand_shows_usage():
 
     assert msg.replies and "Uso" in msg.replies[0]
 
+
+# ============================================================
+# !debug cita
+# ============================================================
+
+
+def test_debug_cita_without_session_replies_placeholder():
+    ctx = make_ctx()
+    channel = FakeChannel()
+    msg = FakeMessage("!debug cita 1", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    _kind, embed = channel.files[0]
+    assert "no hay ninguna activa" in embed.description
+
+
+def test_debug_cita_dumps_live_session():
+    from airi.domain.dates import new_date_session
+
+    ctx = make_ctx()
+    channel = FakeChannel()
+    session = new_date_session("la playa", 40, now=1_000_000.0)
+    session["turns"] = 2
+    session["question_used"] = True
+    session["question_forced"] = True
+    ctx.state.dates["1"] = session
+    msg = FakeMessage("!debug cita 1", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    _kind, embed = channel.files[0]
+    assert "la playa" in embed.description
+    assert "forzada" in embed.description
+    assert "Turnos" in embed.description
+
+
+def test_debug_cita_uses_author_when_uid_omitted():
+    from airi.domain.dates import new_date_session
+
+    ctx = make_ctx()
+    channel = FakeChannel()
+    ctx.state.dates["1"] = new_date_session("el cine", 40, now=1_000_000.0)
+    msg = FakeMessage("!debug cita", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    _kind, embed = channel.files[0]
+    assert "el cine" in embed.description
+
+
+def test_event_line_shows_date_context():
+    trace = TurnTrace(
+        correlation_id="cita1",
+        kind="message",
+        user_name="User1",
+        channel_id="7",
+        in_date=True,
+        date_event="question",
+        date_decision="question",
+        date_turns_before=1,
+        date_turns_after=2,
+    )
+
+    line = debug._event_line(trace)
+
+    assert "cita:question" in line
+    assert "t1→2" in line
+    assert "dec:question" in line
+
+

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
+
 from airi.domain.constants import (
     DATE_CRISIS_DROP,
     DATE_CRISIS_MIN_TURNS,
+    DATE_END_KEYWORD_MIN_TURNS,
     DATE_END_MIN_TURNS,
     DATE_LAST_CHANCE_MAX_RECOVERY,
     DATE_MAX_SECONDS,
@@ -12,6 +15,7 @@ from airi.domain.constants import (
     DATE_QUESTION_CRISIS_DROP,
     DATE_QUESTION_DELTA_MAX,
     DATE_QUESTION_FORCE_TURN,
+    DATE_QUESTION_GRACE_TURNS,
     DATE_QUESTION_MIN_TURNS,
     DATE_STATES,
     LAST_CHANCE_RESULTS,
@@ -45,6 +49,8 @@ def new_date_session(scene, affinity_start, now):
         "question_used": False,
         "question_pending": False,
         "question_forced": False,
+        "question_invalid": False,
+        "end_keyword": False,
         "history": [],
         "started_at": float(now),
     }
@@ -66,7 +72,9 @@ def normalize_date_session(session):
     session.setdefault("question_used", False)
     session.setdefault("question_pending", False)
     session.setdefault("question_forced", False)
+    session.setdefault("question_invalid", False)
     session.setdefault("question_asked_at", 0.0)
+    session.setdefault("end_keyword", False)
     session.setdefault("history", [])
     session.setdefault("started_at", 0.0)
     if session.get("state") not in DATE_STATES:
@@ -283,6 +291,21 @@ def last_chance_recovery(session, result, current_points):
     return max(0, min(earned, ceiling))
 
 
+def _start_question(session, payload, now, forced):
+    """Deja la sesión con una pregunta pendiente. Devuelve `("active", "question")`.
+
+    Copia el payload (la reserva nunca debe compartirse) y marca el estado de la
+    pregunta para que solo pueda ocurrir una vez por cita.
+    """
+    session["question"] = copy.deepcopy(payload)
+    session["question_used"] = True
+    session["question_pending"] = True
+    session["question_forced"] = bool(forced)
+    session["question_invalid"] = False
+    session["question_asked_at"] = float(now) if now is not None else 0.0
+    return "active", "question"
+
+
 def step_date(
     session,
     delta=0,
@@ -293,12 +316,17 @@ def step_date(
     end_keyword=False,
     now=None,
     question=None,
+    fallback_question=None,
     allow_crisis_drop=True,
 ):
     """Avanza un turno la máquina de estados de la cita. Muta `session`.
 
     `points` es la afinidad tras aplicar el delta de este turno. Devuelve
     `(state, event)`, donde `event` describe lo ocurrido en el turno.
+
+    `fallback_question` es la pregunta de reserva determinista que se lanza si
+    se agota el tope con la pregunta aún pendiente (garantía de que el evento
+    `question` siempre ocurre).
     """
     if not isinstance(session, dict):
         return "closed", "closed"
@@ -311,11 +339,7 @@ def step_date(
 
     if state == "active":
         if decision == "question" and question_allowed(session) and isinstance(question, dict):
-            session["question"] = question
-            session["question_used"] = True
-            session["question_pending"] = True
-            session["question_asked_at"] = float(now) if now is not None else 0.0
-            return "active", "question"
+            return _start_question(session, question, now, forced=False)
         forced_crisis = bool(session.get("force_crisis"))
         if decision == "crisis" and (forced_crisis or crisis_allowed(session)):
             session["force_crisis"] = False
@@ -332,9 +356,19 @@ def step_date(
             session["crisis_reason"] = str(reason or "la afinidad cayó")[:300]
             session["last_chance_used"] = True
             return "last_chance", "crisis"
-        if session["turns"] >= DATE_MAX_TURNS:
+        # Tope de turnos: si la pregunta sigue pendiente se concede una gracia
+        # para forzarla (si el modelo nunca la propuso, con la reserva).
+        forced_pending = should_force_question(session)
+        limit = DATE_MAX_TURNS + (DATE_QUESTION_GRACE_TURNS if forced_pending else 0)
+        if session["turns"] >= limit:
+            if forced_pending:
+                payload = question if isinstance(question, dict) else fallback_question
+                if isinstance(payload, dict) and payload.get("options"):
+                    return _start_question(session, payload, now, forced=True)
             return "final_scene", resolve_date_at_limit(session, points)
-        if end_keyword or (decision == "end" and end_allowed(session)):
+        if (end_keyword and session["turns"] >= DATE_END_KEYWORD_MIN_TURNS) or (
+            decision == "end" and end_allowed(session)
+        ):
             session["state"] = "final_scene"
             return "final_scene", "ending"
         return "active", "continue"
@@ -362,3 +396,54 @@ def step_date(
         return "closed", "closed"
 
     return "closed", "closed"
+
+
+# ============================================================
+# DIAGNÓSTICO (para `!debug cita`)
+# ============================================================
+
+
+def describe_date_session(session, now) -> list[tuple[str, str]]:
+    """Volcado legible de una sesión de cita como pares (etiqueta, valor).
+
+    Lógica pura, sin Discord: reutilizable por tests y por `!debug cita`.
+    """
+    if not isinstance(session, dict):
+        return [("Cita", "no hay ninguna activa")]
+    session = normalize_date_session(session)
+    turns = int(session.get("turns", 0) or 0)
+    left_turns = max(0, DATE_MAX_TURNS - turns)
+    rows = [
+        ("Escena", str(session.get("scene", "") or "(sin escena)")),
+        ("Estado", str(session.get("state", "active"))),
+        ("Turnos", f"{turns}/{DATE_MAX_TURNS} (quedan {left_turns})"),
+        ("Afinidad inicial", str(session.get("affinity_start", 0))),
+        ("Segundos restantes", str(int(date_seconds_left(session, now)))),
+    ]
+    reason = session.get("crisis_reason", "none")
+    if reason and reason != "none":
+        rows.append(("Crisis", str(reason)))
+    rows.append(
+        ("Última oportunidad", str(session.get("last_chance_result", "none")))
+    )
+    flags = []
+    if session.get("question_used"):
+        flags.append("usada")
+    if session.get("question_pending"):
+        flags.append("pendiente")
+    if session.get("question_forced"):
+        flags.append("forzada")
+    if session.get("question_invalid"):
+        flags.append("inválida")
+    rows.append(("Pregunta", ", ".join(flags) if flags else "no usada"))
+    end_keyword = session.get("end_keyword")
+    if end_keyword:
+        rows.append(("Keyword de fin", str(end_keyword)))
+    history = session.get("history") or []
+    for entry in history[-3:]:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role", "?"))
+        content = " ".join(str(entry.get("content", "")).split())[:80]
+        rows.append(("Historial", f"{role}: {content}"))
+    return rows

@@ -131,6 +131,9 @@ class TurnEvent:
     date_event: str | None = None
     date_turns_before: int = 0
     date_turns_after: int = 0
+    date_end_keyword: str | None = None
+    date_question_forced: bool = False
+    date_question_invalid: bool = False
 
     # Errores y notas
     skipped: bool = False

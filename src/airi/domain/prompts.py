@@ -5,6 +5,7 @@ from __future__ import annotations
 from airi.domain.affinity import default_preferences, is_winner
 from airi.domain.constants import (
     DATE_MAX_TURNS,
+    DATE_QUESTION_GRACE_TURNS,
     DIARY_PROMPT_MAX_CHARS,
     DIARY_PROMPT_MAX_USER,
     KNOWN_USERS_PROMPT_MAX,
@@ -423,10 +424,14 @@ def date_context_section(session):
     scene = session.get("scene", "")
     state = session.get("state", "active")
     turns = int(session.get("turns", 0) or 0)
-    remaining = max(0, DATE_MAX_TURNS - turns)
+    forced = state == "active" and should_force_question(session)
+    # La gracia amplía el tope para que la pregunta forzada quepa, así que el
+    # prompt no debe decir "Turno 6 de 6" cuando aún quedan turnos.
+    limit = DATE_MAX_TURNS + (DATE_QUESTION_GRACE_TURNS if forced else 0)
+    remaining = max(0, limit - turns)
     head = (
         "\n\n=== CITA EN CURSO ===\n"
-        f"Estás en una cita: {scene}. Turno {turns + 1} de {DATE_MAX_TURNS} "
+        f"Estás en una cita: {scene}. Turno {turns + 1} de {limit} "
         f"(quedan ~{remaining}). Rellena \"date_decision\" para decidir el rumbo.\n"
         "El resto de turnos son conversación normal: NO hay botones, solo tu "
         "respuesta. Los botones se reservan para la pregunta decisiva.\n"
@@ -437,12 +442,12 @@ def date_context_section(session):
             "los botones. No avances la escena: reacciona brevemente a lo que "
             "acaba de ocurrir.\n"
         )
-    elif state == "active" and should_force_question(session):
+    elif forced:
         head += (
-            "MOMENTO DE LA PREGUNTA: ya toca. Haz AHORA tu pregunta decisiva "
-            "(date_decision = \"question\") y rellena \"date_question\" con la "
-            "pregunta y 2-3 alternativas (regla 14). Es tu única oportunidad de "
-            "preguntar en esta cita.\n"
+            "MOMENTO DE LA PREGUNTA: es tu ÚLTIMA oportunidad; si no la haces "
+            "ahora, la cita terminará sin que se la hayas hecho. Haz AHORA tu "
+            "pregunta decisiva (date_decision = \"question\") y rellena "
+            "\"date_question\" con la pregunta y 2-3 alternativas (regla 14).\n"
         )
     elif state == "active" and question_allowed(session):
         head += (

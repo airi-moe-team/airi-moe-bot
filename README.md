@@ -96,20 +96,31 @@
 - Los tests usan `asyncio.run()` (sin dependencias extra).
 - **Todo bug nuevo se convierte en:** un TurnEvent real → un .json en `tests/fixtures/traces/` → un test automático.
 
+## Instalación
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"    # deps + entry points (airi, airi-trace, airi-replay) + pytest
+cp .env.example .env                 # y rellena DISCORD_TOKEN y CHANNEL_ID
+```
+
+Las dependencias (`discord.py`, `aiohttp`, `python-dotenv`) se declaran en `pyproject.toml`;
+el extra `dev` añade `pytest`. Sin el `pip install` no existen los entry points y
+`.venv/bin/airi` falla con `ModuleNotFoundError`.
+
 ## Ejecutar tests
 
 ```bash
 .venv/bin/python -m pytest tests/
 ```
 
-Estado actual: **137 tests** en 4 carpetas (unit, integration, regression, tools).
+Estado actual: **338 tests** en 4 carpetas (unit, integration, regression, tools).
 
 ## Ejecutar el bot
 
-El bot se ejecuta como aplicación instalable con `pip install -e .`:
+El bot se ejecuta como aplicación instalable (ver Instalación):
 
 ```bash
-pip install -e .                 # instala entry points: airi, airi-trace, airi-replay
 .venv/bin/airi run               # inicia el bot (necesita .env con DISCORD_TOKEN y CHANNEL_ID)
 ```
 
@@ -127,6 +138,16 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
 
+Notas de arranque:
+
+- **Instancia única**: `airi run` toma un lock en `data/.airi.lock`. Si ya hay
+  otro bot corriendo sobre el mismo `data/`, el segundo proceso sale con error
+  (evita que dos instancias se pisen los JSON). Para forzarlo:
+  `AIRI_ALLOW_MULTI_INSTANCE=1 .venv/bin/airi run`.
+- **Constantes al importar**: las variables `DATE_*` y `LLM_*` se leen al
+  importar el dominio. Si editas el `.env` con el bot corriendo, reinícialo para
+  aplicarlas (el bot avisa en el log cuando detecta un `.env` más reciente).
+
 ## Debugging y trazas
 
 Cada turno genera un `TurnEvent` con un `correlation_id` (12 hex) que viaja en
@@ -143,8 +164,10 @@ continúa.
 Además de los turnos de conversación, se instrumentan los demás flujos que no
 pasan por `run_turn`: los comandos (`kind="command"`), `!regalo`
 (`kind="gift"`), la elección de escena al iniciar una cita
-(`kind="scene_select"`) y las acciones de cita (`kind="date_action"`). Todos
-comparten el mismo `TraceStore`.
+(`kind="scene_select"`) y la resolución de la pregunta decisiva
+(`kind="date_question_result"`). Los turnos dentro de una cita son `message`
+con `in_date=True` y `date_event` (continue / question / crisis / ending...).
+Todos comparten el mismo `TraceStore`.
 
 Los ajustes se leen del entorno con `airi.config.Settings` (stdlib, sin
 `pydantic-settings`): se prefiere el prefijo `AIRI_` y se acepta el nombre
@@ -161,13 +184,39 @@ TRACE_KEEP_LAST=500         # o AIRI_TRACE_KEEP_LAST
 ```
 
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del
-  ring (def. 1, máx. 20) — incluye comandos, regalos y citas.
+  ring (def. 1, máx. 20) — incluye comandos, regalos y citas (cada línea de
+  cita muestra `cita:<evento> t<antes>→<después> dec:<decisión>`).
 - `!debug id <cid>` (solo dueño): envía el JSON del evento con ese
   `correlation_id` como adjunto (lo busca en el ring y, si no, en `TRACE_DIR`).
+- `!debug cita [uid]` (solo dueño): vuelca la sesión de cita viva (la tuya o la
+  de `uid`): escena, estado, turnos, crisis, pregunta y últimos turnos.
 - `!debug errores` (solo dueño): lista los eventos recientes con errores.
 - `!debug clear` (solo dueño): vacía el ring en memoria (no toca el disco).
 - `!debug turno` / `!debug trace` (solo dueño): resumen / JSON de tu último
   turno con Airi.
+
+### Depurar una cita
+
+```bash
+# 1. Arranca con trazas en disco para no perder nada al reiniciar
+TRACE_DIR=./traces .venv/bin/airi run
+
+# 2. En Discord:
+#    !cita  + escribe la escena
+#    !debug cita            → sesión viva (estado, turnos, pregunta...)
+#    !debug ultimo 20       → últimos turnos, con el evento de cita
+#    !debug id <cid>        → JSON completo del turno (motivo del cierre,
+#                             si la pregunta fue forzada/inválida)
+
+# 3. Desde consola:
+airi-trace last 10                 # resumen de eventos
+airi-trace show <cid>              # JSON de un turno
+airi-replay ./traces/<día>/<cid>.json   # reproduce el turno sin Discord
+```
+
+Para forzar el caso de la pregunta decisiva rápido, baja
+`DATE_QUESTION_FORCE_TURN=2` en el `.env` **y reinicia** (las constantes se
+leen al importar).
 
 ### CLI de trazas
 

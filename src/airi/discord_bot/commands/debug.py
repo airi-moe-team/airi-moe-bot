@@ -5,6 +5,7 @@ Uso:
   (por defecto 1; máximo 20).
 - `!debug id <cid>` — envía el JSON del evento con ese `correlation_id`
   (busca primero en el ring y, si no, en el directorio de trazas).
+- `!debug cita [uid]` — vuelca la sesión de cita viva del usuario (o la tuya).
 - `!debug errores` — lista los eventos recientes con errores.
 - `!debug clear` — vacía el ring de eventos en memoria (no toca el disco).
 - `!debug turno` — resumen de tu último turno (compatibilidad).
@@ -15,9 +16,11 @@ from __future__ import annotations
 
 import io
 import json
+import time
 
 import discord
 
+from airi.domain.dates import describe_date_session
 from airi.observability.trace import TurnTrace
 from airi.observability.trace_store import load_events_from_dir
 
@@ -28,6 +31,7 @@ DEBUG_USAGE = (
     "Uso:\n"
     "• `!debug ultimo [n]` — resumen de los últimos `n` eventos (def. 1).\n"
     "• `!debug id <cid>` — JSON del evento con ese correlation_id.\n"
+    "• `!debug cita [uid]` — sesión de cita viva (tuya o la de `uid`).\n"
     "• `!debug errores` — eventos recientes con errores.\n"
     "• `!debug clear` — vacía el ring de eventos en memoria.\n"
     "• `!debug turno` — resumen de tu último turno.\n"
@@ -68,10 +72,17 @@ def _summarize(trace):
 def _event_line(ev):
     reply = (ev.final_reply or "").replace("\n", " ")[:60]
     err = f" · errors={len(ev.errors)}" if ev.errors else ""
+    date = ""
+    if ev.in_date or ev.date_event:
+        date = (
+            f" · cita:{ev.date_event or '-'} "
+            f"t{ev.date_turns_before}→{ev.date_turns_after} "
+            f"dec:{ev.date_decision}"
+        )
     head = (
         f"`{ev.correlation_id}` {ev.kind} · "
         f"{ev.user_name or ev.user_id or '-'} · Δ{ev.affinity_applied:+d} "
-        f"· {ev.total_latency_ms}ms{err}"
+        f"· {ev.total_latency_ms}ms{err}{date}"
     )
     return head + (f"\n   {reply}" if reply else "")
 
@@ -137,6 +148,18 @@ async def handle(ctx, message):
             n = max(1, min(MAX_LIST, n))
         events = ctx.state.traces.last(n)
         await _send_list(message, f"🧾 Últimos {n} evento(s)", events)
+        return
+
+    if sub == "cita":
+        uid = parts[2] if len(parts) >= 3 else str(message.author.id)
+        session = ctx.state.dates.get(str(uid))
+        rows = describe_date_session(session, time.time())
+        body = "\n".join(f"**{label}:** {value}" for label, value in rows)
+        embed = discord.Embed(
+            title=f"🌹 Cita de {uid}",
+            description=body[:4000],
+        )
+        await message.channel.send(embed=embed)
         return
 
     if sub == "errores":

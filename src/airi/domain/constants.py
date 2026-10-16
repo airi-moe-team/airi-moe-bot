@@ -73,6 +73,8 @@ DATE_SCENE_TIMEOUT = env_int("DATE_SCENE_TIMEOUT", 120)  # Segundos para respond
 
 DATE_CRISIS_MIN_TURNS = env_int("DATE_CRISIS_MIN_TURNS", 3)  # Turnos antes de crisis.
 DATE_END_MIN_TURNS = env_int("DATE_END_MIN_TURNS", 4)  # Turnos antes de poder cerrar.
+# Turnos mínimos para que la PALABRA de fin ("fin", "adiós"...) cierre la cita.
+DATE_END_KEYWORD_MIN_TURNS = env_int("DATE_END_KEYWORD_MIN_TURNS", 2)
 DATE_CRISIS_DROP = env_int("DATE_CRISIS_DROP", 4)  # Caída que desata la crisis.
 DATE_LAST_CHANCE_MAX_RECOVERY = env_int("DATE_LAST_CHANCE_MAX_RECOVERY", 12)
 DATE_HISTORY_MAX = env_int("DATE_HISTORY_MAX", 20)  # Historial aislado por cita.
@@ -85,12 +87,19 @@ LAST_CHANCE_RESULTS = ("success", "partial", "fail", "none")
 # seguridad. Cada alternativa trae una probabilidad y un premio/castigo grande.
 DATE_QUESTION_MIN_TURNS = env_int("DATE_QUESTION_MIN_TURNS", 2)  # Turnos mínimos previos.
 DATE_QUESTION_FORCE_TURN = env_int("DATE_QUESTION_FORCE_TURN", 4)  # Turno en que se fuerza.
+# Turnos extra sobre DATE_MAX_TURNS para dar tiempo a la pregunta forzada.
+DATE_QUESTION_GRACE_TURNS = env_int("DATE_QUESTION_GRACE_TURNS", 2)
 DATE_QUESTION_OPTIONS = env_int("DATE_QUESTION_OPTIONS", 3)  # Alternativas máximas.
 DATE_QUESTION_DELTA_MAX = env_int("DATE_QUESTION_DELTA_MAX", 25)  # Swing máximo.
 DATE_QUESTION_CRISIS_DROP = env_int("DATE_QUESTION_CRISIS_DROP", 20)  # Fallo grave.
 # Segundos que la pregunta puede estar sin respuesta antes de caducar (p. ej.
 # si el bot se reinicia y se pierde la vista con los botones).
 DATE_QUESTION_TIMEOUT = env_int("DATE_QUESTION_TIMEOUT", 180)
+# Segundos mínimos que deben quedar en la cita para poder responder la
+# pregunta; si no, no se lanza (o se alarga la cita si la pregunta es forzada).
+DATE_QUESTION_MIN_SECONDS = env_int("DATE_QUESTION_MIN_SECONDS", 60)
+# Margen extra al alargar la cita para que la pregunta forzada sea respondible.
+DATE_QUESTION_TIME_MARGIN = env_int("DATE_QUESTION_TIME_MARGIN", 15)
 
 # Diario de Airi.
 DIARY_MAX_ENTRIES = env_int("DIARY_MAX_ENTRIES", 300)  # Tope global (FIFO).

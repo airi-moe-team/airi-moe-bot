@@ -2,7 +2,7 @@
 
 import asyncio
 
-from airi.domain.constants import DATE_MAX_TURNS
+from airi.domain.constants import DATE_MAX_TURNS, DATE_QUESTION_GRACE_TURNS
 from airi.domain.dates import new_date_session
 from airi.domain.texts import DATE_CRISIS_TEXT
 from airi.services.date_service import DateService
@@ -219,6 +219,7 @@ def test_failed_last_chance_closes_without_recovery():
 
 
 def test_full_date_happy_path():
+    """Si el modelo nunca pregunta, al final de la gracia se fuerza la pregunta."""
     state, _ = make_state()
     session = new_date_session("cena", 40, now=NOW)
     state.dates["1"] = session
@@ -226,13 +227,17 @@ def test_full_date_happy_path():
     notifier = FakeNotifier()
     service = make_service(state, notifier)
 
-    events = [step(service, session) for _ in range(DATE_MAX_TURNS)]
+    total = DATE_MAX_TURNS + DATE_QUESTION_GRACE_TURNS
+    events = [step(service, session) for _ in range(total)]
 
-    # Al agotar los turnos la cita cierra con "ending".
-    assert events[-1] == "ending"
-    assert session["state"] == "closed"
-    assert "1" not in state.dates
-    assert notifier.sent  # hubo mensaje de cierre
+    # El tope se amplía con la gracia y la pregunta decisiva se fuerza (reserva
+    # determinista): el evento final es "question", no un cierre mudo.
+    assert events[-1] == "question"
+    assert session["question_forced"] is True
+    assert session["question_pending"] is True
+    assert session["state"] == "active"
+    assert "1" in state.dates
+    assert notifier.sent == []  # el cierre aún no ha ocurrido
 
 
 # --- turno de la pregunta -----------------------------------------------------

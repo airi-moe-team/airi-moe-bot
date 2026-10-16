@@ -15,7 +15,12 @@ from airi.domain.dates import (
 )
 from airi.domain.prompts import date_summary_prompt
 from airi.domain.text_filters import clean_summary
-from airi.domain.texts import DATE_CRISIS_TEXT, DATE_END_KEYWORDS, date_final_text
+from airi.domain.texts import (
+    DATE_CRISIS_TEXT,
+    DATE_QUESTION_FALLBACK,
+    date_final_text,
+    end_keyword_hit,
+)
 from airi.services.state import AppState
 
 log = logging.getLogger(__name__)
@@ -36,6 +41,11 @@ def _finish_diary_text(event, name, scene):
         return (
             f"Hoy la cita con {name} ({scene}) salió mal y no consiguió "
             "reconducirla. Me he quedado con el corazón encogido."
+        )
+    if event == "timeout":
+        return (
+            f"La cita con {name} ({scene}) se quedó a medias: se me fue el tiempo "
+            "y no pudimos terminarla. Me he quedado con las ganas."
         )
     return (
         f"He tenido una cita con {name} ({scene}). Ha sido un momento muy bonito."
@@ -86,7 +96,7 @@ class DateService:
         """
         now = self._now(now)
         uid = str(user.id)
-        end_keyword = any(kw in text.lower() for kw in DATE_END_KEYWORDS)
+        end_keyword = end_keyword_hit(text)
         new_state, event = step_date(
             session,
             delta=delta,
@@ -94,11 +104,24 @@ class DateService:
             decision=date_decision,
             reason=date_reason,
             last_chance_result=last_chance_result,
-            end_keyword=end_keyword,
+            end_keyword=bool(end_keyword),
             now=now,
             question=question,
+            fallback_question=DATE_QUESTION_FALLBACK,
             allow_crisis_drop=allow_crisis_drop,
         )
+        # Motivo del cierre y salud de la pregunta, para la traza y el diario.
+        session["end_keyword"] = end_keyword
+        if date_decision == "question" and event != "question":
+            session["question_invalid"] = True
+            log.warning(
+                "Cita de %s: date_decision=question sin pregunta válida "
+                "(payload=%r); se ignora",
+                uid,
+                question,
+            )
+        elif event == "question":
+            session["question_invalid"] = False
         log.info(
             "Cita de %s: turno %s → estado %s (evento=%s)",
             uid, session.get("turns"), new_state, event,

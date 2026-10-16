@@ -21,6 +21,10 @@ from airi.domain.texts import DATE_QUESTION_NUDGE_TEXT, DATE_SCENE_TIMEOUT_TEXT
 
 log = logging.getLogger(__name__)
 
+# Momento de arranque del proceso: sirve para avisar si el `.env` se editó
+# DESPUÉS (las constantes DATE_*/LLM_* se leen al importar y no se recargan).
+STARTED_AT = time.time()
+
 
 class _Debouncer:
     """Une mensajes rápidos del MISMO (canal, autor)."""
@@ -80,8 +84,8 @@ def create_client(*, build_ctx, registry, channel_id):
 
         if ctx.expire_stale_dates():
             await message.channel.send(
-                "🌙 «Vaya, se me ha ido el tiempo... la cita termina aquí. "
-                "*se despide con la mano*»"
+                "🌙 «Vaya, se me ha ido el tiempo... la cita se queda aquí. "
+                "*se despide con la mano, algo apenada*»"
             )
         ctx.expire_stale_questions()
 
@@ -239,13 +243,23 @@ def build_date_glue(state, *, llm_url, request_timeout):
             session, result, user_id=user_id, now=now
         )
 
-    def expire_question(user_id):
-        """La pregunta caducó sin respuesta: la cita sigue sin mover afinidad."""
+    def expire_question(user_id, notify_channel=None):
+        """La pregunta caducó sin respuesta: la cita sigue sin mover afinidad.
+
+        Con `notify_channel` se avisa en el canal (best-effort) de que el
+        momento pasó; el mensaje es in-fiction y no bloquea el flujo.
+        """
         session = state.dates.get(str(user_id))
         if not isinstance(session, dict) or not session.get("question_pending"):
             return
         session["question_pending"] = False
         state.save_dates()
+        log.info("Pregunta de %s caducada sin respuesta", user_id)
+        if notify_channel is not None:
+            from airi.domain.texts import DATE_QUESTION_MISSED_TEXT
+
+            return notify_channel.send(DATE_QUESTION_MISSED_TEXT)
+        return None
 
     def expire_stale_questions(now=None):
         """Barrido de preguntas huérfanas (p. ej. tras un reinicio del bot).
@@ -406,9 +420,12 @@ def build_date_glue(state, *, llm_url, request_timeout):
         for uid, session in list(state.dates.items()):
             if date_expired(session, now):
                 expired.append(uid)
-                _finish_date(uid, session, "ending", now=now)
+                _finish_date(uid, session, "timeout", now=now)
         if expired:
-            log.info("Citas caducadas por tiempo: %s", ", ".join(expired))
+            log.info(
+                "Citas caducadas por tiempo: %s (evento=timeout)",
+                ", ".join(expired),
+            )
         return expired
 
     def busy_date_owner(exclude_id=None):
@@ -527,16 +544,17 @@ def run_bot(argv=None):
     Construye la aplicación modular hexagonal y ejecuta el cliente de Discord.
     """
     import asyncio
-    import json
     import logging
     import os
     from io import BytesIO
+    from pathlib import Path
 
     from dotenv import load_dotenv
 
     from airi.adapters.brave_search import BraveSearchClient
     from airi.adapters.discord_notifier import DiscordNotifier
     from airi.adapters.http_llm import HttpLlmClient
+    from airi.adapters.json_repo import load_json, load_json_list, save_json
     from airi.adapters.nekosbest import NekosBestProvider
     from airi.config import Settings
     from airi.discord_bot import embeds
@@ -579,7 +597,8 @@ def run_bot(argv=None):
 
     # Datos globales
     generation_lock = asyncio.Lock()
-    world_data_dir = os.getenv("DATA_DIR", "data")
+    settings = Settings.from_env()
+    world_data_dir = settings.data_dir
     world_file = os.path.join(world_data_dir, "world.json")
     affinity_file = os.path.join(world_data_dir, "affinity.json")
     dates_file = os.path.join(world_data_dir, "dates.json")
@@ -587,47 +606,63 @@ def run_bot(argv=None):
     memories_file = os.path.join(world_data_dir, "memories.json")
     users_file = os.path.join(world_data_dir, "users.json")
 
-    # Cargar datos
-    with open(world_file, "r", encoding="utf-8") as f:
-        world_data = json.load(f)
-    with open(affinity_file, "r", encoding="utf-8") as f:
-        affinity_data = json.load(f)
-    with open(dates_file, "r", encoding="utf-8") as f:
-        dates_data = json.load(f)
-    with open(diary_file, "r", encoding="utf-8") as f:
-        diary_data = json.load(f)
-    with open(memories_file, "r", encoding="utf-8") as f:
-        memories_data = json.load(f)
-    with open(users_file, "r", encoding="utf-8") as f:
-        users_data = json.load(f)
+    # Lock de instancia única: dos bots sobre el mismo `data/` se pisarían los
+    # JSON. `AIRI_ALLOW_MULTI_INSTANCE=1` permite continuar (con aviso).
+    from airi.locking import InstanceLock
 
-    # Persistencia
+    lock = InstanceLock(Path(world_data_dir) / ".airi.lock")
+    if not lock.acquire():
+        if os.environ.get("AIRI_ALLOW_MULTI_INSTANCE") == "1":
+            log.warning(
+                "Otra instancia tiene el lock de %s; se continúa por petición.",
+                lock.path,
+            )
+        else:
+            log.error(
+                "Ya hay una instancia de Airi corriendo (lock %s). Saliendo. "
+                "Usa AIRI_ALLOW_MULTI_INSTANCE=1 para forzar.",
+                lock.path,
+            )
+            raise SystemExit(1)
+
+    # Aviso de configuración obsoleta: las constantes DATE_*/LLM_* se leen al
+    # importar, así que un `.env` editado después no surte efecto hasta reiniciar.
+    env_path = Path(".env")
+    if env_path.exists() and env_path.stat().st_mtime > STARTED_AT:
+        log.warning(
+            "El .env es más reciente que el arranque del bot: las constantes "
+            "DATE_*/LLM_* se leen al importar. Reinicia para aplicarlas."
+        )
+
+    # Cargar datos (cargas robustas: un JSON corrupto o ausente no revienta el
+    # arranque; se parte del valor por defecto).
+    world_data = load_json(world_file, {})
+    affinity_data = load_json(affinity_file, {})
+    dates_data = load_json(dates_file, {})
+    diary_data = load_json_list(diary_file)
+    memories_data = load_json(memories_file, {})
+    users_data = load_json(users_file, {})
+
+    # Persistencia (escrituras atómicas: tmp + os.replace).
     def save_world():
-        with open(world_file, "w", encoding="utf-8") as f:
-            json.dump(world_data, f, indent=2)
+        save_json(world_file, world_data)
 
     def save_affinity():
-        with open(affinity_file, "w", encoding="utf-8") as f:
-            json.dump(affinity_data, f, indent=2)
+        save_json(affinity_file, affinity_data)
 
     def save_dates():
-        with open(dates_file, "w", encoding="utf-8") as f:
-            json.dump(dates_data, f, indent=2)
+        save_json(dates_file, dates_data)
 
     def save_diary():
-        with open(diary_file, "w", encoding="utf-8") as f:
-            json.dump(diary_data, f, indent=2)
+        save_json(diary_file, diary_data)
 
     def save_memories():
-        with open(memories_file, "w", encoding="utf-8") as f:
-            json.dump(memories_data, f, indent=2)
+        save_json(memories_file, memories_data)
 
     def save_users():
-        with open(users_file, "w", encoding="utf-8") as f:
-            json.dump(users_data, f, indent=2)
+        save_json(users_file, users_data)
 
-    # Settings
-    settings = Settings.from_env()
+    # Observabilidad
     trace_store = TraceStore(settings.trace_dir, settings.trace_keep_last)
     install_correlation_format()
 

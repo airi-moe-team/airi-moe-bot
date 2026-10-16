@@ -345,6 +345,9 @@ def test_expire_stale_dates_closes_and_logs():
     assert "1" not in state.dates
     assert session["state"] == "closed"
     assert counters["dates"] == 1
+    # El cierre por reloj deja una entrada de diario propia (no la feliz).
+    dates = [e for e in state.diary if e.get("kind") == "date"]
+    assert dates and "se me fue el tiempo" in dates[-1]["text"]
 
 
 def test_expire_stale_dates_keeps_active_dates():

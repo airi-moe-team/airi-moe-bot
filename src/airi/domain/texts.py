@@ -2,9 +2,40 @@
 
 from __future__ import annotations
 
+import re
+
 from airi.domain.constants import DATE_MAX_TURNS
 
 DATE_END_KEYWORDS = ("fin", "adios", "adiós", "hasta luego", "se acabo", "se acabó")
+
+# Cache de patrones compilados: la lista de palabras de fin es fija.
+_END_KEYWORD_PATTERNS = {}
+
+
+def _end_pattern(keyword):
+    pattern = _END_KEYWORD_PATTERNS.get(keyword)
+    if pattern is None:
+        literal = re.escape(keyword.lower())
+        # Palabra/frase completa: no debe formar parte de otra palabra
+        # ("fin" no debe casar con "final" ni "afinidad").
+        pattern = re.compile(rf"(?<!\w){literal}(?!\w)")
+        _END_KEYWORD_PATTERNS[keyword] = pattern
+    return pattern
+
+
+def end_keyword_hit(text, keywords=DATE_END_KEYWORDS):
+    """Palabra/frase de fin presente como palabra completa; si no, None.
+
+    Se usa `\\w` (unicode) en los bordes, así que "adiós" casa con "adiós"
+    pero "fin" no casa dentro de "final" ni "afinidad".
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    low = text.lower()
+    for keyword in keywords:
+        if _end_pattern(keyword).search(low):
+            return keyword
+    return None
 
 def confession_text(name):
     return (
@@ -101,6 +132,48 @@ DATE_QUESTION_NUDGE_TEXT = (
     "«Eh... *señala los botones* tienes que elegir una respuesta. "
     "Lo que escribas no vale, ¿vale? Pulsa uno.»"
 )
+
+# Aviso cuando una pregunta pendiente caduca sin respuesta (se perdió el momento).
+DATE_QUESTION_MISSED_TEXT = (
+    "*Airi mira el reloj y se le escapa un suspiro.*\n"
+    "«Vaya... se me ha pasado el momento de preguntarte algo importante. "
+    "La próxima vez, ¿vale?»"
+)
+
+# Red de seguridad de la pregunta decisiva: si el modelo nunca la propone, al
+# final de la gracia se lanza esta pregunta determinista para garantizar que el
+# evento ocurra. Los deltas no llegan a DATE_QUESTION_CRISIS_DROP, así que la
+# reserva nunca provoca una crisis por fallo grave.
+DATE_QUESTION_FALLBACK = {
+    "text": (
+        "«...¿Puedo preguntarte algo que llevo un rato queriendo saber? "
+        "¿Qué es lo que más te gusta de pasar tiempo conmigo?»"
+    ),
+    "options": [
+        {
+            "label": "Que me escuchas de verdad",
+            "action": "le respondo con sinceridad",
+            "up_chance": 0.80,
+            "delta_up": 20,
+            "delta_down": -8,
+        },
+        {
+            "label": "Que me haces reír",
+            "action": "le digo que me hace reír",
+            "up_chance": 0.70,
+            "delta_up": 18,
+            "delta_down": -8,
+        },
+        {
+            "label": "No sabría decirte",
+            "action": "me quedo pensando",
+            "up_chance": 0.35,
+            "delta_up": 12,
+            "delta_down": -12,
+        },
+    ],
+}
+
 
 
 def date_question_result_note(win, delta):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 
+from airi.domain.constants import DATE_MAX_TURNS, DATE_QUESTION_GRACE_TURNS
 from airi.domain.dates import new_date_session
 from airi.observability.replay import replay_trace
 from airi.observability.trace import save_turn_trace
@@ -78,3 +79,45 @@ def test_replay_date_turn_without_date_event_is_tolerated(tmp_path):
 
     assert "date_event" not in result.checks
     assert result.matches_original, result.checks
+
+
+def _golden_forced_question_trace(tmp_path):
+    """Traza del último turno de la gracia: la reserva fuerza el evento `question`.
+
+    La sesión llega al tope de turnos sin que el modelo haya propuesto la
+    pregunta decisiva (`decision="continue"`). Sin el forzado el turno cerraría
+    con `ending`; la reserva determinista garantiza que el evento `question`
+    siempre ocurra. El replay debe reproducir ese evento desde el snapshot.
+    """
+    session = new_date_session("una merienda en el parque", 0, now=NOW)
+    session["turns"] = DATE_MAX_TURNS + DATE_QUESTION_GRACE_TURNS - 1
+    state, _ = make_state(dates={"42": session})
+    llm = FakeLLM(replies=[llm_json("qué bien lo pasamos")])
+    svc = ConversationService(
+        llm=llm, state=state, notifier=FakeNotifier(), clock=lambda: NOW,
+        date_delta_max=8,
+    )
+    result = run(svc.run_turn(DAVID, [(DAVID, "qué bien lo pasamos")], TurnContext()))
+
+    date_svc = DateService(state=state, notifier=None, clock=lambda: NOW)
+    result.trace.date_event = run(date_svc.process_turn(
+        state.dates["42"],
+        user=DAVID,
+        text="qué bien lo pasamos",
+        delta=result.affinity_delta,
+        points=state.entry_points(DAVID.id),
+        date_decision=result.date_decision,
+        date_reason=result.date_reason,
+        last_chance_result=result.last_chance_result,
+        now=NOW,
+    ))
+    return save_turn_trace(result.trace, str(tmp_path))
+
+
+def test_replay_date_turn_forced_question(tmp_path):
+    path = _golden_forced_question_trace(tmp_path)
+    result = run(replay_trace(path))
+
+    assert result.matches_original, result.checks
+    assert result.checks["date_event"] is True
+    assert result.date_event == "question"

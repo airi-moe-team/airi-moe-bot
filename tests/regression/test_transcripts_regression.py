@@ -67,6 +67,10 @@ def build_state(spec):
             date_seed.get("affinity_start", 0),
             now=NOW,
         )
+        # Campos extra opcionales (p. ej. question_used) para escenarios concretos.
+        extra = date_seed.get("fields")
+        if isinstance(extra, dict):
+            session.update(extra)
         dates[str(date_seed.get("user_id", uid))] = session
     return make_state(
         affinity=affinity,
@@ -122,6 +126,7 @@ def replay(spec):
                 date_reason=date_cfg.get("date_reason", "none"),
                 last_chance_result=date_cfg.get("last_chance_result", "none"),
                 now=NOW,
+                question=date_cfg.get("question"),
             ))
 
         results.append((result, date_event))

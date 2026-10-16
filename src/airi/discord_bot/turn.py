@@ -20,7 +20,13 @@ import discord
 from airi.discord_bot import embeds
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import can_date, entry_points
-from airi.domain.constants import DATE_COOLDOWN, DATE_SCENE_TEXT_MAX
+from airi.domain.constants import (
+    DATE_COOLDOWN,
+    DATE_QUESTION_MIN_SECONDS,
+    DATE_QUESTION_TIME_MARGIN,
+    DATE_QUESTION_TIMEOUT,
+    DATE_SCENE_TEXT_MAX,
+)
 from airi.domain.dates import (
     date_expired,
     date_seconds_left,
@@ -29,7 +35,11 @@ from airi.domain.dates import (
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
 from airi.domain.text_filters import clean_reply
-from airi.domain.texts import date_intro, date_question_result_note
+from airi.domain.texts import (
+    DATE_QUESTION_MISSED_TEXT,
+    date_intro,
+    date_question_result_note,
+)
 from airi.observability.instrumentation import turn_event
 from airi.services.conversation import TurnContext
 
@@ -194,6 +204,13 @@ async def run_user_turn(
                     # pueda reproducirlo de forma fiel.
                     if result.trace is not None:
                         result.trace.date_event = date_event
+                        result.trace.date_end_keyword = date_session.get("end_keyword")
+                        result.trace.date_question_forced = bool(
+                            date_session.get("question_forced")
+                        )
+                        result.trace.date_question_invalid = bool(
+                            date_session.get("question_invalid")
+                        )
                         await state.traces.update(result.trace)
                     if (
                         date_event
@@ -243,16 +260,33 @@ async def run_user_turn(
 
 
 async def _send_question(ctx, channel, uid, date_session, *, now):
-    """Publica la pregunta decisiva con sus botones (una sola vez por cita)."""
+    """Publica la pregunta decisiva con sus botones (una sola vez por cita).
+
+    Nunca la lanza si a la cita le queda menos de `DATE_QUESTION_MIN_SECONDS`:
+    en ese caso se cancela (no dejar `question_pending` colgado) y se avisa. Si
+    la pregunta es la de reserva (forzada), se alarga la cita lo justo para que
+    sea respondible: la pregunta decisiva siempre debe poder contestarse.
+    """
     question = date_session.get("question") or {}
     options = question.get("options") or []
     remaining = int(date_seconds_left(date_session, now))
+
+    if remaining < DATE_QUESTION_MIN_SECONDS:
+        if not date_session.get("question_forced"):
+            ctx.expire_question(uid)
+            await channel.send(DATE_QUESTION_MISSED_TEXT)
+            return
+        missing = DATE_QUESTION_MIN_SECONDS - remaining + DATE_QUESTION_TIME_MARGIN
+        date_session["started_at"] = float(date_session.get("started_at", now)) + missing
+        ctx.state.save_dates()
+        remaining = int(date_seconds_left(date_session, now))
+
     view = date_views.DateQuestionView(
         uid,
         options,
         ctx.handle_question_answer,
-        timeout=max(30, min(remaining or 180, 180)),
-        on_expire=lambda: ctx.expire_question(uid),
+        timeout=max(DATE_QUESTION_MIN_SECONDS, min(remaining, DATE_QUESTION_TIMEOUT)),
+        on_expire=lambda: ctx.expire_question(uid, notify_channel=channel),
     )
     await channel.send(
         embed=date_views.build_question_embed(question.get("text", "")),
