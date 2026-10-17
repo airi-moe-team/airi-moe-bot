@@ -20,6 +20,7 @@ import time
 
 import discord
 
+from airi.discord_bot import embeds
 from airi.domain.dates import describe_date_session
 from airi.observability.trace import TurnTrace
 from airi.observability.trace_store import load_events_from_dir
@@ -103,7 +104,8 @@ async def _send_raw_trace(message, trace):
 async def _send_list(message, title, events):
     if not events:
         await message.reply(
-            "No hay eventos registrados todavía.", mention_author=False
+            embed=embeds.system_embed("No hay eventos registrados todavía."),
+            mention_author=False,
         )
         return
     body = "\n".join(_event_line(ev) for ev in events)
@@ -121,7 +123,7 @@ def _find_on_disk(trace_dir, cid):
 async def handle(ctx, message):
     if ctx.owner_id and message.author.id != ctx.owner_id:
         await message.reply(
-            "Solo el dueño del canal puede usar `!debug`.",
+            embed=embeds.system_embed("Solo el dueño del canal puede usar `!debug`."),
             mention_author=False,
         )
         return
@@ -132,7 +134,9 @@ async def handle(ctx, message):
         n = len(ctx.state.traces)
         ctx.state.traces.clear()
         await message.reply(
-            f"Ring de eventos vaciado ({n} eventos). El disco no se toca.",
+            embed=embeds.system_embed(
+                f"Ring de eventos vaciado ({n} eventos). El disco no se toca."
+            ),
             mention_author=False,
         )
         return
@@ -143,7 +147,9 @@ async def handle(ctx, message):
             try:
                 n = int(parts[2])
             except ValueError:
-                await message.reply(DEBUG_USAGE, mention_author=False)
+                await message.reply(
+                    embed=embeds.system_embed(DEBUG_USAGE), mention_author=False
+                )
                 return
             n = max(1, min(MAX_LIST, n))
         events = ctx.state.traces.last(n)
@@ -167,7 +173,8 @@ async def handle(ctx, message):
         events = list(reversed(events[-MAX_ERRORS:]))
         if not events:
             await message.reply(
-                "No hay errores registrados. 🎉", mention_author=False
+                embed=embeds.system_embed("No hay errores registrados. 🎉"),
+                mention_author=False,
             )
             return
         await _send_list(message, f"⚠️ Eventos con errores ({len(events)})", events)
@@ -176,14 +183,17 @@ async def handle(ctx, message):
     if sub == "id":
         cid = parts[2] if len(parts) >= 3 else ""
         if not cid:
-            await message.reply(DEBUG_USAGE, mention_author=False)
+            await message.reply(
+                embed=embeds.system_embed(DEBUG_USAGE), mention_author=False
+            )
             return
         ev = ctx.state.traces.by_correlation_id(cid)
         if ev is None and ctx.trace_dir:
             ev = _find_on_disk(ctx.trace_dir, cid)
         if ev is None:
             await message.reply(
-                f"No encontré la traza `{cid}`.", mention_author=False
+                embed=embeds.system_embed(f"No encontré la traza `{cid}`."),
+                mention_author=False,
             )
             return
         if not isinstance(ev, TurnTrace):
@@ -195,8 +205,10 @@ async def handle(ctx, message):
         trace = ctx.last_trace_for(message.channel.id, message.author.id)
         if trace is None:
             await message.reply(
-                "No hay ningún turno registrado para ti todavía. "
-                "Habla primero con Airi y vuelve a intentarlo.",
+                embed=embeds.system_embed(
+                    "No hay ningún turno registrado para ti todavía. "
+                    "Habla primero con Airi y vuelve a intentarlo."
+                ),
                 mention_author=False,
             )
             return
@@ -212,4 +224,4 @@ async def handle(ctx, message):
         await message.channel.send(embed=embed)
         return
 
-    await message.reply(DEBUG_USAGE, mention_author=False)
+    await message.reply(embed=embeds.system_embed(DEBUG_USAGE), mention_author=False)

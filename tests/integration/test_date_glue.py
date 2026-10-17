@@ -71,10 +71,13 @@ class _FakeSession:
 
 
 class _FakeChannel:
-    def __init__(self):
+    def __init__(self, channel_id=7):
+        self.id = channel_id
         self.sent = []
 
     async def send(self, content=None, **kwargs):
+        if content is None and kwargs.get("embed") is not None:
+            content = kwargs["embed"].description
         self.sent.append(content)
 
 

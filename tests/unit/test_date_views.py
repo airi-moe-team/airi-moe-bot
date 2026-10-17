@@ -125,7 +125,7 @@ class _FakeInteraction:
     async def edit_message(self, *, view=None, **kw):
         self.edited.append(view)
 
-    async def send_message(self, content, *, ephemeral=False, **kw):
+    async def send_message(self, content=None, *, ephemeral=False, embed=None, **kw):
         self.notices.append((content, ephemeral))
 
 
@@ -158,57 +158,3 @@ def test_handle_choice_calls_handler_and_disables_buttons():
     assert seen == [2]
     assert all(child.disabled for child in view.children)
 
-
-# --- build_date_embed (turnos + tiempo restante) --------------------------
-
-def _footer(embed):
-    return embed.footer.text if embed.footer is not None else None
-
-
-def test_build_date_embed_shows_turns_and_remaining_time():
-    embed = date_views.build_date_embed(
-        "Te sonríe.",
-        scene="un paseo por el parque",
-        state="active",
-        turns_left=3,
-        seconds_left=240,
-    )
-
-    assert _footer(embed) == "Turnos restantes: 3 · ⏳ ~4 min"
-    assert embed.title == "🌹 Cita · un paseo por el parque"
-    assert embed.description == "Te sonríe."
-
-
-def test_build_date_embed_time_under_a_minute():
-    embed = date_views.build_date_embed(
-        "Te sonríe.", turns_left=6, seconds_left=10
-    )
-
-    assert _footer(embed) == "Turnos restantes: 6 · ⏳ <1 min"
-
-
-def test_build_date_embed_without_time_keeps_old_footer():
-    # Retrocompatibilidad: sin seconds_left no se muestra tiempo.
-    embed = date_views.build_date_embed("Hola.", turns_left=2)
-
-    assert _footer(embed) == "Turnos restantes: 2"
-
-
-def test_build_date_embed_without_turns_shows_only_time():
-    embed = date_views.build_date_embed("Hola.", seconds_left=125)
-
-    assert _footer(embed) == "⏳ ~3 min"
-
-
-def test_build_date_embed_no_footer_when_nothing_to_show():
-    embed = date_views.build_date_embed("Hola.", state="active")
-
-    assert _footer(embed) is None
-
-
-def test_build_date_embed_last_chance_and_time():
-    embed = date_views.build_date_embed(
-        "Se tuerce.", state="last_chance", turns_left=1, seconds_left=45
-    )
-
-    assert _footer(embed) == "Última oportunidad · Turnos restantes: 1 · ⏳ <1 min"

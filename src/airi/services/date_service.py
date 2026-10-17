@@ -89,6 +89,7 @@ class DateService:
         now=None,
         question=None,
         allow_crisis_drop=True,
+        channel_id=None,
     ):
         """Avanza un turno de la cita, comunica el resultado y cierra si toca.
 
@@ -152,7 +153,7 @@ class DateService:
         # Resumen de lo vivido (si hay LLM) antes de cerrar: `finish_date` lo
         # usa como texto del diario y cae al genérico si no existe.
         await self.finalize_date_summary(user.id, session, event, now=now)
-        self.finish_date(user.id, session, event, now=now)
+        self.finish_date(user.id, session, event, now=now, channel_id=channel_id)
         return event
 
     # ------------------------------------------------------------------
@@ -212,8 +213,14 @@ class DateService:
         )
         return applied
 
-    def finish_date(self, user_id, session, event, *, now):
-        """Cierra la cita: registra el resultado en el diario y la elimina."""
+    def finish_date(self, user_id, session, event, *, now, channel_id=None):
+        """Cierra la cita: registra el resultado en el diario y la elimina.
+
+        Si se indica `channel_id`, además deja la recapitulación de la cita en
+        el historial público del canal como evento pasado, para que el modelo
+        recuerde lo vivido tras el cierre (el historial privado de la cita se
+        descarta y no debe continuar la escena).
+        """
         uid = str(user_id)
         name = self.state.display_name(uid)
         scene = session.get("scene", "")
@@ -221,6 +228,11 @@ class DateService:
         # (sin LLM o fallo), se usa el texto genérico determinista.
         text = session.get("summary") or _finish_diary_text(event, name, scene)
         self.state.log_diary_event("date", user_id, text)
+        if channel_id is not None:
+            recap = f"(Cita pasada: {scene} — {text})"
+            history = list(self.state.histories.get(channel_id, []))
+            history.append({"role": "assistant", "content": recap})
+            self.state.histories[channel_id] = history
         session["state"] = "closed"
         self.state.dates.pop(uid, None)
         self.state.save_dates()

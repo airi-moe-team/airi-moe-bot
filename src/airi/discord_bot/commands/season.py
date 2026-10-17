@@ -1,11 +1,15 @@
 """Comando !reiniciar-temporada (solo OWNER_ID)."""
 
+from airi.discord_bot import embeds
+
 
 async def handle(ctx, message):
     state = ctx.state
     if ctx.owner_id and message.author.id != ctx.owner_id:
         await message.reply(
-            "Solo el dueño del canal puede reiniciar la temporada.",
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede reiniciar la temporada."
+            ),
             mention_author=False,
         )
         return
@@ -34,6 +38,8 @@ async def handle(ctx, message):
     state.diary.clear()
     state.save_diary()
     await message.channel.send(
-        "💞 Nueva temporada: el corazón de Airi vuelve a estar libre. "
-        "¡Que empiece la conquista!"
+        embed=embeds.system_embed(
+            "💞 Nueva temporada: el corazón de Airi vuelve a estar libre. "
+            "¡Que empiece la conquista!"
+        )
     )

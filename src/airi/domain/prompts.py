@@ -524,6 +524,36 @@ def date_context_section(session):
     return head
 
 
+def date_closed_context_section(diary, user_id, now):
+    """Marcador explícito de que la última cita ya terminó (evento pasado).
+
+    Se activa cuando la entrada más reciente del diario del usuario es un
+    cierre de cita (`kind="date"`, que solo se escribe en `finish_date`).
+    Dice al modelo que NO continúe la escena de cita y muestra el resumen de
+    lo vivido. Se desvanece sola cuando aparecen entradas de diario
+    posteriores. Devuelve cadena vacía si no aplica.
+    """
+    if user_id is None:
+        return ""
+    rows = diary_for_user(diary, user_id)
+    if not rows:
+        return ""
+    last = rows[-1]
+    if not isinstance(last, dict) or last.get("kind") != "date":
+        return ""
+    text = str(last.get("text", "") or "").strip()
+    when = format_relative_time(last.get("ts"), now)
+    return (
+        "\n\n=== CITA FINALIZADA ===\n"
+        "Tu última cita con esta persona YA TERMINÓ: es un EVENTO PASADO. "
+        "NO continúes la escena de cita ni uses "
+        f'"date_decision", "last_chance_result" ni "date_question"; '
+        'responde como conversación normal (fuera de cita, date_decision='
+        f'"continue"). Puedes recordar lo vivido con naturalidad.\n'
+        f"La cita terminó {when}. Resumen: {text}\n"
+    )
+
+
 def memories_prompt_section(entries):
     """Sección del prompt con los recuerdos duraderos del usuario."""
     if entries:

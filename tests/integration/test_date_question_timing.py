@@ -66,8 +66,10 @@ def test_no_question_when_too_little_time_left():
 
     assert session["question_pending"] is False
     assert channel.messages
-    assert channel.messages[-1]["content"] == DATE_QUESTION_MISSED_TEXT
-    assert all(message.get("embed") is None for message in channel.messages)
+    last = channel.messages[-1]
+    # La alerta de momento perdido es un mensaje del sistema: va en embed.
+    assert last["content"] is None
+    assert last["embed"].description == DATE_QUESTION_MISSED_TEXT
 
 
 def test_question_sent_normally_with_enough_time():

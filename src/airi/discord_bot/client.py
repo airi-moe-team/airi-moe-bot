@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import discord
 
-from airi.discord_bot import turn
+from airi.discord_bot import embeds, turn
 from airi.domain.constants import DATE_DELTA_MAX
 from airi.domain.texts import DATE_QUESTION_NUDGE_TEXT, DATE_SCENE_TIMEOUT_TEXT
 
@@ -82,16 +82,20 @@ def create_client(*, build_ctx, registry, channel_id):
             lambda ch_id, author_id: _reset_conversation(ctx, ch_id, author_id)
         )
 
-        if ctx.expire_stale_dates():
+        if await ctx.expire_stale_dates_summarizing(message.channel.id):
             await message.channel.send(
-                "🌙 «Vaya, se me ha ido el tiempo... la cita se queda aquí. "
-                "*se despide con la mano, algo apenada*»"
+                embed=embeds.system_embed(
+                    "🌙 «Vaya, se me ha ido el tiempo... la cita se queda aquí. "
+                    "*se despide con la mano, algo apenada*»"
+                )
             )
         ctx.expire_stale_questions()
 
         # Peticiones de escena caducadas (el jugador nunca escribió el plan).
         if str(message.author.id) in ctx.expire_scene_requests():
-            await message.channel.send(DATE_SCENE_TIMEOUT_TEXT)
+            await message.channel.send(
+                embed=embeds.system_embed(DATE_SCENE_TIMEOUT_TEXT)
+            )
 
         handler = registry.match(content)
         if handler is not None:
@@ -112,7 +116,9 @@ def create_client(*, build_ctx, registry, channel_id):
             and session.get("state") == "active"
             and session.get("question_pending")
         ):
-            await message.channel.send(DATE_QUESTION_NUDGE_TEXT)
+            await message.channel.send(
+                embed=embeds.system_embed(DATE_QUESTION_NUDGE_TEXT)
+            )
             return
 
         owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
@@ -258,7 +264,9 @@ def build_date_glue(state, *, llm_url, request_timeout):
         if notify_channel is not None:
             from airi.domain.texts import DATE_QUESTION_MISSED_TEXT
 
-            return notify_channel.send(DATE_QUESTION_MISSED_TEXT)
+            return notify_channel.send(
+                embed=embeds.system_embed(DATE_QUESTION_MISSED_TEXT)
+            )
         return None
 
     def expire_stale_questions(now=None):
@@ -402,11 +410,14 @@ def build_date_glue(state, *, llm_url, request_timeout):
             now=now,
             question=question,
             allow_crisis_drop=allow_crisis_drop,
+            channel_id=channel.id,
         )
 
-    def _finish_date(user_id, session, event, *, now):
+    def _finish_date(user_id, session, event, *, now, channel_id=None):
         """Cierra la cita: registra el resultado en el diario y la elimina."""
-        DateService(state=state).finish_date(user_id, session, event, now=now)
+        DateService(state=state).finish_date(
+            user_id, session, event, now=now, channel_id=channel_id
+        )
 
     def expire_stale_dates(now=None):
         """Cierra las citas que superaron su duración máxima.
@@ -427,6 +438,56 @@ def build_date_glue(state, *, llm_url, request_timeout):
                 ", ".join(expired),
             )
         return expired
+
+    async def expire_stale_dates_summarizing(channel_id, now=None):
+        """Como `expire_stale_dates`, pero con resumen rico del LLM (best-effort).
+
+        Variante async para usar en `on_message`: intenta generar el resumen de
+        lo vivido antes de cerrar; si el LLM falla, cae al texto genérico.
+        Devuelve la lista de uids cerrados.
+        """
+        if now is None:
+            now = time.time()
+        expired = [
+            (uid, session)
+            for uid, session in list(state.dates.items())
+            if date_expired(session, now)
+        ]
+        if not expired:
+            return []
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=request_timeout)
+            async with aiohttp.ClientSession(timeout=timeout) as http_session:
+
+                async def llm_chat(messages, *, max_tokens=None):
+                    return await request_llama(
+                        http_session,
+                        messages,
+                        schema=None,
+                        max_tokens=max_tokens,
+                        temperature=0.4,
+                    )
+
+                for uid, session in expired:
+                    try:
+                        await DateService(
+                            state=state, llm_chat=llm_chat
+                        ).finalize_date_summary(uid, session, "timeout", now=now)
+                    except Exception:
+                        log.exception("No se pudo resumir la cita caducada %s", uid)
+        except Exception:
+            log.warning(
+                "Sin resumen LLM para citas caducadas; se usa texto genérico."
+            )
+        for uid, session in expired:
+            _finish_date(uid, session, "timeout", now=now, channel_id=channel_id)
+        log.info(
+            "Citas caducadas por tiempo: %s (evento=timeout)",
+            ", ".join(uid for uid, _ in expired),
+        )
+        return [uid for uid, _ in expired]
 
     def busy_date_owner(exclude_id=None):
         """Devuelve (uid, session) de la cita activa de OTRO usuario.
@@ -472,7 +533,9 @@ def build_date_glue(state, *, llm_url, request_timeout):
         owner_id, session = busy_date_owner(exclude_id=uid)
         if owner_id is None:
             return
-        await channel.send(date_busy_text(owner_id, session, now))
+        await channel.send(
+            embed=embeds.system_embed(date_busy_text(owner_id, session, now))
+        )
 
     def add_diary_reflection(
         user_id, text, now=None, min_interval=DIARY_REFLECTION_MIN_INTERVAL
@@ -533,6 +596,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         notify_busy=notify_busy,
         date_busy_text=date_busy_text,
         expire_stale_dates=expire_stale_dates,
+        expire_stale_dates_summarizing=expire_stale_dates_summarizing,
         add_diary_reflection=add_diary_reflection,
         affinity_footer_text=affinity_footer_text,
     )
@@ -745,6 +809,7 @@ def run_bot(argv=None):
             notify_busy=glue.notify_busy,
             date_busy_text=glue.date_busy_text,
             expire_stale_dates=glue.expire_stale_dates,
+            expire_stale_dates_summarizing=glue.expire_stale_dates_summarizing,
             affinity_footer=lambda user: glue.affinity_footer_text(
                 user.id, user.display_name
             ),
@@ -805,7 +870,9 @@ def run_bot(argv=None):
             apply_winner_lock(world_data, affinity_data)
             save_world()
             save_affinity()
-            await channel.send(confession_text(user_display_name(winner)))
+            await channel.send(
+                embed=embeds.system_embed(confession_text(user_display_name(winner)))
+            )
             state.log_diary_event(
                 "confession",
                 winner,

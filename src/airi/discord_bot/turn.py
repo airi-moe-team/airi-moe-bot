@@ -52,15 +52,25 @@ def sanitize_scene(scene, limit=DATE_SCENE_TEXT_MAX):
     return text[:limit].strip()
 
 
-async def send_long_message(channel, content):
-    """Envía un texto largo troceado en bloques de 2000 caracteres."""
+async def send_long_message(channel, content, *, reference=None):
+    """Envía un texto del modelo troceado en bloques de 2000 caracteres.
+
+    Es la vía de las respuestas genuinas del LLM: van en texto plano (como un
+    mensaje normal de Discord), nunca dentro de un embed. El primer bloque se
+    enhebra bajo `reference` para que quede como una respuesta.
+    """
     content = clean_reply(content) or (
         "Ehhh... no he conseguido preparar una respuesta esta vez."
     )
+    first = True
     while content:
         chunk = content[:2000]
         content = content[2000:]
-        await channel.send(chunk)
+        if first and reference is not None:
+            await channel.send(chunk, reference=reference, mention_author=False)
+        else:
+            await channel.send(chunk)
+        first = False
 
 
 async def send_gif_bytes(ctx, channel, user, gif_type, data):
@@ -108,7 +118,12 @@ async def run_user_turn(
         allow_crisis_drop = not reaction
 
     async def _reply(text):
-        await channel.send(text, reference=reply_target, mention_author=False)
+        # Mensajes de sistema del turno (errores, ausencia de respuesta): embed.
+        await channel.send(
+            embed=embeds.system_embed(text),
+            reference=reply_target,
+            mention_author=False,
+        )
 
     async with ctx.lock:
         state = ctx.state
@@ -156,20 +171,10 @@ async def run_user_turn(
                 date_session = state.dates.get(str(uid))
                 in_date = result.in_date and isinstance(date_session, dict)
 
-                if in_date:
-                    embed = date_views.build_date_embed(
-                        answer,
-                        scene=date_session.get("scene"),
-                        state=date_session.get("state", "active"),
-                        turns_left=date_turns_left(date_session),
-                        seconds_left=date_seconds_left(date_session, now),
-                    )
-                    try:
-                        await channel.send(embed=embed)
-                    except discord.HTTPException:
-                        await send_long_message(channel, answer)
-                else:
-                    await send_long_message(channel, answer)
+                # Respuesta del modelo: SIEMPRE texto plano (como un mensaje
+                # normal de Discord), nunca dentro de un embed. Así se separan
+                # las respuestas originales del modelo de los avisos del sistema.
+                await send_long_message(channel, answer, reference=reply_target)
                 await send_gif_bytes(ctx, channel, author, result.gif, result.gif_bytes)
 
                 await ctx.settle_relationship(channel, now, session=session, user=author)
@@ -212,6 +217,17 @@ async def run_user_turn(
                             date_session.get("question_invalid")
                         )
                         await state.traces.update(result.trace)
+                    # Embed de estado en CADA turno de cita. La respuesta del
+                    # modelo va en texto plano; aquí se muestra la fase, los
+                    # turnos y el tiempo restantes tras avanzar el turno.
+                    await channel.send(
+                        embed=date_views.date_status_embed(
+                            date_session.get("scene"),
+                            state=date_session.get("state", "active"),
+                            turns_left=date_turns_left(date_session),
+                            seconds_left=date_seconds_left(date_session, now),
+                        )
+                    )
                     if (
                         date_event
                         in (
@@ -274,7 +290,9 @@ async def _send_question(ctx, channel, uid, date_session, *, now):
     if remaining < DATE_QUESTION_MIN_SECONDS:
         if not date_session.get("question_forced"):
             ctx.expire_question(uid)
-            await channel.send(DATE_QUESTION_MISSED_TEXT)
+            await channel.send(
+                embed=embeds.system_embed(DATE_QUESTION_MISSED_TEXT)
+            )
             return
         missing = DATE_QUESTION_MIN_SECONDS - remaining + DATE_QUESTION_TIME_MARGIN
         date_session["started_at"] = float(date_session.get("started_at", now)) + missing
@@ -304,19 +322,23 @@ async def start_date_with_scene(ctx, channel, user, scene):
     state = ctx.state
     owner_id, owner_session = ctx.busy_date_owner(exclude_id=uid)
     if owner_id is not None:
-        await channel.send(ctx.date_busy_text(owner_id, owner_session))
+        await channel.send(embed=embeds.system_embed(ctx.date_busy_text(owner_id, owner_session)))
         return False
     if str(uid) in state.dates:
         await channel.send(
-            "¡Ya estáis en una cita! *se ríe* concéntrate en el momento~"
+            embed=embeds.system_embed(
+                "¡Ya estáis en una cita! *se ríe* concéntrate en el momento~"
+            )
         )
         return False
     entry = state.affinity_entry(uid)
     points = entry_points(entry)
     if not can_date(points):
         await channel.send(
-            "Ehh... *se rasca la mejilla* todavía no te conozco lo suficiente "
-            "para una cita. Llega a ser mi **amiga** y te diré que sí, ¿vale?"
+            embed=embeds.system_embed(
+                "Ehh... *se rasca la mejilla* todavía no te conozco lo suficiente "
+                "para una cita. Llega a ser mi **amiga** y te diré que sí, ¿vale?"
+            )
         )
         return False
     scene = sanitize_scene(scene)
@@ -327,8 +349,10 @@ async def start_date_with_scene(ctx, channel, user, scene):
     if now - last_date < DATE_COOLDOWN:
         remaining = int((DATE_COOLDOWN - (now - last_date)) // 3600)
         await channel.send(
-            f"Airi ya ha salido contigo hace poco... dale un respiro "
-            f"(en ~{remaining} h)."
+            embed=embeds.system_embed(
+                f"Airi ya ha salido contigo hace poco... dale un respiro "
+                f"(en ~{remaining} h)."
+            )
         )
         return False
     async with turn_event(
@@ -342,7 +366,7 @@ async def start_date_with_scene(ctx, channel, user, scene):
         entry["last_date"] = now
         state.save_affinity()
         state.save_dates()
-        await channel.send(date_intro(scene))
+        await channel.send(embed=embeds.system_embed(date_intro(scene)))
     return True
 
 
@@ -362,18 +386,22 @@ async def handle_question_answer(ctx, interaction, option_index):
         or not session.get("question_pending")
     ):
         await interaction.followup.send(
-            "Esa pregunta ya no está esperando respuesta~", ephemeral=True
+            embed=embeds.system_embed("Esa pregunta ya no está esperando respuesta~"),
+            ephemeral=True,
         )
         return
     now = time.time()
     if date_expired(session, now):
         ctx.expire_stale_dates(now)
-        await interaction.followup.send("Esa cita ya ha terminado~", ephemeral=True)
+        await interaction.followup.send(
+            embed=embeds.system_embed("Esa cita ya ha terminado~"), ephemeral=True
+        )
         return
     result = ctx.resolve_question(session, option_index)
     if result is None:
         await interaction.followup.send(
-            "Esa opción ya no está disponible~", ephemeral=True
+            embed=embeds.system_embed("Esa opción ya no está disponible~"),
+            ephemeral=True,
         )
         return
     ctx.apply_question_result(session, result, user_id=user.id, now=now)

@@ -11,6 +11,7 @@ Los botones se reservan para la ÚNICA pregunta decisiva de la cita.
 
 import discord
 
+from airi.discord_bot import embeds
 from airi.domain.constants import DATE_QUESTION_OPTIONS
 
 DISCORD_LABEL_MAX = 80
@@ -40,26 +41,21 @@ def remaining_time_text(seconds_left):
     return f"~{(seconds + 59) // 60} min"
 
 
-def build_date_embed(
-    reply,
-    *,
-    title=None,
-    scene=None,
-    state="active",
-    turns_left=None,
-    seconds_left=None,
-    gif_url=None,
+def date_status_embed(
+    scene, *, state="active", turns_left=None, seconds_left=None
 ):
-    """Embed que enmarca un turno de cita: respuesta de Airi + estado."""
-    embed = discord.Embed(description=reply or "…", color=DATE_EMBED_COLOR)
-    if title:
-        embed.title = title
-    elif scene:
+    """Embed compacto de estado de la cita, SIN la respuesta (transiciones).
+
+    Se emite junto a la respuesta del LLM (que va en texto plano) solo cuando
+    la cita cambia de fase: última oportunidad o cierre.
+    """
+    embed = discord.Embed(color=DATE_EMBED_COLOR)
+    if scene:
         embed.title = f"🌹 Cita · {scene}"
     footer = []
     if state == "last_chance":
         footer.append("Última oportunidad")
-    elif state == "closed":
+    elif state in ("final_scene", "closed"):
         footer.append("Cita finalizada")
     if turns_left is not None:
         footer.append(f"Turnos restantes: {turns_left}")
@@ -68,8 +64,6 @@ def build_date_embed(
         footer.append(f"⏳ {time_text}")
     if footer:
         embed.set_footer(text=" · ".join(footer))
-    if gif_url:
-        embed.set_image(url=gif_url)
     return embed
 
 
@@ -117,7 +111,9 @@ class _OwnerView(discord.ui.View):
         if interaction.user.id != self.owner_id:
             owner_mention = f"<@{self.owner_id}>"
             await interaction.response.send_message(
-                f"Esa cita no es contigo, es de {owner_mention}~",
+                embed=embeds.system_embed(
+                    f"Esa cita no es contigo, es de {owner_mention}~"
+                ),
                 ephemeral=True,
             )
             return

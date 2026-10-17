@@ -69,6 +69,7 @@ class BotContext:
     notify_busy: Callable[..., Any] = _anoop
     date_busy_text: Callable[..., Any] = _noop
     expire_stale_dates: Callable[..., Any] = _noop
+    expire_stale_dates_summarizing: Callable[..., Any] = _anoop
     expire_scene_requests: Callable[..., Any] = _expire_list
     expire_stale_questions: Callable[..., Any] = _expire_list
     handle_question_answer: Callable[..., Any] = _anoop

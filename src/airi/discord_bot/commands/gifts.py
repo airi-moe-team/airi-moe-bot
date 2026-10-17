@@ -4,6 +4,7 @@ import time
 
 import aiohttp
 
+from airi.discord_bot import embeds
 from airi.domain.constants import CONFESS_THRESHOLD, GIFT_COOLDOWN, MAX_RECENT_GIFTS
 from airi.domain.gifts import GIFTS, gift_effect
 from airi.domain.texts import gift_reaction
@@ -16,13 +17,16 @@ async def handle(ctx, message):
     opciones = ", ".join(sorted(GIFTS))
     if len(parts) == 1:
         await message.reply(
-            f"¿Qué me regalas? Opciones: {opciones}.", mention_author=False
+            embed=embeds.system_embed(f"¿Qué me regalas? Opciones: {opciones}."),
+            mention_author=False,
         )
         return
     item = parts[1].strip().lower()
     if item not in GIFTS:
         await message.reply(
-            f"No conozco ese regalo... Prueba con: {opciones}.",
+            embed=embeds.system_embed(
+                f"No conozco ese regalo... Prueba con: {opciones}."
+            ),
             mention_author=False,
         )
         return
@@ -38,8 +42,10 @@ async def handle(ctx, message):
     last_gift = float(entry.get("last_gift", 0.0) or 0.0)
     if now - last_gift < GIFT_COOLDOWN:
         await message.reply(
-            "Airi ya ha recibido un regalo tuyo hoy... guarda el siguiente "
-            "para mañana~",
+            embed=embeds.system_embed(
+                "Airi ya ha recibido un regalo tuyo hoy... guarda el siguiente "
+                "para mañana~"
+            ),
             mention_author=False,
         )
         return

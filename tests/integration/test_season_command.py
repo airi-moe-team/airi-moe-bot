@@ -18,6 +18,8 @@ class FakeChannel:
         self.sent = []
 
     async def send(self, content=None, **kwargs):
+        if content is None and kwargs.get("embed") is not None:
+            content = kwargs["embed"].description
         self.sent.append(content)
 
 
@@ -28,6 +30,8 @@ class FakeMessage:
         self.replies = []
 
     async def reply(self, content=None, **kwargs):
+        if content is None and kwargs.get("embed") is not None:
+            content = kwargs["embed"].description
         self.replies.append(content)
 
 

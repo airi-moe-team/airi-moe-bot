@@ -465,6 +465,9 @@ class ConversationService:
                 display_name=user.display_name,
             ),
             domain_prompts.diary_prompt_section(state.diary, user.id, now),
+            domain_prompts.date_closed_context_section(
+                state.diary, user.id, now
+            ),
         ]
         if extra_note:
             sections.append(f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n")

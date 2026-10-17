@@ -24,7 +24,9 @@ async def handle_olvidar(ctx, message):
     parts = message.content.strip().split(maxsplit=1)
     if len(parts) == 1:
         await message.reply(
-            "¿Olvidar qué? Escribe `!olvidar <número>` o `!olvidar todo`.",
+            embed=embeds.system_embed(
+                "¿Olvidar qué? Escribe `!olvidar <número>` o `!olvidar todo`."
+            ),
             mention_author=False,
         )
         return
@@ -36,23 +38,29 @@ async def handle_olvidar(ctx, message):
         if removed:
             state.save_diary()
         await message.reply(
-            "Listo... ¡olvidado todo! (memorias y diario) Empezamos de cero~",
+            embed=embeds.system_embed(
+                "Listo... ¡olvidado todo! (memorias y diario) Empezamos de cero~"
+            ),
             mention_author=False,
         )
         return
     entries = state.user_memories(uid)
     if not entries:
         await message.reply(
-            "No tengo memorias sobre ti todavía.", mention_author=False
+            embed=embeds.system_embed("No tengo memorias sobre ti todavía."),
+            mention_author=False,
         )
         return
     if arg.isdigit() and domain_memories.forget_memory(state.memories, uid, int(arg)):
         state.save_memories()
         await message.reply(
-            f"Olvidado: memoria #{arg}. Ya no la recuerdo~", mention_author=False
+            embed=embeds.system_embed(f"Olvidado: memoria #{arg}. Ya no la recuerdo~"),
+            mention_author=False,
         )
         return
     await message.reply(
-        f"Número no válido. Usa `!memorias` para ver la lista (1-{len(entries)}).",
+        embed=embeds.system_embed(
+            f"Número no válido. Usa `!memorias` para ver la lista (1-{len(entries)})."
+        ),
         mention_author=False,
     )

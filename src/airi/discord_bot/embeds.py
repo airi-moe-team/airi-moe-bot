@@ -11,7 +11,28 @@ from airi.domain.constants import DATE_MAX_SECONDS
 
 GIF_EMBED_COLOR = discord.Color(0xFFB6D9)
 
+# Color propio y constante para los mensajes del sistema (no generados por el
+# LLM). Permite distinguir de un vistazo "el bot avisa" vs "habla Airi".
+SYSTEM_EMBED_COLOR = discord.Color(0x5865F2)
+
 DATE_HELP_MINUTES_PLACEHOLDER = "{DATE_MINUTES}"
+
+
+def system_embed(description, *, title=None, footer=None):
+    """Embed genérico para mensajes del sistema (deterministas, no del LLM).
+
+    Presenta avisos, guardas de comandos y eventos de cita con el color de
+    sistema, para separarlos visualmente de las respuestas del modelo (que van
+    en texto plano). Puro: datos → embed.
+    """
+    embed = discord.Embed(
+        title=title,
+        description=description or "…",
+        color=SYSTEM_EMBED_COLOR,
+    )
+    if footer:
+        embed.set_footer(text=footer)
+    return embed
 
 
 def date_max_minutes():
@@ -67,7 +88,11 @@ HELP_TEXT = (
 
     "**💡 Trucos**\n"
     "Descubre sus gustos (flor y comida favoritas) y acierta con los regalos. "
-    "Las citas suben la afinidad mucho más rápido."
+    "Las citas suben la afinidad mucho más rápido.\n"
+    "• `!yo` — quién es Airi ahora\n"
+    "• `!yo historia` — historial de cambios de identidad\n"
+    "• `!yo revertir <n>` — revertir un cambio de identidad\n"
+    "• `!descubrir` — forzar reflexión introspectiva (solo dueño)"
 )
 
 

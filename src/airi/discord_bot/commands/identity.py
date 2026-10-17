@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from airi.discord_bot import embeds
 from airi.domain.self_model import (
     render_self_narrative,
     revert_self_update,
@@ -42,21 +43,23 @@ async def handle_yo(ctx, message):
     state = ctx.state
     model = state.self_model()
     text = render_self_narrative(model)
-    await message.channel.send(text)
+    await message.channel.send(embed=embeds.system_embed(text))
 
 
 async def handle_yo_historia(ctx, message):
     """Muestra el historial de cambios (`!yo historia`)."""
     state = ctx.state
     model = state.self_model()
-    await message.channel.send(render_self_history(model))
+    await message.channel.send(embed=embeds.system_embed(render_self_history(model)))
 
 
 async def handle_yo_revertir(ctx, message):
     """Revierte un cambio del historial (`!yo revertir <n>`). Solo dueño."""
     if ctx.owner_id and message.author.id != ctx.owner_id:
         await message.reply(
-            "Solo el dueño del canal puede revertir cambios de identidad.",
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede revertir cambios de identidad."
+            ),
             mention_author=False,
         )
         return
@@ -65,22 +68,37 @@ async def handle_yo_revertir(ctx, message):
     try:
         index = int(idx_token)
     except ValueError:
-        await message.reply("El número debe ser entero.", mention_author=False)
+        await message.reply(
+            embed=embeds.system_embed("El número debe ser entero."),
+            mention_author=False,
+        )
         return
     state = ctx.state
     entry = revert_self_update(state.self_model(), index, now=time.time())
     if not entry:
-        await message.reply("No encontré ese cambio o no se puede revertir.", mention_author=False)
+        await message.reply(
+            embed=embeds.system_embed(
+                "No encontré ese cambio o no se puede revertir."
+            ),
+            mention_author=False,
+        )
         return
     state.save_world()
-    await message.reply(f"Revertido cambio nº {index}: {entry['key']} → {entry['from']}.", mention_author=False)
+    await message.reply(
+        embed=embeds.system_embed(
+            f"Revertido cambio nº {index}: {entry['key']} → {entry['from']}."
+        ),
+        mention_author=False,
+    )
 
 
 async def handle_descubrir(ctx, message):
     """Fuerza una reflexión introspectiva (`!descubrir`). Solo dueño."""
     if ctx.owner_id and message.author.id != ctx.owner_id:
         await message.reply(
-            "Solo el dueño del canal puede forzar el autodescubrimiento.",
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede forzar el autodescubrimiento."
+            ),
             mention_author=False,
         )
         return
@@ -96,4 +114,7 @@ async def handle_descubrir(ctx, message):
             await service.reflect(message.author.id, now=time.time(), force=True)
     except Exception:
         pass
-    await message.reply("Airi ha hecho una pausa para mirarse por dentro...", mention_author=False)
+    await message.reply(
+        embed=embeds.system_embed("Airi ha hecho una pausa para mirarse por dentro..."),
+        mention_author=False,
+    )

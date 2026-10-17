@@ -9,7 +9,9 @@ async def handle(ctx, message):
     rows = ranking(state.affinity, state.users, state.world.get("winner_id"))
     if not rows:
         await message.channel.send(
-            "Todavía no hay pretendientes... ¿te atreves a ser el primero?"
+            embed=embeds.system_embed(
+                "Todavía no hay pretendientes... ¿te atreves a ser el primero?"
+            )
         )
         return
     winner = state.world.get("winner_id")
