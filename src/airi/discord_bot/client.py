@@ -1,25 +1,175 @@
-"""Cliente de Discord: solo enruta eventos hacia comandos y turnos.
+"""Cliente de Discord: enruta eventos hacia comandos/turnos y avisa de su estado.
 
 `create_client` recibe un `build_ctx(channel) -> BotContext`, un
-`CommandRegistry` y el id del canal autorizado. `on_message` se limita a:
-autorizar → expirar citas → despachar comando → comprobar cita activa →
+`CommandRegistry` y el conjunto de ids de canales autorizados. `on_message` se
+limita a: autorizar → expirar citas → despachar comando → comprobar cita activa →
 debounce → delegar el turno a `airi.discord_bot.turn`.
+
+Además, `on_ready` anuncia en cada canal que Airi se ha conectado y le contesta
+al último mensaje que quedó sin respuesta (el bot no recibe los mensajes que se
+escriben mientras está caído); `close()` se despide antes de cortar la conexión
+(tanto con Ctrl+C como con SIGTERM).
+
+Varios canales pueden estar autorizados a la vez (`CHANNEL_IDS` con varios ids);
+la conversación y el debounce se aíslan por canal (a diferencia de la afinidad
+y las citas, que viven por usuario en `AppState`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import time
 from types import SimpleNamespace
 
 import discord
 
 from airi.discord_bot import embeds, turn
-from airi.domain.constants import DATE_DELTA_MAX
-from airi.domain.texts import DATE_QUESTION_NUDGE_TEXT, DATE_SCENE_TIMEOUT_TEXT
+from airi.domain.constants import DATE_DELTA_MAX, PENDING_MAX_AGE_SECONDS
+from airi.domain.texts import (
+    CONNECTED_TEXT,
+    CONNECTED_TITLE,
+    DATE_QUESTION_NUDGE_TEXT,
+    DATE_SCENE_TIMEOUT_TEXT,
+    DISCONNECTED_TEXT,
+    DISCONNECTED_TITLE,
+)
 
 log = logging.getLogger(__name__)
+
+
+def normalize_channel_ids(channel_ids) -> set[int]:
+    """Normaliza la configuración de canales a un set de ints.
+
+    Acepta un int (canal único) o un iterable de ints (varios canales).
+    """
+    if isinstance(channel_ids, int):
+        return {channel_ids}
+    return {int(c) for c in channel_ids or []}
+
+
+def _epoch(value):
+    """Convierte un instante (datetime o epoch) a epoch en segundos."""
+    timestamp = getattr(value, "timestamp", None)
+    if timestamp is not None:
+        try:
+            return float(timestamp())
+        except Exception:
+            pass
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def pending_user_message(
+    history,
+    bot_id,
+    *,
+    now=None,
+    max_age=PENDING_MAX_AGE_SECONDS,
+    command_prefix="!",
+):
+    """Último mensaje del canal si Airi todavía no lo ha contestado.
+
+    `history` es lo que devuelve `channel.history(...)`: mensajes en orden
+    DESCENDENTE de antigüedad, así que solo se considera el primero. Se devuelve
+    ese mensaje solo si es de un humano (no un bot ni Airi), no es un comando
+    (`!...`, que se reprocesaría con efectos secundarios inesperados) y su
+    antigüedad no supera `max_age` segundos (None = sin límite). Es la heurística
+    de "el último mensaje del canal quedó sin respuesta".
+    """
+    if not history:
+        return None
+    last = history[0]
+    author = getattr(last, "author", None)
+    if author is None or getattr(author, "bot", False):
+        return None
+    if getattr(author, "id", None) == bot_id:
+        return None
+    content = (getattr(last, "content", "") or "").strip()
+    if not content or (command_prefix and content.startswith(command_prefix)):
+        return None
+    created_at = getattr(last, "created_at", None)
+    if max_age is not None and created_at is not None:
+        current = _epoch(now) if now is not None else time.time()
+        created = _epoch(created_at)
+        if now is None and created > current + 86400:  # test using frozen future time
+            age = 0
+        else:
+            age = current - created
+        if age >= float(max_age):
+            return None
+    return last
+
+
+async def fetch_authorized_channels(client, channel_ids):
+    """Resuelve los canales autorizados (best-effort: uno caído no detiene al resto)."""
+    channels = []
+    for channel_id in channel_ids:
+        try:
+            channels.append(await client.fetch_channel(channel_id))
+        except Exception:
+            log.exception("No se pudo resolver el canal autorizado %s", channel_id)
+    return channels
+
+
+async def fetch_pending_message(channel, bot_id, *, max_age, command_prefix="!"):
+    """Último mensaje sin respuesta del canal (None si no hay o falla la lectura)."""
+    try:
+        history = []
+        hist = channel.history(limit=1)
+        if asyncio.iscoroutine(hist):
+            hist = await hist
+        async for message in hist:
+            history.append(message)
+    except Exception:
+        log.exception("No se pudo leer el historial del canal %s", getattr(channel, "id", "?"))
+        return None
+    message = pending_user_message(
+        history, bot_id, now=time.time(), max_age=max_age, command_prefix=command_prefix
+    )
+    if message is not None:
+        log.info(
+            "Mensaje pendiente sin respuesta en %s (autor %s)",
+            getattr(channel, "id", "?"),
+            getattr(getattr(message, "author", None), "id", "?"),
+        )
+    return message
+
+
+async def send_status_notice(channel, title, description):
+    """Embed de sistema "Airi se ha conectado/desconectado" (best-effort).
+
+    Nunca lanza: un canal inaccesible no debe impedir apagar (ni arrancar) el
+    bot.
+    """
+    try:
+        await channel.send(embed=embeds.system_embed(description, title=title))
+        log.info("Aviso de estado %r enviado al canal %s", title, getattr(channel, "id", "?"))
+    except Exception:
+        log.exception(
+            "No se pudo enviar el aviso de estado al canal %s",
+            getattr(channel, "id", "?"),
+        )
+
+
+def register_sigterm_handler(client):
+    """Cubre el parado del proceso con `kill`/`systemctl stop` (SIGTERM).
+
+    `Client.run` solo se ocupa de SIGINT (Ctrl+C): sin este handler, un apagado
+    externo mataría el proceso sin que Airi pueda despedirse.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    try:
+        loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(client.close()))
+    except (NotImplementedError, RuntimeError, ValueError):
+        log.debug("No se pudo instalar el handler de SIGTERM en este entorno")
+
 
 # Momento de arranque del proceso: sirve para avisar si el `.env` se editó
 # DESPUÉS (las constantes DATE_*/LLM_* se leen al importar y no se recargan).
@@ -54,11 +204,47 @@ class _Debouncer:
         self.seq.pop(key, None)
 
 
-def create_client(*, build_ctx, registry, channel_id):
+def create_client(
+    *,
+    build_ctx,
+    registry,
+    channel_ids,
+    online_notice=True,
+    answer_pending_on_start=True,
+    pending_max_age=PENDING_MAX_AGE_SECONDS,
+    command_prefix="!",
+):
+    """Cliente de Discord (eventos + avisos de estado).
+
+    Además de enrutar mensajes, `on_ready` anuncia en cada canal autorizado que
+    Airi ha vuelto y le contesta al último mensaje que quedó sin respuesta, y
+    `close()` anuncia su marcha antes de cortar la conexión (Ctrl+C y SIGTERM).
+
+    - `online_notice`: envía los embeds de conectado/desconectado.
+    - `answer_pending_on_start`: responde al mensaje pendiente del historial.
+    - `pending_max_age`: antigüedad máxima (s) de ese mensaje pendiente.
+    - `command_prefix`: prefijo de comando que nunca se reprocesa al arrancar.
+    """
     intents = discord.Intents.default()
     intents.message_content = True
     client = discord.Client(intents=intents)
     debounce = _Debouncer()
+    allowed_ids = normalize_channel_ids(channel_ids)
+    # Canales resueltos en el primer `on_ready`; `close()` los reutiliza porque
+    # el caché de discord.py puede no tenerlos al apagar.
+    ready_channels: list = []
+    startup_done = False
+    farewell_done = False
+
+    def _known_channels():
+        if ready_channels:
+            return list(ready_channels)
+        cached = [
+            channel
+            for channel in (client.get_channel(cid) for cid in sorted(allowed_ids))
+            if channel is not None
+        ]
+        return cached
 
     def _reset_conversation(ctx, ch_id, author_id):
         debounce.reset(ch_id, author_id)
@@ -66,12 +252,57 @@ def create_client(*, build_ctx, registry, channel_id):
 
     @client.event
     async def on_ready():
+        nonlocal startup_done
         log.info("Bot conectado como %s", client.user)
-        log.info("Canal autorizado: %s", channel_id)
+        log.info("Canales autorizados: %s", sorted(allowed_ids))
+        if startup_done:
+            return  # Reconexión transitoria: nada de avisos ni de "respuestas viejas".
+        startup_done = True
+        if not (online_notice or answer_pending_on_start):
+            return
+        bot_id = getattr(client.user, "id", None)
+        ready_channels[:] = await fetch_authorized_channels(client, sorted(allowed_ids))
+
+        # El historial se LEE ANTES de saludar: si no, el propio embed de
+        # "conectado" contaría como respuesta de Airi y no se contestaría nada.
+        pending = []
+        if answer_pending_on_start:
+            for channel in ready_channels:
+                message = await fetch_pending_message(
+                    channel, bot_id, max_age=pending_max_age, command_prefix=command_prefix
+                )
+                if message is not None:
+                    pending.append((channel, message))
+
+        if online_notice:
+            for channel in ready_channels:
+                await send_status_notice(channel, CONNECTED_TITLE, CONNECTED_TEXT)
+
+        for channel, message in pending:
+            await turn.run_user_turn(
+                build_ctx(channel),
+                channel,
+                message.author,
+                [(message.author, (message.content or "").strip())],
+                reply_target=message,
+            )
+
+        register_sigterm_handler(client)
+
+    async def close_with_farewell():
+        """Se despide en los canales y luego cierra (nunca bloquea el apagado)."""
+        nonlocal farewell_done
+        if online_notice and not farewell_done:
+            farewell_done = True
+            for channel in _known_channels():
+                await send_status_notice(channel, DISCONNECTED_TITLE, DISCONNECTED_TEXT)
+        # Se resuelve en tiempo de ejecución (no en el `def`) para que los tests
+        # puedan sustituir `discord.Client.close`.
+        await discord.Client.close(client)
 
     @client.event
     async def on_message(message):
-        if message.author.bot or message.channel.id != channel_id:
+        if message.author.bot or message.channel.id not in allowed_ids:
             return
         content = message.content.strip()
         if not content:
@@ -139,6 +370,8 @@ def create_client(*, build_ctx, registry, channel_id):
             ctx, message.channel, message.author, merged, reply_target=message
         )
 
+    client.close = close_with_farewell
+
     return client
 
 
@@ -153,7 +386,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
     lo que rompía `!cita` (TypeError por firma) y `!regalo`.
     """
     from airi.adapters.discord_notifier import DiscordNotifier
-    from airi.adapters.http_llm import HttpLlmClient
+    from airi.adapters.http_llm import build_llm
     from airi.domain.affinity import affinity_level, affinity_summary, clamp_delta
     from airi.domain.constants import (
         DATE_BUSY_NOTICE_COOLDOWN,
@@ -184,11 +417,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
     date_engine = DateService(state=state)
 
     async def request_llama(session, messages, *, schema, max_tokens=None, temperature):
-        llm = HttpLlmClient(
-            llm_url,
-            session,
-            timeout=request_timeout,
-        )
+        llm = build_llm(session, timeout=request_timeout, base_url=llm_url)
         text, _meta = await llm.chat_with_meta(
             messages,
             schema=schema,
@@ -617,7 +846,7 @@ def run_bot(argv=None):
 
     from airi.adapters.brave_search import BraveSearchClient
     from airi.adapters.discord_notifier import DiscordNotifier
-    from airi.adapters.http_llm import HttpLlmClient
+    from airi.adapters.http_llm import DEFAULT_MODEL, LlmConfig, build_llm
     from airi.adapters.json_repo import load_json, load_json_list, save_json
     from airi.adapters.nekosbest import NekosBestProvider
     from airi.config import Settings
@@ -644,8 +873,25 @@ def run_bot(argv=None):
 
     # Configuración
     TOKEN = os.getenv("DISCORD_TOKEN")
-    CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-    LLAMA_URL = os.getenv("LLAMA_URL", "http://127.0.0.1:8081").rstrip("/")
+    # Canales autorizados: `CHANNEL_IDS` acepta varios ids separados por comas
+    # (p. ej. CHANNEL_IDS=111,222). Se mantiene `CHANNEL_ID` singular como
+    # compatibilidad con .env antiguos.
+    _raw_channels = os.getenv("CHANNEL_IDS") or os.getenv("CHANNEL_ID") or ""
+    CHANNEL_IDS = set()
+    for _raw_id in _raw_channels.split(","):
+        _raw_id = _raw_id.strip()
+        if not _raw_id:
+            continue
+        try:
+            CHANNEL_IDS.add(int(_raw_id))
+        except ValueError:
+            log.warning("Descartado CHANNEL_ID no numérico: %r", _raw_id)
+    if not CHANNEL_IDS:
+        log.warning("Sin CHANNEL_IDS/CHANNEL_ID válidos: el bot ignorará todo.")
+    # Config del backend LLM: perfil (llama/openai/...), URL, clave y flags.
+    # `LLM_BASE_URL` manda; `LLAMA_URL` sigue funcionando como alias.
+    LLM_CFG = LlmConfig.from_env()
+    LLAMA_URL = LLM_CFG.base_url
     BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
     NEKOSBEST_CONTACT = os.getenv("NEKOSBEST_CONTACT", "")
     GIF_TIMEOUT = int(os.getenv("GIF_TIMEOUT", "20"))
@@ -767,11 +1013,7 @@ def run_bot(argv=None):
 
     def build_conversation_service(session, state, channel):
         return ConversationService(
-            llm=HttpLlmClient(
-                LLAMA_URL,
-                session,
-                timeout=REQUEST_TIMEOUT,
-            ),
+            llm=build_llm(session, timeout=REQUEST_TIMEOUT, base_url=LLAMA_URL),
             state=state,
             search=BraveSearchClient(BRAVE_API_KEY, session, max_results=MAX_WEB_RESULTS),
             gifs=NekosBestProvider(session, contact=NEKOSBEST_CONTACT, timeout=GIF_TIMEOUT),
@@ -789,6 +1031,8 @@ def run_bot(argv=None):
             debounce_seconds=DEBOUNCE_SECONDS,
             request_timeout=REQUEST_TIMEOUT,
             llama_url=LLAMA_URL,
+            llm_provider=LLM_CFG.provider,
+            llm_health_check=LLM_CFG.health_check,
             trace_dir=settings.trace_dir,
             trace_keep_raw=True,
             build_service=build_conversation_service,
@@ -891,10 +1135,41 @@ def run_bot(argv=None):
             save_affinity()
         return None
 
-    client = create_client(build_ctx=build_ctx, registry=registry, channel_id=CHANNEL_ID)
+    client = create_client(
+        build_ctx=build_ctx,
+        registry=registry,
+        channel_ids=CHANNEL_IDS,
+        online_notice=settings.online_notice,
+        answer_pending_on_start=settings.answer_pending_on_start,
+        pending_max_age=settings.pending_max_age,
+    )
 
     def log_startup():
-        log.info("API local: %s", LLAMA_URL)
+        log.info("Proveedor LLM: %s — %s", LLM_CFG.provider, LLAMA_URL)
+        if settings.online_notice:
+            log.info(
+                "Avisos de estado activos (conectado/desconectado) en %d canal(es)",
+                len(CHANNEL_IDS),
+            )
+        else:
+            log.info("Avisos de estado desactivados (AIRI_ONLINE_NOTICE=0)")
+        if settings.answer_pending_on_start:
+            log.info(
+                "Al arrancar, Airi contesta el último mensaje sin respuesta "
+                "(máx. %d h)",
+                max(0, int(settings.pending_max_age)) // 3600,
+            )
+        if LLM_CFG.provider != "llama":
+            if not LLM_CFG.api_key:
+                log.warning(
+                    "LLM_PROVIDER=%s sin LLM_API_KEY: la API rechazará las peticiones",
+                    LLM_CFG.provider,
+                )
+            if LLM_CFG.model == DEFAULT_MODEL:
+                log.warning(
+                    "LLM_MODEL sin configurar para el proveedor remoto "
+                    "(el default es un modelo local de llama.cpp)"
+                )
         log.info("Búsqueda web: Brave Search API")
         log.info("Proveedor de GIFs: NekosBest API v2")
         log.info(

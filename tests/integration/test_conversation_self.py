@@ -3,7 +3,11 @@
 import asyncio
 
 from airi.domain.self_model import default_self
-from airi.services.conversation import ConversationService, TurnContext
+from airi.services.conversation import (
+    SELF_CHANGED_NOTICE,
+    ConversationService,
+    TurnContext,
+)
 from airi.testing import FakeLLM, FakeNotifier, FakeUser, llm_json, make_state
 
 NOW = 1_000_000.0
@@ -97,3 +101,32 @@ def test_turn_world_snapshot_is_deep_copied():
     # El snapshot debe reflejar el estado ANTES del turno (replay fiel).
     assert result.trace.state_snapshot_world["self"]["traits"]["curiosa"] == 3
     assert state.world["self"]["traits"]["curiosa"] == 4
+
+
+def test_turn_self_change_sends_identity_notice():
+    """El cambio de identidad avisa en el canal como embed de sistema."""
+    state, _ = make_state()
+    notifier = FakeNotifier()
+    llm = FakeLLM(replies=[llm_json("me has sorprendido", self_update=IDENTITY_UPDATE)])
+    svc = ConversationService(
+        llm=llm, state=state, notifier=notifier, clock=lambda: NOW, date_delta_max=5
+    )
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "te cuento algo")], TurnContext()))
+
+    assert result.self_changed is True
+    assert SELF_CHANGED_NOTICE in notifier.sent
+
+
+def test_turn_without_self_change_does_not_notify_identity():
+    state, _ = make_state()
+    notifier = FakeNotifier()
+    llm = FakeLLM(replies=[llm_json("hola")])
+    svc = ConversationService(
+        llm=llm, state=state, notifier=notifier, clock=lambda: NOW, date_delta_max=5
+    )
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert result.self_changed is False
+    assert notifier.sent == []

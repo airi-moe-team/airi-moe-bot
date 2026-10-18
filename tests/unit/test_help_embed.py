@@ -28,3 +28,13 @@ def test_help_embed_is_dynamic_with_env(monkeypatch):
     embed = build_help_embed()
 
     assert "(máx. ~10 min)" in embed.description
+
+
+def test_help_embed_uses_identidad_airi_command():
+    embed = build_help_embed()
+
+    assert "`!identidad-airi`" in embed.description
+    assert "`!identidad-airi historia`" in embed.description
+    assert "`!identidad-airi revertir <n>`" in embed.description
+    # Los subcomandos viejos con `!yo` ya no se anuncian.
+    assert "`!yo historia`" not in embed.description

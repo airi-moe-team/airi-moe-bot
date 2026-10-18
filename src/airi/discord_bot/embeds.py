@@ -89,9 +89,9 @@ HELP_TEXT = (
     "**💡 Trucos**\n"
     "Descubre sus gustos (flor y comida favoritas) y acierta con los regalos. "
     "Las citas suben la afinidad mucho más rápido.\n"
-    "• `!yo` — quién es Airi ahora\n"
-    "• `!yo historia` — historial de cambios de identidad\n"
-    "• `!yo revertir <n>` — revertir un cambio de identidad\n"
+    "• `!identidad-airi` — quién es Airi ahora (alias `!yo`)\n"
+    "• `!identidad-airi historia` — historial de cambios de identidad\n"
+    "• `!identidad-airi revertir <n>` — revertir un cambio de identidad\n"
     "• `!descubrir` — forzar reflexión introspectiva (solo dueño)"
 )
 

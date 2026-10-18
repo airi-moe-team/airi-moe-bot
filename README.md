@@ -1,4 +1,4 @@
-# Airi — Discord bot con LLM local (arquitectura hexagonal)
+# Airi — Discord bot con LLM (llama.cpp local o APIs compatible con OpenAI)
 
 ## Estructura
 
@@ -27,8 +27,9 @@
 │   │   └── web.py                     # detección de mensajes que piden búsqueda web
 │   ├── ports/                         # Protocol (LLMClient, WebSearchClient, GifProvider,
 │   │                               # Notifier, Repository)
-│   ├── adapters/                      # http_llm (llama.cpp), brave_search, nekosbest,
-│   │                               # json_repo + JSONRepository, discord_notifier
+│   ├── adapters/                      # http_llm (Chat Completions: llama.cpp/OpenAI/
+│   │                               # compatibles, perfiles LLM_PROVIDER), brave_search,
+│   │                               # nekosbest, json_repo + JSONRepository, discord_notifier
 │   ├── services/                      # Orquestación (solo usan ports)
 │   │   ├── state.py                   # AppState: datos + callbacks de persistencia
 │   │   ├── conversation.py            # ConversationService.run_turn(...) → TurnResult
@@ -101,7 +102,7 @@
 ```bash
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"    # deps + entry points (airi, airi-trace, airi-replay) + pytest
-cp .env.example .env                 # y rellena DISCORD_TOKEN y CHANNEL_ID
+cp .env.example .env                 # y rellena DISCORD_TOKEN y CHANNEL_IDS
 ```
 
 Las dependencias (`discord.py`, `aiohttp`, `python-dotenv`) se declaran en `pyproject.toml`;
@@ -114,14 +115,14 @@ el extra `dev` añade `pytest`. Sin el `pip install` no existen los entry points
 .venv/bin/python -m pytest tests/
 ```
 
-Estado actual: **338 tests** en 4 carpetas (unit, integration, regression, tools).
+Estado actual: **409 tests** en 4 carpetas (unit, integration, regression, tools).
 
 ## Ejecutar el bot
 
 El bot se ejecuta como aplicación instalable (ver Instalación):
 
 ```bash
-.venv/bin/airi run               # inicia el bot (necesita .env con DISCORD_TOKEN y CHANNEL_ID)
+.venv/bin/airi run               # inicia el bot (necesita .env con DISCORD_TOKEN y CHANNEL_IDS)
 ```
 
 Alternativamente, si no quieres instalar el paquete:
@@ -132,11 +133,59 @@ PYTHONPATH=src .venv/bin/python -m airi run
 
 Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `DISCORD_TOKEN`: token del bot de Discord
-- `CHANNEL_ID`: ID del canal autorizado
-- `LLAMA_URL`: URL del servidor llama.cpp (default: http://127.0.0.1:8081)
+- `CHANNEL_IDS`: ID de los canales autorizados — varios ids separados por
+  comas (p. ej. `CHANNEL_IDS=111,222`). `CHANNEL_ID` singular sigue funcionando
+- `LLM_BASE_URL`: URL del backend LLM — raíz de llama.cpp local o raíz (con o
+  sin `/v1`) de una API compatible con Chat Completions (default:
+  http://127.0.0.1:8081). `LLAMA_URL` sigue funcionando como alias
+- `LLM_PROVIDER`: perfil de compatibilidad — `llama` (default), `openai` o
+  `openai-compatible` (ver «Proveedores LLM» más abajo)
+- `LLM_API_KEY`: clave API para perfiles remotos (alias: `OPENAI_API_KEY`)
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
+
+### Proveedores LLM
+
+Un único cliente HTTP (`airi.adapters.http_llm.HttpLlmClient`, construido por
+`build_llm()`) habla el formato Chat Completions con todos los proveedores;
+las diferencias de compatibilidad viven en el perfil `LLM_PROVIDER`, no en
+clases distintas, así que **los servicios del bot no cambian**.
+
+**Opción A — llama.cpp local (default):**
+
+```bash
+LLM_PROVIDER=llama
+LLM_BASE_URL=http://127.0.0.1:8081
+LLM_API_KEY=
+LLM_MODEL=Qwen3.6-35B-A3B-MTP-UD-IQ3_S
+```
+
+**Opción B — API de OpenAI:**
+
+```bash
+LLM_PROVIDER=openai
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=tu-api-key
+LLM_MODEL=gpt-4o-mini   # sustitúyelo por un modelo disponible en tu cuenta
+```
+
+**Otros compatibles** (OpenRouter, Groq, vLLM, LM Studio...) usan
+`LLM_PROVIDER=openai-compatible` con su `LLM_BASE_URL` y `LLM_API_KEY`.
+
+Comportamiento por perfil:
+
+| | `llama` | `openai` | `openai-compatible` |
+|---|---|---|---|
+| Auth | opcional | `Bearer` (obligatorio) | opcional |
+| Campo de salida | `max_tokens` | `max_completion_tokens` | `max_tokens` |
+| `chat_template_kwargs` (desactivar thinking) | ✅ | ❌ | ❌ |
+| Health check por turno | `GET /health` (raíz; fallo = turno abortado) | `GET /v1/models` (fallo = warning, turno continúa) | ídem, desactivable con `LLM_HEALTH_CHECK=0` |
+
+Flags adicionales (ver `.env.example`): `LLM_MAX_TOKENS_FIELD` (anula el
+campo de salida del perfil), `LLM_SKIP_TEMPERATURE=1` (modelos razonadores
+que rechazan `temperature`), `LLM_RESPONSE_FORMAT=0` (proveedores sin
+`response_format`) y `LLM_HEALTH_CHECK=0` (sin pre-chequeo).
 
 Notas de arranque:
 

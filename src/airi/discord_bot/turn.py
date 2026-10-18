@@ -17,6 +17,7 @@ from io import BytesIO
 import aiohttp
 import discord
 
+from airi.adapters.http_llm import health_check
 from airi.discord_bot import embeds
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import can_date, entry_points
@@ -135,11 +136,14 @@ async def run_user_turn(
                 merged_text = "\n".join(part for _, part in merged)
 
                 async with channel.typing():
-                    async with session.get(
-                        f"{ctx.llama_url}/health",
-                        timeout=aiohttp.ClientTimeout(total=5),
-                    ) as health:
-                        health.raise_for_status()
+                    # Salud por perfil: `/health` (raíz) en llama; `/v1/models`
+                    # en APIs remotas, cuyo fallo no bloquea el turno.
+                    await health_check(
+                        session,
+                        provider=ctx.llm_provider,
+                        base_url=ctx.llama_url,
+                        enabled=ctx.llm_health_check,
+                    )
 
                     cid = uuid.uuid4().hex[:12]
                     result = await service.run_turn(

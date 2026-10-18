@@ -61,7 +61,7 @@ class _FakeSession:
         self._exc = exc
         self.payloads = []
 
-    def post(self, url, json=None, timeout=None):  # noqa: A002 - firma aiohttp
+    def post(self, url, json=None, timeout=None, headers=None):  # noqa: A002
         self.payloads.append(json)
         if self._exc is not None:
             raise self._exc

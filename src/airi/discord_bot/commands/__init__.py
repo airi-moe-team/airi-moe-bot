@@ -34,7 +34,10 @@ def build_registry() -> CommandRegistry:
     registry.exact("!cita")(command(dates.handle))
     registry.exact("!reiniciar-temporada", "!reiniciar_temporada")(command(season.handle))
     registry.exact("!reset")(command(reset.handle))
-    registry.exact("!yo")(command(identity.handle_yo))
+    # `!identidad-airi` (alias `!yo`): la historia y el revertir van por
+    # prefijos concretos para que el mensaje SOLO `!identidad-airi` caiga en
+    # el exacto (handle_yo) y no en el de historia.
+    registry.exact("!identidad-airi", "!yo")(command(identity.handle_yo))
     registry.exact("!descubrir")(command(identity.handle_descubrir))
 
     registry.prefix("!regalo")(traced("gift")(gifts.handle))
@@ -42,8 +45,8 @@ def build_registry() -> CommandRegistry:
     registry.prefix("!olvidar")(command(memories.handle_olvidar))
     registry.prefix("!diario")(command(diary.handle))
     registry.prefix("!usuarios")(command(users.handle))
-    registry.prefix("!yo")(command(identity.handle_yo_historia))
-    registry.prefix("!yo revertir")(command(identity.handle_yo_revertir))
+    registry.prefix("!identidad-airi historia", "!yo historia")(command(identity.handle_yo_historia))
+    registry.prefix("!identidad-airi revertir", "!yo revertir")(command(identity.handle_yo_revertir))
     # !debug NO se instrumenta: inspecciona el ring y no debe ensuciarlo
     # (si no, `!debug clear` nunca dejaría el ring vacío).
     registry.prefix("!debug")(debug.handle)

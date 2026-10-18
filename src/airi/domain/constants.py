@@ -22,6 +22,28 @@ def env_int(name, default):
         return default
 
 
+#: Valores aceptados por `env_flag` (case-insensitive).
+ENV_TRUE_VALUES = ("1", "true", "yes", "on")
+ENV_FALSE_VALUES = ("0", "false", "no", "off")
+
+
+def env_flag(name, default):
+    """Lee un booleano del entorno (`1/0`, `true/false`, `on/off`...).
+
+    Si falta o no es válido (se avisa con `warnings.warn`), devuelve `default`.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    low = raw.strip().lower()
+    if low in ENV_TRUE_VALUES:
+        return True
+    if low in ENV_FALSE_VALUES:
+        return False
+    warnings.warn(f"{name}={raw!r} no es un booleano válido; se usa {default}.")
+    return default
+
+
 def env_float(name, default):
     """Lee un float del entorno; si falta o no es válido, devuelve `default`."""
     raw = os.getenv(name)
@@ -65,6 +87,10 @@ DATE_MAX_TURNS = env_int("DATE_MAX_TURNS", 6)  # Turnos máximos de una cita.
 DATE_COOLDOWN = env_int("DATE_COOLDOWN", 6 * 3600)  # Enfriamiento entre citas.
 DATE_DELTA_MAX = env_int("DATE_DELTA_MAX", 8)  # Citas: emociones ampliadas.
 DATE_BUSY_NOTICE_COOLDOWN = env_int("DATE_BUSY_NOTICE_COOLDOWN", 30)  # Anti-spam.
+
+# Avisos de estado del bot (conectado/desconectado). Antigüedad máxima de ese
+# mensaje pendiente que Airi contesta al arranque (ver AIRI_PENDING_MAX_AGE).
+PENDING_MAX_AGE_SECONDS = 24 * 3600
 
 # Escena inicial: ya no se proponen planes con botones; el jugador escribe
 # libremente a dónde quiere llevar la cita.

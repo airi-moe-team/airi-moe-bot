@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from airi.domain.constants import (
     SELF_REFLECTION_EVERY_N,
@@ -15,6 +16,24 @@ from airi.domain.text_filters import clean_reply
 from airi.services.state import AppState
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ReflectionOutcome:
+    """Resultado real de una reflexión introspectiva.
+
+    Permite que el llamante (p. ej. `!descubrir`) cuente en el canal qué ha
+    pasado de verdad: si la reflexión se omitió, si ha habido un
+    autodescubrimiento y/o si se ha reescrito un trozo de la identidad.
+    """
+
+    ran: bool = False  # False → omitida (cooldown o LLM caído)
+    discovery: str | None = None
+    self_entry: dict | None = None
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.discovery or self.self_entry)
 
 
 class SelfService:
@@ -38,14 +57,18 @@ class SelfService:
         self.max_tokens = max_tokens
 
     async def reflect(self, user_id, *, now=None, trigger="interaction", force=False):
-        """Ejecuta una reflexión introspectiva. Best-effort, devuelve True si ocurrió algo."""
+        """Ejecuta una reflexión introspectiva. Best-effort.
+
+        Devuelve un `ReflectionOutcome` con el resultado real (si corrió, qué
+        descubrió y qué cambió); `ran=False` si se omitió.
+        """
         now = self._now(now)
         interactions = int((self.state.users.get(str(user_id)) or {}).get("interactions", 0) or 0)
         model = self.state.self_model()
         if not self.state.should_reflect_self(
             interactions=interactions, now=now, force=force
         ):
-            return False
+            return ReflectionOutcome()
         user_name = self.state.display_name(user_id)
         diary = list(self.state.diary)
         system = (
@@ -95,7 +118,7 @@ class SelfService:
                     )
             except Exception:
                 log.info("Reflexión introspectiva no disponible (%s)", trigger)
-                return False
+                return ReflectionOutcome()
         output = parse_model_output(raw, delta_max=100)  # delta_max no aplica
         _ = output
         parsed = parse_model_output(raw).self_update  # get raw? easier: parse
@@ -103,14 +126,15 @@ class SelfService:
         from airi.domain.llm_output import extract_json_object
 
         jd = extract_json_object(raw) if isinstance(raw, str) else None
-        changed = False
+        discovery = None
+        self_entry = None
         if isinstance(jd, dict):
             disc = jd.get("discovery")
             if isinstance(disc, str) and disc.strip().lower() not in ("", "none", "ninguno"):
                 disc = clean_reply(disc).strip()[:300]
                 if disc:
                     if self.state.add_self_discovery(disc, now=now, source="reflection"):
-                        changed = True
+                        discovery = disc
                         self.state.log_diary_event(
                             "discovery",
                             user_id,
@@ -119,13 +143,11 @@ class SelfService:
                         )
             su = jd.get("self_update")
             if su:
-                entry = self.state.apply_self_change(
+                self_entry = self.state.apply_self_change(
                     su, now=now, user_id=user_id, source="reflection"
                 )
-                if entry is not None:
-                    changed = True
         self.state.mark_self_reflection(now=now)
-        return changed
+        return ReflectionOutcome(ran=True, discovery=discovery, self_entry=self_entry)
 
     def _now(self, now):
         if now is not None:

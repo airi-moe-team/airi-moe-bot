@@ -1,8 +1,11 @@
 """Tests de `airi.adapters.http_llm.HttpLlmClient`."""
 
 import asyncio
+import json
+import logging
 from unittest.mock import MagicMock
 
+import aiohttp
 import pytest
 
 from airi.adapters.http_llm import DEFAULT_MAX_OUTPUT_TOKENS, HttpLlmClient
@@ -15,7 +18,21 @@ from airi.adapters.http_llm import DEFAULT_MAX_OUTPUT_TOKENS, HttpLlmClient
 @pytest.fixture(autouse=True)
 def _clear_llm_env(monkeypatch):
     """Elimina variables LLM del entorno para cada test."""
-    for key in ("LLM_MODEL", "LLM_TIMEOUT", "LLM_TEMPERATURE", "LLM_MAX_TOKENS"):
+    for key in (
+        "LLM_MODEL",
+        "LLM_TIMEOUT",
+        "LLM_TEMPERATURE",
+        "LLM_MAX_TOKENS",
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "LLAMA_URL",
+        "LLM_API_KEY",
+        "OPENAI_API_KEY",
+        "LLM_MAX_TOKENS_FIELD",
+        "LLM_SKIP_TEMPERATURE",
+        "LLM_RESPONSE_FORMAT",
+        "LLM_HEALTH_CHECK",
+    ):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -223,11 +240,15 @@ def _make_async_session():
         async def __aexit__(self, *exc_info):
             return False
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, timeout=None, headers=None):
         session._captured = json
+        session._captured_url = url
+        session._captured_headers = headers
         return _PostCtx()
 
     session.post = fake_post
+    session._captured_url = None
+    session._captured_headers = None
     return session
 
 
@@ -325,3 +346,240 @@ def test_payload_llm_max_tokens_zero_is_no_output(monkeypatch):
     )
     payload = session._captured
     assert payload["max_tokens"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Autenticación (APIs remotas) y normalización de URL
+# ---------------------------------------------------------------------------
+
+
+def test_post_sends_bearer_header_when_api_key():
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="http://localhost:8080",
+        session=session,
+        api_key="sk-test-123",
+    )
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}], temperature=0.5))
+    assert session._captured_headers == {"Authorization": "Bearer sk-test-123"}
+
+
+def test_post_omits_headers_without_api_key():
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}], temperature=0.5))
+    assert session._captured_headers is None
+
+
+def test_post_url_appends_v1_when_base_has_none():
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
+    assert session._captured_url == "http://localhost:8080/v1/chat/completions"
+
+
+def test_post_url_does_not_duplicate_v1():
+    """Bases que ya incluyen `/v1` (OpenAI, OpenRouter...) no la duplican."""
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="https://api.openai.com/v1/", session=session, api_key="sk-x"
+    )
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
+    assert session._captured_url == "https://api.openai.com/v1/chat/completions"
+
+
+# ---------------------------------------------------------------------------
+# Perfiles de proveedor: diferencias de payload
+# ---------------------------------------------------------------------------
+
+
+def _chat(client, **kwargs):
+    return run(client.chat_with_meta([{"role": "user", "content": "hi"}], **kwargs))
+
+
+def test_profile_llama_sends_chat_template_kwargs(monkeypatch):
+    """Perfil `llama`: `disable_thinking` se traduce a chat_template_kwargs."""
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, temperature=0.5, disable_thinking=True)
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_profile_openai_omits_chat_template_kwargs(monkeypatch):
+    """Fuera del perfil `llama` no se envía el campo propietario de llama.cpp."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
+    _chat(client, temperature=0.5, disable_thinking=True)
+    assert "chat_template_kwargs" not in session._captured
+
+
+def test_profile_openai_compatible_omits_chat_template_kwargs(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.groq.com/openai/v1", session=session)
+    _chat(client, disable_thinking=True)
+    assert "chat_template_kwargs" not in session._captured
+
+
+def test_profile_llama_uses_max_tokens_field(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, temperature=0.5)
+    assert session._captured["max_tokens"] == client.max_output_tokens
+    assert "max_completion_tokens" not in session._captured
+
+
+def test_profile_openai_uses_max_completion_tokens(monkeypatch):
+    """Perfil `openai`: default del campo de salida `max_completion_tokens`."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
+    _chat(client, temperature=0.5)
+    assert session._captured["max_completion_tokens"] == client.max_output_tokens
+    assert "max_tokens" not in session._captured
+
+
+def test_profile_openai_compatible_uses_max_tokens(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://openrouter.ai/api/v1", session=session)
+    _chat(client, temperature=0.5)
+    assert session._captured["max_tokens"] == client.max_output_tokens
+    assert "max_completion_tokens" not in session._captured
+
+
+def test_max_tokens_field_env_overrides_profile_default(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MAX_TOKENS_FIELD", "max_tokens")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
+    _chat(client, temperature=0.5)
+    assert session._captured["max_tokens"] == client.max_output_tokens
+    assert "max_completion_tokens" not in session._captured
+
+
+def test_skip_temperature_omits_field_entirely(monkeypatch):
+    """LLM_SKIP_TEMPERATURE=1 → ni el default ni el explícito se envían."""
+    monkeypatch.setenv("LLM_SKIP_TEMPERATURE", "1")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
+    _chat(client, temperature=0.9)
+    assert "temperature" not in session._captured
+
+
+def test_temperature_sent_by_default(monkeypatch):
+    monkeypatch.setenv("LLM_SKIP_TEMPERATURE", "0")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, temperature=0.9)
+    assert session._captured["temperature"] == 0.9
+
+
+def test_response_format_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("LLM_RESPONSE_FORMAT", "0")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, temperature=0.5, schema={"type": "object"}, strict_schema=True)
+    assert "response_format" not in session._captured
+
+
+def test_response_format_strict_json_schema(monkeypatch):
+    """El perfil `openai` admite `json_schema` estricto (igual que llama.cpp)."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
+    _chat(
+        client,
+        temperature=0.5,
+        schema={"type": "object", "properties": {}},
+        strict_schema=True,
+    )
+    rf = session._captured["response_format"]
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["strict"] is True
+
+
+# ---------------------------------------------------------------------------
+# Errores HTTP: código + mensaje útil del proveedor, sin secretos
+# ---------------------------------------------------------------------------
+
+
+def _make_error_session(status, body_text):
+    """Sesión cuya respuesta devuelve `status` y lanza en `raise_for_status`."""
+    session = MagicMock()
+
+    class _ErrResp:
+        def __init__(self):
+            self.status = status
+
+        async def text(self):
+            return body_text
+
+        async def json(self):
+            return {}
+
+        def raise_for_status(self):
+            raise aiohttp.ClientResponseError(
+                request_info=MagicMock(),
+                history=(),
+                status=status,
+                message="error",
+            )
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _ErrResp()
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    session.post = lambda url, json=None, timeout=None, headers=None: _Ctx()
+    return session
+
+
+def test_post_error_logs_status_and_provider_message(caplog):
+    body = json.dumps(
+        {
+            "error": {
+                "message": "Invalid API key provided",
+                "type": "invalid_request_error",
+            }
+        }
+    )
+    session = _make_error_session(401, body)
+    client = HttpLlmClient(
+        base_url="https://api.openai.com/v1", session=session, api_key="sk-secret-xyz"
+    )
+    with caplog.at_level(logging.ERROR, logger="airi.adapters.http_llm"):
+        with pytest.raises(aiohttp.ClientResponseError):
+            run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
+    assert "HTTP 401" in caplog.text
+    assert "Invalid API key provided" in caplog.text
+
+
+def test_post_error_never_logs_api_key(caplog):
+    """Aunque la clave aparezca en el cuerpo (caso patológico), se sanea."""
+    body = json.dumps({"error": {"message": "bad key sk-secret-xyz rejected"}})
+    session = _make_error_session(403, body)
+    client = HttpLlmClient(
+        base_url="https://api.openai.com/v1", session=session, api_key="sk-secret-xyz"
+    )
+    with caplog.at_level(logging.ERROR, logger="airi.adapters.http_llm"):
+        with pytest.raises(aiohttp.ClientResponseError):
+            run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
+    assert "sk-secret-xyz" not in caplog.text
+    assert "***" in caplog.text
+
+
+def test_post_error_truncates_long_bodies(caplog):
+    session = _make_error_session(500, "x" * 5000)
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    with caplog.at_level(logging.ERROR, logger="airi.adapters.http_llm"):
+        with pytest.raises(aiohttp.ClientResponseError):
+            run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
+    lines = [record.getMessage() for record in caplog.records]
+    assert lines, "no se registró ningún error"
+    assert all(len(line) < 600 for line in lines)

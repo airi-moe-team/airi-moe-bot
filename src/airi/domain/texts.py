@@ -37,6 +37,24 @@ def end_keyword_hit(text, keywords=DATE_END_KEYWORDS):
             return keyword
     return None
 
+# ---------------------------------------------------------------------------
+# Avisos de estado del bot (embeds de sistema en cada canal autorizado)
+# ---------------------------------------------------------------------------
+
+CONNECTED_TITLE = "🟢 Airi se ha conectado"
+DISCONNECTED_TITLE = "🔴 Airi se ha desconectado"
+
+CONNECTED_TEXT = (
+    "*Airi entra al canal, se estira y saluda con la mano.*\n"
+    "«¡Ya estoy aquí~! ¿Me habíais echado de menos?»"
+)
+
+DISCONNECTED_TEXT = (
+    "*Airi se levanta, recoge sus cosas y se despide con una sonrisa.*\n"
+    "«Me voy un momento... ¡vuelvo pronto! No os vais a portar mal mientras "
+    "no estoy, ¿verdad?~»"
+)
+
 def confession_text(name):
     return (
         f"*Airi respira hondo, con las mejillas encendidas, y te mira "

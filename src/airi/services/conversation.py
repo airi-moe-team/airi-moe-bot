@@ -71,6 +71,12 @@ GROUNDED_FALLBACK_TEXT = (
 
 MEMORY_SAVED_NOTICE = "Airi recordará este evento"
 
+# Aviso (embed de sistema) cuando Airi reescribe un trozo de su identidad.
+SELF_CHANGED_NOTICE = (
+    "Airi acaba de cambiar algo de sí misma — escribe `!identidad-airi` "
+    "para ver quién es ahora"
+)
+
 
 @dataclass
 class TurnContext:
@@ -346,6 +352,11 @@ class ConversationService:
                         self_entry["key"], self_entry["op"],
                         self_entry["from"], self_entry["to"], self_entry["reason"],
                     )
+                    if self.notifier is not None:
+                        try:
+                            await self.notifier.send(SELF_CHANGED_NOTICE)
+                        except Exception:
+                            log.warning("No se pudo enviar el aviso de cambio de identidad")
                 else:
                     log.info(
                         "Cambio de identidad rechazado: %s", output.self_update

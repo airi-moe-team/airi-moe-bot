@@ -1,0 +1,34 @@
+[
+  {
+    "ts": 1792203005.7440138,
+    "kind": "meet",
+    "user_id": "1049911733013200896",
+    "user_name": "Zaico Kusanagi",
+    "text": "Hoy he conocido a Zaico Kusanagi por primera vez.",
+    "season": 5
+  },
+  {
+    "ts": 1792213311.7963774,
+    "kind": "meet",
+    "user_id": "1235050859990351945",
+    "user_name": "Francisco",
+    "text": "Hoy he conocido a Francisco por primera vez.",
+    "season": 5
+  },
+  {
+    "ts": 1792216608.108334,
+    "kind": "gift",
+    "user_id": "563232759292624932",
+    "user_name": "KOKODA",
+    "text": "KOKODA me ha regalado rosas. Regaló rosas sin contexto romántico genuino, lo que Airi interpreta como un gesto genérico y repetitivo que le disgusta. Reacciona con sarcasmo y burla, considerándolo un intento fallido de cortejar.",
+    "season": 5
+  },
+  {
+    "ts": 1792312271.296104,
+    "kind": "meet",
+    "user_id": "1543433499036487750",
+    "user_name": "Desk_angel11",
+    "text": "Hoy he conocido a Desk_angel11 por primera vez.",
+    "season": 5
+  }
+]

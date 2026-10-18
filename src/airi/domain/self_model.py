@@ -588,7 +588,7 @@ def render_self_section(model):
 
 
 def render_self_narrative(model):
-    """Resumen narrativo del "yo" para el comando público `!yo`."""
+    """Resumen narrativo del "yo" para el comando público `!identidad-airi`."""
     normalize_self(model)
     lines = []
     lines.append(
@@ -619,7 +619,7 @@ def render_self_narrative(model):
 
 
 def render_self_history(model):
-    """Lista del historial de cambios (para `!yo historia`)."""
+    """Lista del historial de cambios (para `!identidad-airi historia`)."""
     normalize_self(model)
     lines = []
     for i, entry in enumerate(model.get("history") or [], start=1):

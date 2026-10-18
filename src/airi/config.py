@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from airi.domain.constants import env_int
+from airi.domain.constants import PENDING_MAX_AGE_SECONDS, env_flag, env_int
 
 DEFAULT_TRACE_KEEP_LAST = 500
 
@@ -38,6 +38,13 @@ class Settings:
     trace_dir: str = ""
     # Tamaño del ring buffer en memoria (eventos inspeccionables con !debug).
     trace_keep_last: int = DEFAULT_TRACE_KEEP_LAST
+    # Avisos de estado: anuncia en los canales autorizados que Airi se conecta
+    # y se desconecta (embeds de sistema).
+    online_notice: bool = True
+    # Al arrancar, Airi contesta el último mensaje que quedó sin respuesta.
+    answer_pending_on_start: bool = True
+    # Antigüedad máxima (segundos) de ese mensaje pendiente.
+    pending_max_age: int = PENDING_MAX_AGE_SECONDS
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -49,4 +56,7 @@ class Settings:
                 "AIRI_TRACE_KEEP_LAST",
                 env_int("TRACE_KEEP_LAST", DEFAULT_TRACE_KEEP_LAST),
             ),
+            online_notice=env_flag("AIRI_ONLINE_NOTICE", True),
+            answer_pending_on_start=env_flag("AIRI_ANSWER_PENDING_ON_START", True),
+            pending_max_age=env_int("AIRI_PENDING_MAX_AGE", PENDING_MAX_AGE_SECONDS),
         )
