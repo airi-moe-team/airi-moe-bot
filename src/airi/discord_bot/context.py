@@ -39,6 +39,9 @@ class BotContext:
     debounce_seconds: float = 2.5
     request_timeout: int = 300
     llama_url: str = "http://127.0.0.1:8081"
+    # Perfil y política de health check del backend configurado.
+    llm_provider: str = "llama"
+    llm_health_check: bool = True
     # Observabilidad (Fase 5): si `trace_dir` está definido, cada turno se
     # guarda en `TRACE_DIR/YYYY-MM-DD/<cid>.json`.
     trace_dir: str = ""

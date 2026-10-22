@@ -6,7 +6,6 @@ import time
 
 import aiohttp
 
-from airi.adapters.http_llm import HttpLlmClient
 from airi.discord_bot import embeds
 from airi.domain.self_model import (
     render_self_history,
@@ -73,10 +72,10 @@ async def handle_descubrir(ctx, message):
     try:
         timeout = aiohttp.ClientTimeout(total=ctx.request_timeout)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            llm = HttpLlmClient(
-                ctx.llama_url,
-                session,
-                timeout=ctx.request_timeout,
+            from airi.adapters.http_llm import build_llm
+
+            llm = build_llm(
+                session, timeout=ctx.request_timeout, base_url=ctx.llama_url
             )
             service = SelfService(
                 llm=llm,
