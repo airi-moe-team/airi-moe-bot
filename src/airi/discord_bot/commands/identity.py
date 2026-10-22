@@ -75,7 +75,7 @@ async def handle_descubrir(ctx, message):
             from airi.adapters.http_llm import build_llm
 
             llm = build_llm(
-                session, timeout=ctx.request_timeout, base_url=ctx.llama_url
+                session, timeout=ctx.request_timeout, base_url=ctx.llm_base_url
             )
             service = SelfService(
                 llm=llm,

@@ -128,7 +128,7 @@ async def run_user_turn(
                 await health_check(
                     session,
                     provider=getattr(ctx, "llm_provider", "llama"),
-                    base_url=ctx.llama_url,
+                    base_url=ctx.llm_base_url,
                     enabled=getattr(ctx, "llm_health_check", True),
                 )
 

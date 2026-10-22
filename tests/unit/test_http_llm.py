@@ -25,7 +25,6 @@ def _clear_llm_env(monkeypatch):
         "LLM_MAX_TOKENS",
         "LLM_PROVIDER",
         "LLM_BASE_URL",
-        "LLAMA_URL",
         "LLM_API_KEY",
         "OPENAI_API_KEY",
         "LLM_MAX_TOKENS_FIELD",

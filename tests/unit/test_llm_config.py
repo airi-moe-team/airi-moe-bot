@@ -1,7 +1,7 @@
 """Tests de `LlmConfig`, `build_llm` y las utilidades de URL del adaptador LLM.
 
 Cubre la configuración por variables de entorno (perfil `llama` por defecto,
-alias históricos `LLAMA_URL`/`OPENAI_API_KEY`) y la fábrica única que usan los
+alias histórico `OPENAI_API_KEY`) y la fábrica única que usan los
 tres puntos de construcción del cliente en el bot.
 """
 
@@ -28,7 +28,6 @@ from airi.adapters.http_llm import (
 ENV_KEYS = (
     "LLM_PROVIDER",
     "LLM_BASE_URL",
-    "LLAMA_URL",
     "LLM_API_KEY",
     "OPENAI_API_KEY",
     "LLM_MODEL",
@@ -100,15 +99,9 @@ def test_config_invalid_provider_falls_back_to_llama(monkeypatch, caplog):
     assert cfg.provider == "llama"
 
 
-def test_config_base_url_env_wins_over_llama_url(monkeypatch):
+def test_config_base_url_from_env(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    monkeypatch.setenv("LLAMA_URL", "http://legacy:8081")
     assert LlmConfig.from_env().base_url == "https://api.openai.com/v1"
-
-
-def test_config_base_url_falls_back_to_llama_url(monkeypatch):
-    monkeypatch.setenv("LLAMA_URL", "http://legacy:8081")
-    assert LlmConfig.from_env().base_url == "http://legacy:8081"
 
 
 def test_config_api_key_from_env(monkeypatch):

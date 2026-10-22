@@ -111,7 +111,7 @@ def _ctx(provider="llama", health_enabled=True, service=None):
         state=state,
         lock=asyncio.Lock(),
         request_timeout=5,
-        llama_url="http://backend:8081",
+        llm_base_url="http://backend:7000",
         llm_provider=provider,
         llm_health_check=health_enabled,
         build_service=lambda session, state_, channel: service,
@@ -144,7 +144,7 @@ def _fake_session(monkeypatch):
 def test_llama_turn_pings_root_health(monkeypatch):
     ctx, service = _ctx(provider="llama")
     _run_turn(monkeypatch, ctx)
-    assert _FakeClientSession.instances[0].get_calls == ["http://backend:8081/health"]
+    assert _FakeClientSession.instances[0].get_calls == ["http://backend:7000/health"]
     assert service.called is True
 
 
@@ -164,7 +164,7 @@ def test_openai_turn_pings_v1_models(monkeypatch):
     ctx, service = _ctx(provider="openai")
     _run_turn(monkeypatch, ctx)
     assert _FakeClientSession.instances[0].get_calls == [
-        "http://backend:8081/v1/models"
+        "http://backend:7000/v1/models"
     ]
     assert service.called is True
 

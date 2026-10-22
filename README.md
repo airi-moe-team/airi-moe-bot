@@ -123,7 +123,8 @@ PYTHONPATH=src .venv/bin/python -m airi run
 Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `DISCORD_TOKEN`: token del bot de Discord
 - `CHANNEL_ID`: ID del canal autorizado
-- `LLAMA_URL`: URL del servidor llama.cpp (default: http://127.0.0.1:8081)
+- `LLM_PROVIDER`: perfil del proveedor (`llama`, `openai` u `openai-compatible`)
+- `LLM_BASE_URL`: URL base del proveedor (default: http://127.0.0.1:7000)
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)

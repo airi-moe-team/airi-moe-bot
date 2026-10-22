@@ -76,7 +76,7 @@ class _FakeChannel:
 
 def _glue(state):
     return build_date_glue(
-        state, llm_url="http://x", request_timeout=5
+        state, llm_base_url="http://x", request_timeout=5
     )
 
 

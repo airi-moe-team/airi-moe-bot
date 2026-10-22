@@ -101,7 +101,7 @@ def _ctx(result, acknowledged):
         state=state,
         channel_id=7,
         request_timeout=5,
-        llama_url="http://backend:7000",
+        llm_base_url="http://backend:7000",
         build_service=lambda session, state_, channel: _FakeService(result),
         remember_trace=lambda trace: None,
         process_date_turn=noop,

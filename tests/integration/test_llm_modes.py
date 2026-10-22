@@ -19,7 +19,6 @@ from airi.testing import make_state
 ENV_KEYS = (
     "LLM_PROVIDER",
     "LLM_BASE_URL",
-    "LLAMA_URL",
     "LLM_API_KEY",
     "OPENAI_API_KEY",
     "LLM_MODEL",
@@ -88,9 +87,9 @@ def _judge(glue, session):
     return run(glue.judge_gift(session, "un libro", user))
 
 
-def _glue(llm_url):
+def _glue(llm_base_url):
     state, _ = make_state()
-    return build_date_glue(state, llm_url=llm_url, request_timeout=5)
+    return build_date_glue(state, llm_base_url=llm_base_url, request_timeout=5)
 
 
 # ---------------------------------------------------------------------------

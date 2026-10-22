@@ -24,8 +24,8 @@ from airi.ports.llm import LLMMeta
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 8000
-#: URL por defecto: raíz de un llama-server local (alias histórico `LLAMA_URL`).
-DEFAULT_BASE_URL = "http://127.0.0.1:8081"
+#: URL por defecto para el backend local.
+DEFAULT_BASE_URL = "http://127.0.0.1:7000"
 #: Modelo por defecto (GGUF local); en perfiles remotos debe configurarse.
 DEFAULT_MODEL = "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
 #: Perfiles de compatibilidad soportados.
@@ -116,7 +116,7 @@ class LlmConfig:
         return cls(
             provider=provider,
             base_url=normalize_base_url(
-                _env_str("LLM_BASE_URL", "LLAMA_URL", default=DEFAULT_BASE_URL)
+                _env_str("LLM_BASE_URL", default=DEFAULT_BASE_URL)
             ),
             api_key=_env_str("LLM_API_KEY", "OPENAI_API_KEY"),
             model=_env_str("LLM_MODEL", default=DEFAULT_MODEL),

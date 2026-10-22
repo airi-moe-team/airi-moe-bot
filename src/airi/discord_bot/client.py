@@ -260,7 +260,7 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
     return client
 
 
-def build_date_glue(state, *, llm_url, request_timeout):
+def build_date_glue(state, *, llm_base_url, request_timeout):
     """Pegamentos Discord↔dominio para citas, regalos y diario.
 
     Devuelve un `SimpleNamespace` con los callables que `BotContext` inyecta.
@@ -317,7 +317,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
     relationships = RelationshipService(state)
 
     async def request_llama(session, messages, *, schema, max_tokens=None, temperature):
-        llm = build_llm(session, timeout=request_timeout, base_url=llm_url)
+        llm = build_llm(session, timeout=request_timeout, base_url=llm_base_url)
         text, _meta = await llm.chat_with_meta(
             messages,
             schema=schema,
@@ -734,7 +734,7 @@ def run_bot(argv=None):
     TOKEN = os.getenv("DISCORD_TOKEN")
     CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
     LLM_CFG = LlmConfig.from_env()
-    LLAMA_URL = LLM_CFG.base_url
+    LLM_BASE_URL = LLM_CFG.base_url
     BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
     NEKOSBEST_CONTACT = os.getenv("NEKOSBEST_CONTACT", "")
     GIF_TIMEOUT = int(os.getenv("GIF_TIMEOUT", "20"))
@@ -819,7 +819,7 @@ def run_bot(argv=None):
         try:
             timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                llm = build_llm(session, timeout=REQUEST_TIMEOUT, base_url=LLAMA_URL)
+                llm = build_llm(session, timeout=REQUEST_TIMEOUT, base_url=LLM_BASE_URL)
                 service = SelfService(
                     llm=llm,
                     state=state,
@@ -851,7 +851,7 @@ def run_bot(argv=None):
     # Pegamentos Discord↔dominio (citas, regalos, diario). Ver `build_date_glue`.
     glue = build_date_glue(
         state,
-        llm_url=LLAMA_URL,
+        llm_base_url=LLM_BASE_URL,
         request_timeout=REQUEST_TIMEOUT,
     )
 
@@ -860,7 +860,7 @@ def run_bot(argv=None):
 
     def build_conversation_service(session, state, channel):
         return ConversationService(
-            llm=build_llm(session, timeout=REQUEST_TIMEOUT, base_url=LLAMA_URL),
+            llm=build_llm(session, timeout=REQUEST_TIMEOUT, base_url=LLM_BASE_URL),
             state=state,
             search=BraveSearchClient(BRAVE_API_KEY, session, max_results=MAX_WEB_RESULTS),
             gifs=NekosBestProvider(session, contact=NEKOSBEST_CONTACT, timeout=GIF_TIMEOUT),
@@ -896,7 +896,7 @@ def run_bot(argv=None):
             owner_id=OWNER_ID,
             debounce_seconds=DEBOUNCE_SECONDS,
             request_timeout=REQUEST_TIMEOUT,
-            llama_url=LLAMA_URL,
+            llm_base_url=LLM_BASE_URL,
             llm_provider=LLM_CFG.provider,
             llm_health_check=LLM_CFG.health_check,
             trace_dir=settings.trace_dir,
@@ -1015,7 +1015,7 @@ def run_bot(argv=None):
     )
 
     def log_startup():
-        log.info("Proveedor LLM: %s — %s", LLM_CFG.provider, LLAMA_URL)
+        log.info("Proveedor LLM: %s — %s", LLM_CFG.provider, LLM_BASE_URL)
         if LLM_CFG.provider != "llama":
             if not LLM_CFG.api_key:
                 log.warning(
