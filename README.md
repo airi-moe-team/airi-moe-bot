@@ -102,7 +102,7 @@
 .venv/bin/python -m pytest tests/
 ```
 
-Estado actual: **137 tests** en 4 carpetas (unit, integration, regression, tools).
+Estado actual: **299 tests** en 4 carpetas (unit, integration, regression, tools).
 
 ## Ejecutar el bot
 
@@ -126,6 +126,26 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
+
+## Naturalidad de la conversación
+
+Tres mecanismos sostienen el tono (ver `src/airi/domain/prompts.py`):
+
+1. **Respuestas proporcionadas.** El prompt obliga a responder en proporción al
+   mensaje (un saludo no es un monólogo, un tema serio no es una broma), a usar
+   acciones narrativas solo cuando aportan algo y a no terminar siempre con una
+   pregunta.
+2. **Citas conversacionales.** Durante una cita NO hay botones por turno: la
+   conversación fluye sola. Airi dispone de **una única pregunta decisiva**
+   (`date_question` en el contrato JSON) con 2-3 alternativas; al responder se
+   tira el dado (`up_chance`) y se aplica el swing de afinidad (hasta ±25). Si
+   la IA no llega a preguntar, se lanza la pregunta de reserva en el turno
+   `DATE_QUESTION_FORCE_TURN`.
+3. **Aislamiento por interlocutor.** El historial que se envía al modelo lleva
+   una etiqueta por intervención (`[speaker=Nombre|affinity=N|level=Nivel]`)
+   para que Airi no arrastre el tono ni el vínculo de otra persona. La
+   afinidad visible es, por defecto, solo la de quien le habla
+   (`AFFINITY_VIEW_SCOPE=recipient`; `all` muestra la de cada uno).
 
 ## Debugging y trazas
 

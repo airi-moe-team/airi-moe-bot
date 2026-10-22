@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 from airi.domain.constants import (
     DATE_CRISIS_DROP,
     DATE_CRISIS_MIN_TURNS,
@@ -9,6 +11,10 @@ from airi.domain.constants import (
     DATE_LAST_CHANCE_MAX_RECOVERY,
     DATE_MAX_SECONDS,
     DATE_MAX_TURNS,
+    DATE_QUESTION_CRISIS_DROP,
+    DATE_QUESTION_DELTA_MAX,
+    DATE_QUESTION_FORCE_TURN,
+    DATE_QUESTION_MIN_TURNS,
     DATE_STATES,
     LAST_CHANCE_RESULTS,
 )
@@ -37,6 +43,11 @@ def new_date_session(scene, affinity_start, now):
         "crisis_reason": "none",
         "last_chance_used": False,
         "last_chance_result": "none",
+        "question": None,
+        "question_used": False,
+        "question_pending": False,
+        "question_forced": False,
+        "question_invalid": False,
         "history": [],
         "started_at": float(now),
     }
@@ -54,6 +65,12 @@ def normalize_date_session(session):
     session.setdefault("crisis_reason", "none")
     session.setdefault("last_chance_used", False)
     session.setdefault("last_chance_result", "none")
+    session.setdefault("question", None)
+    session.setdefault("question_used", False)
+    session.setdefault("question_pending", False)
+    session.setdefault("question_forced", False)
+    session.setdefault("question_invalid", False)
+    session.setdefault("question_asked_at", 0.0)
     session.setdefault("history", [])
     session.setdefault("started_at", 0.0)
     if session.get("state") not in DATE_STATES:
@@ -138,6 +155,96 @@ def end_allowed(session):
     return turns >= DATE_END_MIN_TURNS
 
 
+# ============================================================
+# PREGUNTA DECISIVA (una sola por cita)
+# ============================================================
+
+
+def question_allowed(session):
+    """Airi puede hacer la pregunta decisiva (una sola vez, pasados unos turnos)."""
+    if not isinstance(session, dict):
+        return False
+    if session.get("state") != "active":
+        return False
+    if session.get("question_used") or session.get("question_pending"):
+        return False
+    try:
+        turns = int(session.get("turns", 0) or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    return turns >= DATE_QUESTION_MIN_TURNS
+
+
+def should_force_question(session):
+    """True si ya toca forzar la pregunta (la IA no la hizo por su cuenta)."""
+    if not isinstance(session, dict):
+        return False
+    if session.get("state") != "active":
+        return False
+    if session.get("question_used") or session.get("question_pending"):
+        return False
+    try:
+        turns = int(session.get("turns", 0) or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    return turns >= DATE_QUESTION_FORCE_TURN
+
+
+def question_failed_hard(delta):
+    """Un fallo en la pregunta es grave si el desplome llega al umbral."""
+    try:
+        value = int(delta)
+    except (TypeError, ValueError):
+        return False
+    return value <= -DATE_QUESTION_CRISIS_DROP
+
+
+def roll_question(option, rng):
+    """Tira el dado de una alternativa. Devuelve `(acierto, delta)`.
+
+    `option` es un dict con `up_chance` (0..1), `delta_up` y `delta_down`.
+    El delta queda acotado a `±DATE_QUESTION_DELTA_MAX`, con signo coherente.
+    """
+    if not isinstance(option, dict):
+        return False, 0
+    try:
+        chance = float(option.get("up_chance", 0.0))
+    except (TypeError, ValueError):
+        chance = 0.0
+    chance = max(0.0, min(1.0, chance))
+    win = rng.random() < chance
+    raw = option.get("delta_up") if win else option.get("delta_down")
+    try:
+        delta = int(raw)
+    except (TypeError, ValueError):
+        delta = 0
+    if win:
+        delta = max(0, min(DATE_QUESTION_DELTA_MAX, delta))
+    else:
+        delta = min(0, max(-DATE_QUESTION_DELTA_MAX, delta))
+    return win, delta
+
+
+def question_option(session, index):
+    """Devuelve la alternativa `index` de la pregunta pendiente, o None."""
+    if not isinstance(session, dict):
+        return None
+    question = session.get("question")
+    if not isinstance(question, dict):
+        return None
+    options = question.get("options")
+    if not isinstance(options, list):
+        return None
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or index >= len(options):
+        return None
+    option = options[index]
+    return option if isinstance(option, dict) else None
+
+
 def resolve_date_at_limit(session, points=0):
     """Agota los turnos: fuerza el cierre y devuelve el evento final.
 
@@ -180,6 +287,21 @@ def last_chance_recovery(session, result, current_points):
     return max(0, min(earned, ceiling))
 
 
+def _start_question(session, payload, now, forced):
+    """Deja la sesión con una pregunta pendiente. Devuelve `("active", "question")`.
+
+    Copia el payload (la reserva nunca debe compartirse) y marca el estado de la
+    pregunta para que solo pueda ocurrir una vez por cita.
+    """
+    session["question"] = copy.deepcopy(payload)
+    session["question_used"] = True
+    session["question_pending"] = True
+    session["question_forced"] = bool(forced)
+    session["question_invalid"] = False
+    session["question_asked_at"] = float(now) if now is not None else 0.0
+    return "active", "question"
+
+
 def step_date(
     session,
     delta=0,
@@ -189,11 +311,17 @@ def step_date(
     last_chance_result="none",
     end_keyword=False,
     now=None,
+    question=None,
+    fallback_question=None,
 ):
     """Avanza un turno la máquina de estados de la cita. Muta `session`.
 
     `points` es la afinidad tras aplicar el delta de este turno. Devuelve
     `(state, event)`, donde `event` describe lo ocurrido en el turno.
+
+    `fallback_question` es la pregunta de reserva determinista que se lanza si
+    se agota el tope con la pregunta aún sin hacer (garantía de que el evento
+    `question` siempre ocurre).
     """
     if not isinstance(session, dict):
         return "closed", "closed"
@@ -205,6 +333,25 @@ def step_date(
         return "closed", "closed"
 
     if state == "active":
+        # 1) La IA propone la pregunta decisiva: se acepta si la cita lo permite.
+        if (
+            decision == "question"
+            and question_allowed(session)
+            and isinstance(question, dict)
+            and question.get("options")
+        ):
+            return _start_question(session, question, now, forced=False)
+        # 2) Fallo grave en la pregunta decisiva: la cita pasa a la última
+        # oportunidad aunque todavía no haya turnos para una crisis normal.
+        if session.get("force_crisis"):
+            session["force_crisis"] = False
+            session["state"] = "last_chance"
+            session["affinity_crisis"] = int(points)
+            session["crisis_reason"] = str(
+                reason or "la pregunta importante salió mal"
+            )[:300]
+            session["last_chance_used"] = True
+            return "last_chance", "crisis"
         if decision == "crisis" and crisis_allowed(session):
             session["state"] = "last_chance"
             session["affinity_crisis"] = int(points)
@@ -218,11 +365,21 @@ def step_date(
             session["crisis_reason"] = str(reason or "la afinidad cayó")[:300]
             session["last_chance_used"] = True
             return "last_chance", "crisis"
-        if session["turns"] >= DATE_MAX_TURNS:
-            return "final_scene", resolve_date_at_limit(session, points)
+        # 3) Cierre de la cita (palabra clave o decisión del modelo).
         if end_keyword or (decision == "end" and end_allowed(session)):
             session["state"] = "final_scene"
             return "final_scene", "ending"
+        # 4) Tope de turnos: la cita se cierra aunque la pregunta siga pendiente
+        # (si nadie la responde, la cita se acaba igual).
+        if session["turns"] >= DATE_MAX_TURNS:
+            return "final_scene", resolve_date_at_limit(session, points)
+        # 5) Red de seguridad: si la IA no hizo la pregunta cuando tocaba, se
+        # lanza la de reserva. Así la pregunta decisiva siempre ocurre (y hay
+        # turnos de sobra para responderla).
+        if should_force_question(session):
+            payload = question if isinstance(question, dict) else fallback_question
+            if isinstance(payload, dict) and payload.get("options"):
+                return _start_question(session, payload, now, forced=True)
         return "active", "continue"
 
     if state == "last_chance":

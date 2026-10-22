@@ -189,3 +189,66 @@ def test_build_date_embed_last_chance_and_time():
     )
 
     assert _footer(embed) == "Última oportunidad · Turnos restantes: 1 · ⏳ <1 min"
+
+
+# --- DateQuestionView (pregunta decisiva) ----------------------------------
+
+
+OPTIONS = [
+    {"label": "Tu risa", "action": "le digo que su risa"},
+    {"label": "Tu compañía", "action": "le digo que su compañía"},
+]
+
+
+def _question_view(options=None, **kw):
+    return date_views.DateQuestionView(
+        owner_id=1,
+        options=OPTIONS if options is None else options,
+        on_choice=lambda *args: None,
+        **kw,
+    )
+
+
+def test_build_question_embed_title_description_and_color():
+    embed = date_views.build_question_embed("¿Qué es lo que más te gusta de mí?")
+
+    assert embed.title == "💞 Airi te pregunta algo importante"
+    assert embed.description == "¿Qué es lo que más te gusta de mí?"
+    assert embed.color.value == 0xF472B6
+
+
+def test_build_question_embed_empty_text_placeholder():
+    embed = date_views.build_question_embed("")
+
+    assert embed.description == "…"
+
+
+def test_date_question_view_three_buttons_with_labels_and_emojis():
+    view = _question_view()
+
+    assert len(view.children) == 2
+    assert _labels(view) == ["Tu risa", "Tu compañía"]
+    assert _emojis(view) == ["💗", "✨"]
+    # El payload es el ÍNDICE de la opción en la sesión.
+    assert _payloads(view) == [0, 1]
+
+
+def test_date_question_view_caps_at_max_options():
+    five = [dict(OPTIONS[0], label=f"Opción {i}") for i in range(5)]
+    view = _question_view(five)
+
+    assert len(view.children) == 3
+
+
+def test_date_question_view_falls_back_to_action_and_index_label():
+    view = _question_view([{"action": "haces algo"}, {}])
+
+    assert _labels(view) == ["haces algo", "Opción 2"]
+    assert _payloads(view) == [0, 1]
+
+
+def test_date_question_view_labels_clamped_to_discord_limit():
+    long_label = "x" * 120
+    view = _question_view([{"label": long_label, "action": "y"}])
+
+    assert len(_labels(view)[0]) <= 80

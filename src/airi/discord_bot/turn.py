@@ -21,7 +21,13 @@ import discord
 from airi.discord_bot import embeds
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import can_date, entry_points
-from airi.domain.constants import DATE_COOLDOWN, DATE_SCENES
+from airi.domain.constants import (
+    DATE_COOLDOWN,
+    DATE_QUESTION_MIN_SECONDS,
+    DATE_QUESTION_TIME_MARGIN,
+    DATE_QUESTION_TIMEOUT,
+    DATE_SCENES,
+)
 from airi.domain.dates import (
     date_expired,
     date_seconds_left,
@@ -30,7 +36,11 @@ from airi.domain.dates import (
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
 from airi.domain.text_filters import clean_reply
-from airi.domain.texts import date_intro
+from airi.domain.texts import (
+    DATE_QUESTION_MISSED_TEXT,
+    date_intro,
+    date_question_result_note,
+)
 from airi.observability.instrumentation import turn_event
 from airi.services.conversation import TurnContext
 
@@ -81,6 +91,8 @@ async def run_user_turn(
     allow_web=True,
     reply_target=None,
     kind="message",
+    extra_note=None,
+    suppress_affinity=False,
 ):
     """Procesa un turno (texto libre o botón de cita) y lo traduce a Discord."""
     channel_id = channel.id
@@ -114,6 +126,8 @@ async def run_user_turn(
                             allow_web=allow_web,
                             correlation_id=cid,
                             kind=kind,
+                            extra_note=extra_note,
+                            suppress_affinity=suppress_affinity,
                         ),
                     )
                     ctx.remember_trace(result.trace)
@@ -163,6 +177,7 @@ async def run_user_turn(
                         date_reason=result.date_reason,
                         last_chance_result=result.last_chance_result,
                         now=now,
+                        question=result.date_question,
                     )
                     # El paso de cita ocurre fuera de `run_turn`; volcamos el
                     # evento a la traza y la reescribimos para que el replay
@@ -182,17 +197,13 @@ async def run_user_turn(
                         and result.diary_action.lower() != "none"
                     ):
                         ctx.add_diary_reflection(uid, result.diary_action, now=now)
-                    if date_event == "continue" and result.date_actions:
-                        remaining = int(date_seconds_left(date_session, now))
-                        view = date_views.DateChoiceView(
-                            uid,
-                            result.date_actions,
-                            ctx.handle_date_action,
-                            timeout=max(1, remaining),
-                        )
-                        await channel.send(
-                            embed=embeds.date_prompt_embed(date_views.DATE_EMBED_COLOR),
-                            view=view,
+                    # La cita NO lleva botones en cada turno: solo se publica la
+                    # pregunta decisiva (una sola vez) con sus alternativas.
+                    if date_event == "question" and isinstance(
+                        date_session.get("question"), dict
+                    ):
+                        await _send_question(
+                            ctx, channel, uid, date_session, now=now
                         )
 
         except asyncio.TimeoutError:
@@ -221,6 +232,86 @@ async def run_user_turn(
         except Exception:
             log.exception("Error procesando el mensaje")
             await _reply("¡Ay! Ha ocurrido un error inesperado al responder.")
+
+
+async def _send_question(ctx, channel, uid, date_session, *, now):
+    """Publica la pregunta decisiva con sus botones (una sola vez por cita).
+
+    Nunca la lanza si a la cita le queda menos de `DATE_QUESTION_MIN_SECONDS`:
+    en ese caso se cancela (no dejar `question_pending` colgado) y se avisa. Si
+    la pregunta es la de reserva (forzada), se alarga la cita lo justo para que
+    sea respondible: la pregunta decisiva siempre debe poder contestarse.
+    """
+    question = date_session.get("question") or {}
+    options = question.get("options") or []
+    remaining = int(date_seconds_left(date_session, now))
+
+    if remaining < DATE_QUESTION_MIN_SECONDS:
+        if not date_session.get("question_forced"):
+            ctx.expire_question(uid)
+            await channel.send(DATE_QUESTION_MISSED_TEXT)
+            return
+        missing = DATE_QUESTION_MIN_SECONDS - remaining + DATE_QUESTION_TIME_MARGIN
+        date_session["started_at"] = float(date_session.get("started_at", now)) + missing
+        ctx.state.save_dates()
+        remaining = int(date_seconds_left(date_session, now))
+
+    view = date_views.DateQuestionView(
+        uid,
+        options,
+        ctx.handle_question_answer,
+        timeout=max(DATE_QUESTION_MIN_SECONDS, min(remaining, DATE_QUESTION_TIMEOUT)),
+        on_expire=lambda: ctx.expire_question(uid),
+    )
+    await channel.send(
+        embed=date_views.build_question_embed(question.get("text", "")),
+        view=view,
+    )
+
+
+async def handle_question_answer(ctx, interaction, option_index):
+    """Resuelve la pregunta decisiva cuando el jugador pulsa un botón.
+
+    El motor tira el dado y aplica el swing (±25); después Airi reacciona en un
+    turno extra (sin volver a mover la afinidad ni repetir la pregunta).
+    """
+    user = interaction.user
+    uid = str(user.id)
+    state = ctx.state
+    session = state.dates.get(uid)
+    if (
+        not isinstance(session, dict)
+        or session.get("state") != "active"
+        or not session.get("question_pending")
+    ):
+        await interaction.followup.send(
+            "Esa pregunta ya no está esperando respuesta~", ephemeral=True
+        )
+        return
+    now = time.time()
+    if date_expired(session, now):
+        ctx.expire_stale_dates(now)
+        await interaction.followup.send("Esa cita ya ha terminado~", ephemeral=True)
+        return
+    result = ctx.resolve_question(session, option_index)
+    if result is None:
+        await interaction.followup.send(
+            "Esa opción ya no está disponible~", ephemeral=True
+        )
+        return
+    ctx.apply_question_result(session, result, user_id=user.id, now=now)
+    note = date_question_result_note(result["win"], result["delta"])
+    action = result.get("action") or result.get("label") or "responde"
+    await run_user_turn(
+        ctx,
+        interaction.channel,
+        user,
+        [(user, action)],
+        allow_web=False,
+        kind="date_question_result",
+        extra_note=note,
+        suppress_affinity=True,
+    )
 
 
 async def handle_scene_choice(ctx, interaction, scene):
@@ -276,7 +367,12 @@ async def handle_scene_choice(ctx, interaction, scene):
 
 
 async def handle_date_action(ctx, interaction, action_text):
-    """Ejecuta un turno de cita a partir de un botón de acción de Airi."""
+    """Ejecuta un turno de cita a partir de un botón de acción de Airi.
+
+    Las citas ya no ofrecen botones por turno (la conversación fluye sola);
+    este manejador se conserva para compatibilidad con citas en curso que
+    tuvieran botones de la versión anterior.
+    """
     user = interaction.user
     uid = str(user.id)
     state = ctx.state

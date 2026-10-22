@@ -11,8 +11,8 @@ from airi.domain.affinity import clamp_delta
 from airi.domain.constants import (
     AFFINITY_DELTA_MAX,
     DATE_ACTION_LABEL_MAX,
-    DATE_ACTION_MAX,
     DATE_DECISIONS,
+    DATE_QUESTION_OPTIONS,
     DATE_SCENE_MAX,
     LAST_CHANCE_RESULTS,
 )
@@ -70,7 +70,7 @@ class ModelOutput(NamedTuple):
     date_decision: str
     date_reason: str
     last_chance_result: str
-    actions: list
+    date_question: object = None
     affinity_event: str = "none"
 
 
@@ -83,12 +83,12 @@ def _model_output(
     decision="continue",
     reason="none",
     last_chance="none",
-    actions=None,
+    question=None,
     event="none",
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
-        list(actions or []), event,
+        question, event,
     )
 
 
@@ -112,7 +112,7 @@ def assistant_history_content(answer, output=None):
             "date_decision": "continue",
             "date_reason": "none",
             "last_chance_result": "none",
-            "actions": [],
+            "date_question": {"text": "", "options": []},
         }
     else:
         payload = {
@@ -129,17 +129,32 @@ def assistant_history_content(answer, output=None):
             "last_chance_result": (
                 getattr(output, "last_chance_result", "none") or "none"
             ),
-            "actions": list(getattr(output, "actions", None) or []),
+            "date_question": (
+                getattr(output, "date_question", None)
+                or {"text": "", "options": []}
+            ),
         }
     return json.dumps(payload, ensure_ascii=False)
 
 
-def parse_actions(raw_actions):
-    """Sanea las acciones propuestas por la IA (texto no fiable)."""
-    if not isinstance(raw_actions, list):
-        return []
-    actions = []
-    for item in raw_actions:
+def parse_date_question(raw_question):
+    """Sanea la pregunta decisiva propuesta por la IA (texto no fiable).
+
+    Devuelve `{"text": str, "options": [...]}` o `None` si no hay pregunta
+    utilizable. Cada opción trae `label`, `action`, `up_chance` (0..1),
+    `delta_up` y `delta_down`; los deltas se acotan al signo esperado.
+    """
+    if not isinstance(raw_question, dict):
+        return None
+    text = raw_question.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = " ".join(text.split())[:400]
+    raw_options = raw_question.get("options")
+    if not isinstance(raw_options, list):
+        return None
+    options = []
+    for item in raw_options:
         if not isinstance(item, dict):
             continue
         action = item.get("action")
@@ -148,12 +163,33 @@ def parse_actions(raw_actions):
             continue
         if not isinstance(label, str) or not label.strip():
             label = action
-        label = " ".join(label.split())[:DATE_ACTION_LABEL_MAX]
-        action = " ".join(action.split())[:400]
-        actions.append({"label": label, "action": action})
-        if len(actions) >= DATE_ACTION_MAX:
+        try:
+            chance = float(item.get("up_chance", 0.0))
+        except (TypeError, ValueError):
+            chance = 0.0
+        chance = max(0.0, min(1.0, chance))
+        try:
+            delta_up = int(item.get("delta_up", 0))
+        except (TypeError, ValueError):
+            delta_up = 0
+        try:
+            delta_down = int(item.get("delta_down", 0))
+        except (TypeError, ValueError):
+            delta_down = 0
+        options.append(
+            {
+                "label": " ".join(label.split())[:DATE_ACTION_LABEL_MAX],
+                "action": " ".join(action.split())[:400],
+                "up_chance": chance,
+                "delta_up": max(0, delta_up),
+                "delta_down": min(0, delta_down),
+            }
+        )
+        if len(options) >= DATE_QUESTION_OPTIONS:
             break
-    return actions
+    if not options:
+        return None
+    return {"text": text, "options": options}
 
 
 def parse_scene_list(raw_scenes):
@@ -249,15 +285,15 @@ def parse_model_output(raw_output, delta_max=None):
     last_chance_result = lcr_raw.strip().lower() if isinstance(lcr_raw, str) else "none"
     if last_chance_result not in LAST_CHANCE_RESULTS:
         last_chance_result = "none"
-    # [CAMBIO] Acciones de cita: sugerencias del modelo para el jugador.
-    actions = parse_actions(parsed.get("actions"))
+    # [CAMBIO] Citas: la pregunta decisiva (una sola vez por cita).
+    date_question = parse_date_question(parsed.get("date_question"))
     reply = clean_reply(reply)
     if not reply:
         log.warning("La respuesta quedó vacía después de limpiarla")
         return _model_output()
     return ModelOutput(
         reply, gif_type, memory_action, diary_action, delta,
-        date_decision, date_reason, last_chance_result, actions,
+        date_decision, date_reason, last_chance_result, date_question,
         affinity_event,
     )
 
@@ -277,17 +313,34 @@ RESPONSE_SCHEMA = {
             "type": "string",
             "enum": list(LAST_CHANCE_RESULTS),
         },
-        "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string"},
-                    "action": {"type": "string"},
+        "date_question": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "action": {"type": "string"},
+                            "up_chance": {"type": "number"},
+                            "delta_up": {"type": "integer"},
+                            "delta_down": {"type": "integer"},
+                        },
+                        "required": [
+                            "label",
+                            "action",
+                            "up_chance",
+                            "delta_up",
+                            "delta_down",
+                        ],
+                        "additionalProperties": False,
+                    },
                 },
-                "required": ["label", "action"],
-                "additionalProperties": False,
             },
+            "required": ["text", "options"],
+            "additionalProperties": False,
         },
     },
     # Modo estricto (json_schema): TODAS las propiedades deben ir en `required`
@@ -303,7 +356,7 @@ RESPONSE_SCHEMA = {
         "date_decision",
         "date_reason",
         "last_chance_result",
-        "actions",
+        "date_question",
     ],
     "additionalProperties": False,
 }

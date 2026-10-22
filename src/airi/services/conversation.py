@@ -18,6 +18,7 @@ from airi.domain.affinity import (
     level_rank,
 )
 from airi.domain.constants import (
+    AFFINITY_VIEW_SCOPE,
     DATE_HISTORY_MAX,
     DIARY_REFLECTION_MIN_INTERVAL,
     MAX_HISTORY_MESSAGES,
@@ -25,6 +26,7 @@ from airi.domain.constants import (
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.grounding import reply_seems_grounded
+from airi.domain.history_tags import AffinityInfo, build_inference_history
 from airi.domain.llm_output import (
     RESPONSE_SCHEMA,
     ModelOutput,
@@ -77,6 +79,8 @@ class TurnContext:
     kind: str = "message"  # message | gift | date_action | scene_select | command
     raw_input: str | None = None  # None → se une de `messages`
     on_trace: Callable[[TurnEvent], None] | None = None  # hook post-turno
+    extra_note: str | None = None  # nota interna para el modelo (un solo turno)
+    suppress_affinity: bool = False  # el turno NO mueve la afinidad
 
 
 @dataclass
@@ -96,7 +100,7 @@ class TurnResult:
     date_decision: str = "continue"
     date_reason: str = "none"
     last_chance_result: str = "none"
-    date_actions: list = field(default_factory=list)
+    date_question: object = None
     grounded: bool = True
     web_context: str | None = None
     memory_saved: bool = False
@@ -121,6 +125,7 @@ class ConversationService:
         max_history: int = MAX_HISTORY_MESSAGES,
         date_delta_max: int = AFFINITY_DELTA_MAX,
         traces: TraceStore | None = None,
+        affinity_scope: str | None = None,
     ):
         self.llm = llm
         self.state = state
@@ -130,6 +135,9 @@ class ConversationService:
         self.clock = clock
         self.max_history = max_history
         self.date_delta_max = date_delta_max
+        # Ámbito de la afinidad visible en el prompt: por defecto, solo la del
+        # destinatario del turno (el resto de interlocutores, desconocidos).
+        self.affinity_scope = affinity_scope or AFFINITY_VIEW_SCOPE
         # Almacén de eventos: por defecto el del AppState.
         self.traces = traces if traces is not None else getattr(state, "traces", None)
 
@@ -188,7 +196,9 @@ class ConversationService:
             for who, part in messages:
                 history.append({
                     "role": "user",
-                    "content": f"{who.display_name}: {part}",
+                    "content": part,
+                    "author_id": str(who.id),
+                    "author_name": getattr(who, "display_name", None),
                 })
             ev.history_in = list(history)
 
@@ -219,7 +229,8 @@ class ConversationService:
             delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
-                history, web_context, user, date_session, delta_max
+                history, web_context, user, date_session, delta_max,
+                extra_note=ctx.extra_note,
             )
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.prompt_system = system_prompt
@@ -239,7 +250,7 @@ class ConversationService:
                 "date_decision": output.date_decision,
                 "date_reason": output.date_reason,
                 "last_chance_result": output.last_chance_result,
-                "actions": list(output.actions),
+                "date_question": output.date_question,
             }
             answer = remove_repeated_previous_reply(output.reply, history)
             answer = strip_repetition_loop(answer)
@@ -264,7 +275,7 @@ class ConversationService:
                 )
                 answer = GROUNDED_FALLBACK_TEXT
                 output = ModelOutput(
-                    answer, "none", "none", "none", 0, "continue", "none", "none", [],
+                    answer, "none", "none", "none", 0, "continue", "none", "none",
                 )
                 grounded = False
             ev.grounded = grounded
@@ -274,8 +285,17 @@ class ConversationService:
             entry = self.state.affinity_entry(uid)
             level_before = affinity_level(entry_points(entry))[0]
             ev.affinity_delta_requested = output.affinity_delta
+            # Un turno puede NO mover la afinidad (p. ej. la reacción a la
+            # respuesta de la pregunta decisiva: el swing ya lo aplicó el motor).
+            delta_to_apply = output.affinity_delta
+            if ctx.suppress_affinity:
+                if delta_to_apply:
+                    log.info(
+                        "El turno no mueve la afinidad (ya aplicada por el sistema)."
+                    )
+                delta_to_apply = 0
             applied = self.state.apply_affinity(
-                uid, output.affinity_delta, now=now, delta_max=delta_max
+                uid, delta_to_apply, now=now, delta_max=delta_max
             )
             points_now = self.state.entry_points(uid)
             level_after = affinity_level(points_now)[0]
@@ -313,6 +333,8 @@ class ConversationService:
             history.append({
                 "role": "assistant",
                 "content": assistant_history_content(answer, output),
+                "reply_to_user_id": str(uid),
+                "reply_to_user_name": getattr(user, "display_name", None),
             })
             if in_date and isinstance(date_session, dict):
                 date_session["history"] = history[-DATE_HISTORY_MAX:]
@@ -358,7 +380,7 @@ class ConversationService:
                 date_decision=output.date_decision,
                 date_reason=output.date_reason,
                 last_chance_result=output.last_chance_result,
-                date_actions=list(output.actions) if in_date else [],
+                date_question=output.date_question if in_date else None,
                 grounded=grounded,
                 web_context=web_context,
                 memory_saved=memory_saved,
@@ -388,7 +410,15 @@ class ConversationService:
 
     # ------------------------------------------------------------------
 
-    async def _generate(self, history, web_context, user, date_session, delta_max):
+    async def _generate(
+        self,
+        history,
+        web_context,
+        user,
+        date_session,
+        delta_max,
+        extra_note=None,
+    ):
         now = self.clock()
         state = self.state
         points = state.entry_points(user.id)
@@ -404,6 +434,7 @@ class ConversationService:
                 now=now,
             ),
             domain_prompts.preferences_prompt_section(state.world),
+            domain_prompts.identity_tags_prompt_section(),
             domain_prompts.date_context_section(
                 date_session if isinstance(date_session, dict) else None
             ),
@@ -417,8 +448,20 @@ class ConversationService:
             ),
             domain_prompts.diary_prompt_section(state.diary, user.id, now),
         ]
+        if extra_note:
+            sections.append(
+                f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
+            )
         system_prompt = domain_prompts.build_system_prompt(web_context, sections)
-        messages = [{"role": "system", "content": system_prompt}, *history]
+        # Vista de inferencia: el historial canónico se envía etiquetado con la
+        # identidad y la afinidad de cada interlocutor. La etiqueta se
+        # reconstruye en cada inferencia (nunca se persiste en el historial).
+        view = build_inference_history(
+            history,
+            self._inference_resolver(getattr(user, "id", None)),
+            users=state.users,
+        )
+        messages = [{"role": "system", "content": system_prompt}, *view]
         if hasattr(self.llm, "chat_with_meta"):
             try:
                 # Salida estricta: la gramática del servidor garantiza JSON
@@ -446,10 +489,36 @@ class ConversationService:
                 meta,
                 ModelOutput(
                     None, "none", "none", "none", 0,
-                    "continue", "none", "none", [],
+                    "continue", "none", "none",
                 ),
             )
         return system_prompt, raw if isinstance(raw, str) else None, meta, output
+
+    def _inference_resolver(self, recipient_id=None):
+        """Resolver de afinidad para la vista de inferencia.
+
+        Solo se expone la afinidad del destinatario del turno: el resto de
+        interlocutores aparecen como desconocidos (`affinity=unknown`), de modo
+        que Airi no arrastre el vínculo ni el tono de otra persona. Un usuario
+        sin registro devuelve afinidad desconocida (neutral), NUNCA un cero
+        inventado.
+        """
+        affinity = dict(self.state.affinity)
+        recipient = str(recipient_id) if recipient_id is not None else None
+        scope = self.affinity_scope
+
+        def resolve(user_id, _name):
+            if user_id is None:
+                return AffinityInfo()
+            if scope == "recipient" and recipient is not None and str(user_id) != recipient:
+                return AffinityInfo()
+            entry = affinity.get(str(user_id))
+            if isinstance(entry, dict):
+                points = entry_points(entry)
+                return AffinityInfo(points=points, level=affinity_level(points)[0])
+            return AffinityInfo()
+
+        return resolve
 
     @staticmethod
     def _emit_trace(ctx, trace):

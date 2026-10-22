@@ -5,7 +5,12 @@ from __future__ import annotations
 import logging
 
 from airi.domain.dates import last_chance_recovery, step_date
-from airi.domain.texts import DATE_CRISIS_TEXT, DATE_END_KEYWORDS, date_final_text
+from airi.domain.texts import (
+    DATE_CRISIS_TEXT,
+    DATE_END_KEYWORDS,
+    DATE_QUESTION_FALLBACK,
+    date_final_text,
+)
 from airi.services.state import AppState
 
 log = logging.getLogger(__name__)
@@ -61,6 +66,7 @@ class DateService:
         date_reason,
         last_chance_result,
         now=None,
+        question=None,
     ):
         """Avanza un turno de la cita, comunica el resultado y cierra si toca.
 
@@ -78,6 +84,8 @@ class DateService:
             last_chance_result=last_chance_result,
             end_keyword=end_keyword,
             now=now,
+            question=question,
+            fallback_question=DATE_QUESTION_FALLBACK,
         )
         log.info(
             "Cita de %s: turno %s → estado %s (evento=%s)",
@@ -99,6 +107,12 @@ class DateService:
             return event
 
         if event == "continue":
+            self.state.save_dates()
+            return event
+
+        # La pregunta decisiva: la cita sigue abierta, solo se publica la
+        # pregunta con sus botones.
+        if event == "question":
             self.state.save_dates()
             return event
 

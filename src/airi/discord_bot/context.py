@@ -61,6 +61,11 @@ class BotContext:
     expire_stale_dates: Callable[..., Any] = _noop
     handle_scene_choice: Callable[..., Any] = _anoop
     handle_date_action: Callable[..., Any] = _anoop
+    # Pregunta decisiva de la cita: publicar, resolver y caducar.
+    handle_question_answer: Callable[..., Any] = _anoop
+    resolve_question: Callable[..., Any] = _noop
+    apply_question_result: Callable[..., Any] = _noop
+    expire_question: Callable[..., Any] = _noop
     log_diary_event: Callable[..., Any] = _noop_bool
 
     def remember_trace(self, trace):

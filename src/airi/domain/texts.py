@@ -77,3 +77,72 @@ DATE_CRISIS_TEXT = (
     "Dame un momento... ¿puedes darme UNA razón para creer que te "
     "importo de verdad?»"
 )
+
+# Texto que se envía cuando la cita se queda sin tiempo para la pregunta.
+DATE_QUESTION_MISSED_TEXT = (
+    "*Airi mira el reloj y se le escapa un suspiro.*\n"
+    "«Vaya... se me ha pasado el momento de preguntarte algo importante. "
+    "La próxima vez, ¿vale?»"
+)
+
+# Red de seguridad de la pregunta decisiva: si el modelo nunca la propone, al
+# final de la gracia se lanza esta pregunta determinista para garantizar que el
+# evento ocurra. Los deltas no llegan a DATE_QUESTION_CRISIS_DROP, así que la
+# reserva nunca provoca una crisis por fallo grave.
+DATE_QUESTION_FALLBACK = {
+    "text": (
+        "«...¿Puedo preguntarte algo que llevo un rato queriendo saber? "
+        "¿Qué es lo que más te gusta de pasar tiempo conmigo?»"
+    ),
+    "options": [
+        {
+            "label": "Que me escuchas de verdad",
+            "action": "le respondo con sinceridad",
+            "up_chance": 0.80,
+            "delta_up": 20,
+            "delta_down": -8,
+        },
+        {
+            "label": "Que me haces reír",
+            "action": "le digo que me hace reír",
+            "up_chance": 0.70,
+            "delta_up": 18,
+            "delta_down": -8,
+        },
+        {
+            "label": "No sabría decirte",
+            "action": "me quedo pensando",
+            "up_chance": 0.35,
+            "delta_up": 12,
+            "delta_down": -12,
+        },
+    ],
+}
+
+
+def date_question_result_note(win, delta):
+    """Nota interna para el turno de reacción tras responder la pregunta.
+
+    El motor ya aplicó el cambio de afinidad; esto solo le dice a Airi cómo
+    reaccionar sin volver a mover la afinidad ni repetir la pregunta.
+    """
+    sign = f"{delta:+d}"
+    if win:
+        return (
+            "ACABA DE RESPONDER TU PREGUNTA y su respuesta te ha llegado de "
+            f"verdad (afinidad {sign}, ya aplicada por el sistema). Reacciona "
+            "emocionada y cálida, con una frase breve, sin repetir la pregunta "
+            "ni volver a mover la afinidad."
+        )
+    if delta <= 0:
+        return (
+            "ACABA DE RESPONDER TU PREGUNTA y su respuesta te ha dolido "
+            f"(afinidad {sign}, ya aplicada por el sistema). Reacciona dolida o "
+            "decepcionada, con una frase breve; no repitas la pregunta ni "
+            "vuelvas a mover la afinidad."
+        )
+    return (
+        "ACABA DE RESPONDER TU PREGUNTA y su respuesta te ha dejado "
+        f"indecisa (afinidad {sign}, ya aplicada por el sistema). Reacciona con "
+        "una frase breve; no repitas la pregunta ni vuelvas a mover la afinidad."
+    )

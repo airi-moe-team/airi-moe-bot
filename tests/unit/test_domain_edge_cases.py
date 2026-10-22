@@ -383,7 +383,9 @@ def test_state_defaults_are_safe_noops():
 
 def test_state_apply_affinity_hook_none_is_coerced():
     state, _ = make_state()
-    state.apply_affinity_fn = lambda uid, delta, now=None, delta_max=None: None
+    state.apply_affinity_fn = (
+        lambda uid, delta, now=None, delta_max=None, delta_min=None: None
+    )
     assert state.apply_affinity(1, 3, now=NOW) == 0
 
 

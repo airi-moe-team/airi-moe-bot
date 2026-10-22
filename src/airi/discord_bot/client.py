@@ -125,11 +125,18 @@ def build_date_glue(state, *, llm_url, request_timeout):
     from airi.domain.affinity import affinity_level, affinity_summary, clamp_delta
     from airi.domain.constants import (
         DATE_BUSY_NOTICE_COOLDOWN,
+        DATE_QUESTION_DELTA_MAX,
         DATE_SCENE_MAX_TOKENS,
         DATE_SCENES,
         DIARY_REFLECTION_MIN_INTERVAL,
     )
-    from airi.domain.dates import date_expired, date_seconds_left
+    from airi.domain.dates import (
+        date_expired,
+        date_seconds_left,
+        question_failed_hard,
+        question_option,
+        roll_question,
+    )
     from airi.domain.diary import add_diary_entry, new_diary_entry
     from airi.domain.llm_output import extract_json_object, parse_scene_list
     from airi.domain.prompts import (
@@ -279,6 +286,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         date_reason,
         last_chance_result,
         now,
+        question=None,
     ):
         """Avanza un turno de la cita y cierra si toca.
 
@@ -296,7 +304,79 @@ def build_date_glue(state, *, llm_url, request_timeout):
             date_reason=date_reason,
             last_chance_result=last_chance_result,
             now=now,
+            question=question,
         )
+
+    def resolve_question(session, option_index):
+        """Tira el dado de la alternativa elegida. Devuelve el resultado o None.
+
+        El swing (`delta_up` / `delta_down`) lo decide la IA al escribir la
+        pregunta; aquí solo se tira el dado y se acota el resultado.
+        """
+        option = question_option(session, option_index)
+        if option is None:
+            return None
+        win, delta = roll_question(option, random)
+        try:
+            index = int(option_index)
+        except (TypeError, ValueError):
+            index = -1
+        return {
+            "index": index,
+            "win": win,
+            "delta": delta,
+            "label": str(option.get("label", "") or ""),
+            "action": str(option.get("action", "") or ""),
+        }
+
+    def apply_question_result(session, result, *, user_id=None, now=None):
+        """Aplica el swing de la pregunta y deja la cita lista para continuar.
+
+        Un fallo grave (desplome hasta el umbral) fuerza la crisis: la cita
+        pasa a la última oportunidad, que es donde el jugador puede
+        reconquistarla.
+        """
+        if now is None:
+            now = time.time()
+        delta = int(result.get("delta", 0) or 0)
+        session["question_pending"] = False
+        session["question_result"] = {
+            "index": result.get("index"),
+            "win": bool(result.get("win")),
+            "delta": delta,
+            "label": result.get("label", ""),
+            "at": now,
+        }
+        if delta and user_id is not None:
+            # El swing de la pregunta es más grande que el cambio normal: se
+            # aplica con su propio tope (±DATE_QUESTION_DELTA_MAX).
+            state.apply_affinity(
+                user_id,
+                delta,
+                now=now,
+                delta_max=DATE_QUESTION_DELTA_MAX,
+                delta_min=-DATE_QUESTION_DELTA_MAX,
+            )
+            state.save_affinity()
+        if question_failed_hard(delta):
+            session["force_crisis"] = True
+        state.save_dates()
+        log.info(
+            "Pregunta decisiva respondida: acierto=%s delta=%+d", result.get("win"), delta
+        )
+        return session
+
+    def expire_question(uid, *, notify_channel=None):
+        """Cancela la pregunta pendiente (se agotó el tiempo o la cita)."""
+        session = state.dates.get(str(uid))
+        if not isinstance(session, dict):
+            return False
+        if not session.get("question_pending"):
+            return False
+        session["question_pending"] = False
+        state.save_dates()
+        log.info("La pregunta decisiva de %s caducó sin respuesta", uid)
+        return True
 
     def _finish_date(user_id, session, event, *, now):
         """Cierra la cita: registra el resultado en el diario y la elimina."""
@@ -412,6 +492,9 @@ def build_date_glue(state, *, llm_url, request_timeout):
         propose_scenes=propose_scenes,
         judge_gift=judge_gift,
         process_date_turn=process_date_turn,
+        resolve_question=resolve_question,
+        apply_question_result=apply_question_result,
+        expire_question=expire_question,
         busy_date_owner=busy_date_owner,
         notify_busy=notify_busy,
         date_busy_text=date_busy_text,
@@ -444,6 +527,8 @@ def run_bot(argv=None):
     from airi.discord_bot.commands import build_registry
     from airi.discord_bot.context import BotContext
     from airi.domain.affinity import (
+        AFFINITY_DELTA_MAX,
+        AFFINITY_DELTA_MIN,
         apply_affinity_delta,
         apply_winner_lock,
         maybe_crown_winner,
@@ -544,8 +629,14 @@ def run_bot(argv=None):
         save_diary=save_diary,
         save_memories=save_memories,
         save_users=save_users,
-        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None: (
-            lambda entry: apply_affinity_delta(entry, delta, now or time.time(), delta_max)
+        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None, delta_min=None: (
+            lambda entry: apply_affinity_delta(
+                entry,
+                delta,
+                now or time.time(),
+                delta_max if delta_max is not None else AFFINITY_DELTA_MAX,
+                delta_min if delta_min is not None else AFFINITY_DELTA_MIN,
+            )
         )(state.affinity_entry(uid)),
         traces=trace_store,
     )
@@ -596,6 +687,9 @@ def run_bot(argv=None):
             notify_busy=glue.notify_busy,
             date_busy_text=glue.date_busy_text,
             expire_stale_dates=glue.expire_stale_dates,
+            resolve_question=glue.resolve_question,
+            apply_question_result=glue.apply_question_result,
+            expire_question=glue.expire_question,
             affinity_footer=lambda user: glue.affinity_footer_text(
                 user.id, user.display_name
             ),
@@ -608,6 +702,11 @@ def run_bot(argv=None):
         )
         ctx.handle_date_action = (
             lambda interaction, payload: discord_turn.handle_date_action(
+                ctx, interaction, payload
+            )
+        )
+        ctx.handle_question_answer = (
+            lambda interaction, payload: discord_turn.handle_question_answer(
                 ctx, interaction, payload
             )
         )

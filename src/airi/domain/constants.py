@@ -34,6 +34,18 @@ def env_float(name, default):
         return default
 
 
+def env_choice(name, default, choices):
+    """Lee una opción del entorno; si no es válida, devuelve `default`."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value not in choices:
+        warnings.warn(f"{name}={raw!r} no es una opción válida; se usa {default}.")
+        return default
+    return value
+
+
 # ============================================================
 # CONSTANTES DE JUEGO
 # ============================================================
@@ -82,8 +94,20 @@ DATE_LAST_CHANCE_MAX_RECOVERY = env_int("DATE_LAST_CHANCE_MAX_RECOVERY", 12)
 DATE_HISTORY_MAX = env_int("DATE_HISTORY_MAX", 20)  # Historial aislado por cita.
 DATE_MAX_SECONDS = env_int("DATE_MAX_SECONDS", 5 * 60)  # Duración real de una cita.
 DATE_STATES = ("active", "last_chance", "final_scene", "closed")
-DATE_DECISIONS = ("continue", "crisis", "end")
+DATE_DECISIONS = ("continue", "crisis", "end", "question")
 LAST_CHANCE_RESULTS = ("success", "partial", "fail", "none")
+
+# Pregunta decisiva de la cita: una sola por cita, con botones de respuesta.
+# La IA decide el momento (turno 1 = en cuanto el momento lo pida); la red de
+# seguridad lanza la pregunta de reserva en `DATE_QUESTION_FORCE_TURN`.
+DATE_QUESTION_MIN_TURNS = env_int("DATE_QUESTION_MIN_TURNS", 1)  # Turnos mínimos previos.
+DATE_QUESTION_FORCE_TURN = env_int("DATE_QUESTION_FORCE_TURN", 4)  # Turno en que se fuerza.
+DATE_QUESTION_OPTIONS = env_int("DATE_QUESTION_OPTIONS", 3)  # Alternativas máximas.
+DATE_QUESTION_DELTA_MAX = env_int("DATE_QUESTION_DELTA_MAX", 25)  # Swing máximo.
+DATE_QUESTION_CRISIS_DROP = env_int("DATE_QUESTION_CRISIS_DROP", 20)  # Fallo grave.
+DATE_QUESTION_TIMEOUT = env_int("DATE_QUESTION_TIMEOUT", 180)  # Segundos del botón.
+DATE_QUESTION_MIN_SECONDS = env_int("DATE_QUESTION_MIN_SECONDS", 60)  # Margen mínimo.
+DATE_QUESTION_TIME_MARGIN = env_int("DATE_QUESTION_TIME_MARGIN", 15)  # Holgura.
 
 # Diario de Airi.
 DIARY_MAX_ENTRIES = env_int("DIARY_MAX_ENTRIES", 300)  # Tope global (FIFO).
@@ -104,6 +128,11 @@ SEARCH_QUERY_MAX_TOKENS = env_int("SEARCH_QUERY_MAX_TOKENS", 64)  # Reformulaci�
 DATE_ACTION_LABEL_MAX = env_int("DATE_ACTION_LABEL_MAX", 80)
 DATE_SCENE_MAX = env_int("DATE_SCENE_MAX", 4)
 REPETITION_THRESHOLD = env_int("REPETITION_THRESHOLD", 4)
+# Ámbito de la afinidad que ve el modelo: "recipient" (solo la de quien
+# habla) o "all" (la de cada interlocutor, cada uno con la suya).
+AFFINITY_VIEW_SCOPE = env_choice(
+    "AFFINITY_VIEW_SCOPE", "recipient", ("all", "recipient")
+)
 MAX_MEMORIES_PER_USER = env_int("MAX_MEMORIES_PER_USER", 15)
 MAX_MEMORY_CHARS = env_int("MAX_MEMORY_CHARS", 160)
 DIARY_REFLECTION_MIN_INTERVAL = env_int("DIARY_REFLECTION_MIN_INTERVAL", 600)
