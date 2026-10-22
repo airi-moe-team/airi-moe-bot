@@ -13,7 +13,6 @@ from airi.domain.constants import (
     DATE_MAX_TURNS,
     DATE_QUESTION_CRISIS_DROP,
     DATE_QUESTION_DELTA_MAX,
-    DATE_QUESTION_FORCE_TURN,
     DATE_QUESTION_MIN_TURNS,
     DATE_STATES,
     LAST_CHANCE_RESULTS,
@@ -175,21 +174,6 @@ def question_allowed(session):
     return turns >= DATE_QUESTION_MIN_TURNS
 
 
-def should_force_question(session):
-    """True si ya toca forzar la pregunta (la IA no la hizo por su cuenta)."""
-    if not isinstance(session, dict):
-        return False
-    if session.get("state") != "active":
-        return False
-    if session.get("question_used") or session.get("question_pending"):
-        return False
-    try:
-        turns = int(session.get("turns", 0) or 0)
-    except (TypeError, ValueError):
-        turns = 0
-    return turns >= DATE_QUESTION_FORCE_TURN
-
-
 def question_failed_hard(delta):
     """Un fallo en la pregunta es grave si el desplome llega al umbral."""
     try:
@@ -287,16 +271,17 @@ def last_chance_recovery(session, result, current_points):
     return max(0, min(earned, ceiling))
 
 
-def _start_question(session, payload, now, forced):
+def _start_question(session, payload, now):
     """Deja la sesión con una pregunta pendiente. Devuelve `("active", "question")`.
 
-    Copia el payload (la reserva nunca debe compartirse) y marca el estado de la
-    pregunta para que solo pueda ocurrir una vez por cita.
+    Copia el payload (la pregunta del modelo nunca debe compartirse) y marca el
+    estado para que solo pueda ocurrir una vez por cita. No existe pregunta de
+    reserva: si el modelo no la propone, la cita sigue sin ella.
     """
     session["question"] = copy.deepcopy(payload)
     session["question_used"] = True
     session["question_pending"] = True
-    session["question_forced"] = bool(forced)
+    session["question_forced"] = False
     session["question_invalid"] = False
     session["question_asked_at"] = float(now) if now is not None else 0.0
     return "active", "question"
@@ -312,16 +297,14 @@ def step_date(
     end_keyword=False,
     now=None,
     question=None,
-    fallback_question=None,
 ):
     """Avanza un turno la máquina de estados de la cita. Muta `session`.
 
     `points` es la afinidad tras aplicar el delta de este turno. Devuelve
     `(state, event)`, donde `event` describe lo ocurrido en el turno.
 
-    `fallback_question` es la pregunta de reserva determinista que se lanza si
-    se agota el tope con la pregunta aún sin hacer (garantía de que el evento
-    `question` siempre ocurre).
+    La pregunta decisiva es opcional: si el modelo no la propone, la cita
+    continúa y cierra por sus límites actuales sin generarla de reserva.
     """
     if not isinstance(session, dict):
         return "closed", "closed"
@@ -340,7 +323,7 @@ def step_date(
             and isinstance(question, dict)
             and question.get("options")
         ):
-            return _start_question(session, question, now, forced=False)
+            return _start_question(session, question, now)
         # 2) Fallo grave en la pregunta decisiva: la cita pasa a la última
         # oportunidad aunque todavía no haya turnos para una crisis normal.
         if session.get("force_crisis"):
@@ -373,13 +356,7 @@ def step_date(
         # (si nadie la responde, la cita se acaba igual).
         if session["turns"] >= DATE_MAX_TURNS:
             return "final_scene", resolve_date_at_limit(session, points)
-        # 5) Red de seguridad: si la IA no hizo la pregunta cuando tocaba, se
-        # lanza la de reserva. Así la pregunta decisiva siempre ocurre (y hay
-        # turnos de sobra para responderla).
-        if should_force_question(session):
-            payload = question if isinstance(question, dict) else fallback_question
-            if isinstance(payload, dict) and payload.get("options"):
-                return _start_question(session, payload, now, forced=True)
+        # 5) No hay pregunta de reserva: la cita sigue sin forzar nada.
         return "active", "continue"
 
     if state == "last_chance":

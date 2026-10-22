@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
 
+from airi.domain.relationships import RelationshipFingerprint
+
 _ACTIVE_DATE_STATES = {"active", "last_chance", "final_scene"}
 
 
@@ -13,6 +15,7 @@ class GuardDecision(str, Enum):
     VALID = "valid"
     STALE_DATE = "stale_date"
     STALE_SEASON = "stale_season"
+    STALE_RELATIONSHIP = "stale_relationship"
 
 
 class DateFingerprint(NamedTuple):
@@ -43,6 +46,8 @@ def validate_turn(
     draft_date: DateFingerprint | None,
     current_season: int,
     current_date: Mapping[str, object] | None,
+    draft_relationship: RelationshipFingerprint | None = None,
+    current_relationship: RelationshipFingerprint | None = None,
 ) -> GuardDecision:
     """Compara el borrador con el estado actual sin mutarlo."""
     if int(draft_season) != int(current_season):
@@ -50,7 +55,15 @@ def validate_turn(
 
     current = fingerprint_of(current_date)
     if draft_date is None:
-        return GuardDecision.VALID if current is None else GuardDecision.STALE_DATE
-    if current is None or current != draft_date:
+        if current is not None:
+            return GuardDecision.STALE_DATE
+    elif current is None or current != draft_date:
         return GuardDecision.STALE_DATE
+
+    if (
+        draft_relationship is not None
+        and current_relationship is not None
+        and draft_relationship != current_relationship
+    ):
+        return GuardDecision.STALE_RELATIONSHIP
     return GuardDecision.VALID

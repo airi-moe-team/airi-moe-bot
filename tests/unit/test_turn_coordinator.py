@@ -182,3 +182,70 @@ def test_publisher_failure_leaves_committed_for_resume(tmp_path):
     assert record is not None
     assert record.status is TurnStatus.COMMITTED
     assert journal.pending_publications(now=NOW, ttl=900)
+
+
+def test_turn_key_is_exposed_as_an_available_evidence_reference(tmp_path):
+    _, _, _, _, coordinator, llm = make_harness(tmp_path)
+
+    async def publisher(committed):
+        return None
+
+    run(
+        coordinator.execute(
+            channel_id=7,
+            user=DAVID,
+            messages=[(DAVID, "hola")],
+            message_ids=["100"],
+            context=TurnContext(channel_id=7),
+            publisher=publisher,
+        )
+    )
+    assert "turn:7:100" in llm.last_system_prompt
+
+
+def test_a_relationship_change_during_generation_discards_the_draft(tmp_path):
+    from airi.domain.turn_guard import GuardDecision
+
+    state, _, _, service, coordinator, _ = make_harness(tmp_path)
+    original = service.generate_turn
+
+    async def generate_then_change_relationship(user, messages, ctx):
+        draft = await original(user, messages, ctx)
+        state.world["relationships"] = {
+            "42": {
+                "stage": "interest",
+                "history": [
+                    {
+                        "id": "r1",
+                        "from": "curiosity",
+                        "to": "interest",
+                        "evidence_kind": "support",
+                        "reason": "Me apoyó",
+                        "evidence_refs": ["turn:9:9"],
+                        "evidence_summary": "Me apoyó.",
+                        "season": 1,
+                        "created_at": NOW,
+                    }
+                ],
+                "pending_proposal": None,
+            }
+        }
+        return draft
+
+    service.generate_turn = generate_then_change_relationship
+
+    async def publisher(committed):
+        return None
+
+    with pytest.raises(StaleTurnError) as exc:
+        run(
+            coordinator.execute(
+                channel_id=7,
+                user=DAVID,
+                messages=[(DAVID, "hola")],
+                message_ids=["100"],
+                context=TurnContext(channel_id=7),
+                publisher=publisher,
+            )
+        )
+    assert exc.value.decision is GuardDecision.STALE_RELATIONSHIP

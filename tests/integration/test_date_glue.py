@@ -341,3 +341,21 @@ def test_process_date_turn_continue_saves_state():
     assert "1" in state.dates
     assert counters["dates"] == 1
     assert channel.sent == []
+
+
+def test_gift_reply_cannot_claim_a_partner_that_is_not_confirmed():
+    state, _ = make_state(users={"1": {"name": "Ana"}}, world={"season": 1})
+    glue = _glue(state)
+    content = json.dumps(
+        {
+            "reply": "Gracias... ya somos pareja, ¿vale?",
+            "affinity_delta": 3,
+            "affinity_event": "me ha gustado",
+        }
+    )
+
+    reply, _delta, _event = run(
+        glue.judge_gift(_FakeSession(content), "rosas", ANA, [])
+    )
+
+    assert "pareja" not in reply.lower()

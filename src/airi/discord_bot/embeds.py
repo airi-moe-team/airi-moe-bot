@@ -18,22 +18,49 @@ def system_embed(description, *, title=None):
         color=GIF_EMBED_COLOR,
     )
 
+
+def connected_embed():
+    """Aviso de que Airi ha vuelto a estar disponible."""
+    return system_embed(
+        "Airi está en línea.",
+        title="🟢 Airi se ha conectado",
+    )
+
+
+def disconnecting_embed(reason):
+    """Aviso de cierre con el motivo personal (solo canal de origen)."""
+    clean = str(reason or "").strip()[:300]
+    body = (
+        f"«{clean}»\n\nMe voy por ahora. Hablamos otro día."
+        if clean
+        else "Me voy por ahora. Hablamos otro día."
+    )
+    return system_embed(body, title="🚪 Airi se está desconectando")
+
+
+def notice_embed(text):
+    """Embed para avisos post-turno (memoria, identidad, etc.)."""
+    return system_embed(str(text), title="💗 Airi")
+
 HELP_TEXT = (
     "**🎯 Objetivo**\n"
-    "Ser el primero en llegar a **100 de afinidad** con Airi. Al cruzarlos, ella "
-    "te confesará su amor y seréis **novios**. Después nadie más puede conquistarla "
-    "hasta que se reinicie la temporada.\n\n"
+    "Conocer a Airi y construir un vínculo real con ella. La **afinidad** mide "
+    "cercanía y confianza (máx. 100), pero no convierte a nadie en pareja: sus "
+    "sentimientos avanzan solo con momentos concretos que pueda recordar y una "
+    "pareja requiere una propuesta y una aceptación mutua.\n\n"
 
     "**💬 Cómo subir afinidad**\n"
     "Habla con ella; Airi decide ella misma cuándo sube o baja, de `-5` a `+5`.\n"
-    "• Sube: humor, interés sincero, coqueteo sutil, recordar lo que le gusta y "
-    "apoyarla en un mal momento.\n"
+    "• Sube: humor, interés sincero, recordar lo que le gusta y apoyarla en un "
+    "mal momento.\n"
     "• Baja: groserías, presión, incomodidad o spam.\n"
-    "• No hay cupo diario: depende de que de verdad la conquistes (o la "
-    "decepciones). Si no hablas, pierdes **-1 al día**.\n\n"
+    "• No hay cupo diario: depende de que de verdad conectéis. Si no hablas, "
+    "pierdes **-1 al día**.\n\n"
 
-    "**💗 Niveles**\n"
-    "Desconocida → Conocida → Amiga → Interés → Enamorada → Novios\n\n"
+    "**💗 Niveles de cercanía**\n"
+    "Desconocida → Conocida → Amiga → Cercana → Muy cercana → Inseparables\n"
+    "Los niveles altos son cercanía social; el romance depende de su etapa "
+    "afectiva y de la evidencia de lo vivido.\n\n"
 
     "**🎮 Comandos de usuario**\n"
     "• `!afinidad` — tus puntos y nivel\n"

@@ -2,6 +2,8 @@
 
 - `airi-persistencia-fiabilidad-develop` — Port selectivo de persistencia segura, recuperación, idempotencia y consistencia a `develop`.
   - Spec: `.kiro/specs/airi-persistencia-fiabilidad-develop/`
+- `airi-relacion-natural-basada-en-evidencia` — Evolución romántica gradual de Airi, motivada por interacciones concretas y sin presión romántica por defecto.
+  - Spec: `.kiro/specs/airi-relacion-natural-basada-en-evidencia/`
 
 ## Flujo de trabajo
 

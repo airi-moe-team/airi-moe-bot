@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Iterator
 
-from airi.domain.state_schema import CURRENT_SCHEMA_VERSION
+from airi.domain.relationships import normalize_world
+from airi.domain.state_schema import CURRENT_SCHEMA_VERSION, validate_state
 from airi.ports.state_store import LoadResult, StateStorePort
 from airi.services.state import AppState
 
@@ -165,7 +166,16 @@ class StatePersistence:
         if kind is SaveKind.DOMAIN:
             state.state_version = previous + 1
         try:
-            result = self.store.save(self.aggregate())
+            aggregate = self.aggregate()
+            validation = validate_state(aggregate)
+            if not validation.ok:
+                raise PersistenceError(
+                    "estado inválido: " + "; ".join(validation.errors)
+                )
+            result = self.store.save(aggregate)
+        except PersistenceError:
+            state.state_version = previous
+            raise
         except Exception as exc:
             state.state_version = previous
             raise PersistenceError(f"no se pudo guardar el estado: {exc}") from exc
@@ -177,6 +187,10 @@ class StatePersistence:
 
     def _apply(self, state: AppState, data) -> None:
         state.world = copy.deepcopy(data.get("world") or {})
+        # Migración en carga: registros antiguos sin `relationships` arrancan en
+        # etapa neutra y la pareja oficial existente se conserva sin inventar
+        # motivos históricos.
+        normalize_world(state.world)
         state.affinity = copy.deepcopy(data.get("affinity") or {})
         state.dates = copy.deepcopy(data.get("dates") or {})
         state.memories = copy.deepcopy(data.get("memories") or {})

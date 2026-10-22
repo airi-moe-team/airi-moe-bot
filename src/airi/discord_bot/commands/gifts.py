@@ -5,7 +5,7 @@ import time
 import aiohttp
 
 from airi.discord_bot.persistence import async_state_transaction
-from airi.domain.constants import CONFESS_THRESHOLD, GIFT_COOLDOWN, MAX_RECENT_GIFTS
+from airi.domain.constants import GIFT_COOLDOWN, MAX_RECENT_GIFTS
 from airi.domain.gifts import GIFTS, gift_effect
 from airi.domain.texts import gift_reaction
 
@@ -82,7 +82,3 @@ async def handle(ctx, message):
             state.save_affinity()
             ctx.log_diary_event("gift", message.author, gift_note)
         await message.channel.send(reaction)
-        if state.entry_points(uid) >= CONFESS_THRESHOLD:
-            await ctx.settle_relationship(
-                message.channel, now, session=session, user=message.author
-            )

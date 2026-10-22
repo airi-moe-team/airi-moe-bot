@@ -65,6 +65,9 @@ class TurnCoordinator:
             log.info("Turno duplicado ignorado: %s", claim.turn_key)
             return None
         turn_key = claim.turn_key
+        # La referencia estable del diario pasa al contexto de generación para
+        # que el modelo pueda citar el turno actual como evidencia.
+        context.turn_key = turn_key
 
         try:
             draft = await self.service.generate_turn(user, messages, context)
@@ -78,6 +81,10 @@ class TurnCoordinator:
             draft_date=draft.date_fingerprint,
             current_season=int(state.world.get("season", 1) or 1),
             current_date=state.dates.get(str(getattr(user, "id", ""))),
+            draft_relationship=draft.relationship_fingerprint,
+            current_relationship=self.service.relationships.fingerprint(
+                getattr(user, "id", "")
+            ),
         )
         if decision is not GuardDecision.VALID:
             self._mark_failed(turn_key, decision.value)

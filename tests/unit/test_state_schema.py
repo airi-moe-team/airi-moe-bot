@@ -127,3 +127,61 @@ def test_legacy_dataset_shapes(name, value, ok):
 
 def test_unknown_legacy_dataset_is_rejected():
     assert validate_legacy_dataset("desconocido", {}).ok is False
+
+
+def test_world_without_relationships_is_still_valid():
+    data = valid_state()
+    assert "relationships" not in data["world"]
+    assert validate_state(data).ok is True
+
+
+def test_world_relationships_are_validated_nested():
+    data = valid_state()
+    data["world"]["relationships"] = {
+        "42": {
+            "stage": "interest",
+            "history": [
+                {
+                    "id": "r1",
+                    "from": "curiosity",
+                    "to": "interest",
+                    "evidence_kind": "support",
+                    "reason": "Me apoyó",
+                    "evidence_refs": ["turn:1:10"],
+                    "evidence_summary": "Me apoyó.",
+                    "season": 1,
+                    "created_at": 10.0,
+                }
+            ],
+            "pending_proposal": None,
+        }
+    }
+    assert validate_state(data).ok is True
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "no-es-un-objeto",
+        {"stage": "novios"},
+        {"stage": "interest", "history": {}},
+        {"stage": "interest", "history": [{"from": "none", "to": "interest"}]},
+        {"stage": "interest", "pending_proposal": {"target_user_id": ""}},
+    ],
+)
+def test_invalid_relationship_records_are_rejected(record):
+    data = valid_state()
+    data["world"]["relationships"] = {"42": record}
+    result = validate_state(data)
+    assert result.ok is False
+    assert any("relationships" in error for error in result.errors)
+
+
+def test_legacy_world_dataset_validates_relationships_too():
+    assert validate_legacy_dataset(
+        "world",
+        {"relationships": {"42": {"stage": "none", "history": []}}},
+    ).ok is True
+    assert validate_legacy_dataset(
+        "world", {"relationships": {"42": {"stage": "inventada"}}}
+    ).ok is False

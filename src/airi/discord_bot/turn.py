@@ -193,8 +193,6 @@ async def run_user_turn(
             date_session = state.dates.get(str(uid))
             in_date = result.in_date and isinstance(date_session, dict)
 
-            await ctx.settle_relationship(channel, now, session=session, user=author)
-
             if in_date:
                 lock = getattr(ctx, "commit_lock", None)
                 deferred = getattr(ctx, "persistence", None) is not None
@@ -231,7 +229,9 @@ async def run_user_turn(
                             )
                             date_notices = []
                 for notice in date_notices:
-                    await channel.send(notice)
+                    await channel.send(
+                        embed=embeds.system_embed(notice, title="🌙 Cita")
+                    )
                 # El paso de cita ocurre fuera de `run_turn`; volcamos el
                 # evento a la traza y la reescribimos para que el replay
                 # pueda reproducirlo de forma fiel.
@@ -351,7 +351,7 @@ async def _publish_result(ctx, channel, author, result, *, reply_target=None):
     await send_gif_bytes(ctx, channel, author, result.gif, result.gif_bytes)
     for notice in result.notices:
         try:
-            await channel.send(notice)
+            await channel.send(embed=embeds.notice_embed(notice))
         except discord.HTTPException:
             log.warning("No se pudo enviar el aviso post-turno")
 

@@ -72,7 +72,7 @@ def test_attribution_each_turn_gets_its_own_speaker_tag():
     sent = llm.calls[-1]["messages"]
     contents = [m["content"] for m in sent if m["role"] != "system"]
     # Mathias conserva SU afinidad alta en su turno...
-    assert any("[speaker=Mathias|affinity=60|level=Interés] hola Airi~" in c for c in contents)
+    assert any("[speaker=Mathias|affinity=60|level=Cercana] hola Airi~" in c for c in contents)
     # ...y KOKODA recibe una etiqueta con SU afinidad negativa (no la de Mathias).
     assert any(
         "[speaker=KOKODA|affinity=-16|level=Molesta] Airi que fácil eres" in c

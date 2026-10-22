@@ -15,6 +15,7 @@ from airi.domain.affinity import (
     AFFINITY_DELTA_MAX,
     affinity_level,
     entry_points,
+    is_winner,
     level_rank,
 )
 from airi.domain.constants import (
@@ -35,6 +36,11 @@ from airi.domain.llm_output import (
 )
 from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.prompts import SEARCH_QUERY_PROMPT
+from airi.domain.relationship_claims import (
+    relationship_claim_problem,
+    soften_relationship_claims,
+)
+from airi.domain.relationships import RelationshipFingerprint
 from airi.domain.self_model import (
     apply_self_update,
     sync_preferences_from_self,
@@ -54,6 +60,7 @@ from airi.logging_setup import (
 from airi.observability.trace import TurnEvent
 from airi.observability.trace_store import TraceStore
 from airi.ports.llm import LLMMeta
+from airi.services.relationships import RelationshipService
 from airi.services.state import AppState
 
 log = get_logger(__name__)
@@ -105,6 +112,8 @@ class TurnContext:
     on_trace: Callable[[TurnEvent], None] | None = None  # hook post-turno
     extra_note: str | None = None  # nota interna para el modelo (un solo turno)
     suppress_affinity: bool = False  # el turno NO mueve la afinidad
+    # Clave estable reclamada por el diario de turnos (referencia de evidencia).
+    turn_key: str | None = None
 
 
 @dataclass
@@ -131,6 +140,14 @@ class TurnResult:
     diary_saved: bool = False
     self_changed: bool = False
     self_update_action: object = None
+    # Relación afectiva
+    romantic_stage_before: str = "none"
+    romantic_stage_after: str = "none"
+    romantic_update_action: object = None
+    relationship_action_applied: str = "none"
+    partner_confirmed: bool = False
+    proposal_pending: bool = False
+    relationship_claims_repaired: bool = False
     disconnect_reason: str | None = None
     history: list = field(default_factory=list)
     notices: list = field(default_factory=list)
@@ -156,6 +173,7 @@ class TurnDraft:
     grounded: bool
     timings: dict
     trace: TurnEvent
+    relationship_fingerprint: RelationshipFingerprint | None = None
     skipped: bool = False
 
 
@@ -189,6 +207,8 @@ class ConversationService:
         self.affinity_scope = affinity_scope or AFFINITY_VIEW_SCOPE
         # Almacén de eventos: por defecto el del AppState.
         self.traces = traces if traces is not None else getattr(state, "traces", None)
+        # Estado romántico por usuario (etapas, evidencia y propuestas).
+        self.relationships = RelationshipService(state)
 
     async def generate_turn(self, user, messages, ctx: TurnContext) -> TurnDraft:
         """Genera una respuesta sin mutar el estado de dominio."""
@@ -213,6 +233,15 @@ class ConversationService:
         now = ctx.now if ctx.now is not None else self.clock()
         uid = user.id
         timings = {}
+
+        # Referencia estable del turno (la aporta TurnCoordinator; en llamadas
+        # directas se sintetiza una local) y vista aislada de la relación.
+        if not ctx.turn_key:
+            ctx.turn_key = f"local:{ctx.channel_id}:{uid}:{int(now)}"
+        relationship_view = self.relationships.view(
+            uid, turn_key=ctx.turn_key, channel_id=ctx.channel_id, now=now
+        )
+        relationship_fingerprint = self.relationships.fingerprint(uid)
 
         try:
             log.info("turno user=%s", uid)
@@ -277,6 +306,8 @@ class ConversationService:
             system_prompt, raw_llm, meta, output = await self._generate(
                 history, web_context, user, date_session, delta_max,
                 extra_note=ctx.extra_note,
+                relationship_view=relationship_view,
+                now=now,
             )
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.prompt_system = system_prompt
@@ -298,6 +329,8 @@ class ConversationService:
                 "last_chance_result": output.last_chance_result,
                 "date_question": output.date_question,
                 "self_update": output.self_update,
+                "romantic_update": output.romantic_update,
+                "relationship_action": output.relationship_action,
             }
             answer = remove_repeated_previous_reply(output.reply, history)
             answer = strip_repetition_loop(answer)
@@ -321,6 +354,7 @@ class ConversationService:
                     grounded=True,
                     timings=timings,
                     trace=ev,
+                    relationship_fingerprint=relationship_fingerprint,
                     skipped=True,
                 )
 
@@ -365,6 +399,7 @@ class ConversationService:
                 grounded=grounded,
                 timings=timings,
                 trace=ev,
+                relationship_fingerprint=relationship_fingerprint,
             )
         except Exception as exc:
             ev.errors.append({
@@ -405,6 +440,7 @@ class ConversationService:
         entry = self.state.affinity_entry(uid)
         level_before = affinity_level(entry_points(entry))[0]
         output = draft.output
+        answer = draft.answer
         disconnect_reason = (
             output.disconnect.get("reason") if output.disconnect else None
         )
@@ -468,10 +504,47 @@ class ConversationService:
                 self.state.save_identity()
                 notices.append(SELF_CHANGED_NOTICE)
 
+        # Relación afectiva: el modelo propone y el dominio decide dentro del
+        # mismo commit que la afinidad y el resto de efectos del turno.
+        relationship_outcome = self.relationships.apply(
+            uid,
+            update=output.romantic_update,
+            action=output.relationship_action,
+            turn_key=draft.context.turn_key,
+            channel_id=draft.context.channel_id,
+            now=draft.now,
+            season=draft.season,
+            display_name=getattr(draft.user, "display_name", None) or "",
+            current_turn_text="\n".join(part for _, part in draft.messages),
+        )
+        partner_confirmed = relationship_outcome.partner_confirmed or is_winner(
+            self.state.world, uid
+        )
+        claim_problem = relationship_claim_problem(
+            answer,
+            stage=relationship_outcome.stage_after,
+            partner_confirmed=partner_confirmed,
+            proposal_pending=relationship_outcome.pending_proposal is not None,
+        )
+        claims_repaired = False
+        if claim_problem:
+            log.warning("Afirmación relacional no confirmada: %s", claim_problem)
+            repaired = soften_relationship_claims(
+                answer,
+                stage=relationship_outcome.stage_after,
+                partner_confirmed=partner_confirmed,
+            )
+            claims_repaired = repaired != answer
+            answer = repaired
+        if relationship_outcome.partner_confirmed:
+            notices.append(
+                f"💗 **Airi y {self.state.display_name(uid)} ahora son pareja.**"
+            )
+
         history = list(draft.history)
         history.append({
             "role": "assistant",
-            "content": assistant_history_content(draft.answer, output),
+            "content": assistant_history_content(answer, output),
             "reply_to_user_id": str(uid),
             "reply_to_user_name": getattr(draft.user, "display_name", None),
         })
@@ -496,10 +569,21 @@ class ConversationService:
             int(date_session.get("turns", 0) or 0)
             if in_date and isinstance(date_session, dict) else 0
         )
+        ev.romantic_stage_before = relationship_outcome.stage_before
+        ev.romantic_stage_after = relationship_outcome.stage_after
+        ev.romantic_update = (
+            relationship_outcome.update_entry.get("to")
+            if relationship_outcome.update_entry else None
+        )
+        ev.relationship_action = relationship_outcome.action_applied
+        ev.partner_confirmed = relationship_outcome.partner_confirmed
+        ev.proposal_pending = relationship_outcome.pending_proposal is not None
+        ev.relationship_claims_repaired = claims_repaired
+        ev.relationship_notes = list(relationship_outcome.errors)
         ev.timings_ms = draft.timings
 
         return TurnResult(
-            reply=draft.answer,
+            reply=answer,
             gif=output.gif,
             gif_bytes=draft.gif_bytes,
             memory_action=output.memory,
@@ -521,6 +605,13 @@ class ConversationService:
             diary_saved=diary_saved,
             self_changed=self_changed,
             self_update_action=self_entry,
+            romantic_stage_before=relationship_outcome.stage_before,
+            romantic_stage_after=relationship_outcome.stage_after,
+            romantic_update_action=relationship_outcome.update_entry,
+            relationship_action_applied=relationship_outcome.action_applied,
+            partner_confirmed=relationship_outcome.partner_confirmed,
+            proposal_pending=relationship_outcome.pending_proposal is not None,
+            relationship_claims_repaired=claims_repaired,
             disconnect_reason=disconnect_reason,
             history=history,
             notices=notices,
@@ -563,8 +654,10 @@ class ConversationService:
         date_session,
         delta_max,
         extra_note=None,
+        relationship_view=None,
+        now=None,
     ):
-        now = self.clock()
+        now = self.clock() if now is None else now
         state = self.state
         points = state.entry_points(user.id)
         sections = [
@@ -577,6 +670,16 @@ class ConversationService:
                 user_id=user.id,
                 display_name=user.display_name,
                 now=now,
+            ),
+            domain_prompts.romantic_relationship_section(
+                relationship_view or {
+                    "stage": "none",
+                    "history": [],
+                    "allowed_refs": [],
+                    "pending": None,
+                    "is_partner": False,
+                },
+                user.display_name,
             ),
             domain_prompts.preferences_prompt_section(state.world),
             domain_prompts.identity_tags_prompt_section(),

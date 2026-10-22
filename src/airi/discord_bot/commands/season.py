@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from airi.domain.relationships import reset_season_world
+
 log = logging.getLogger(__name__)
 
 
@@ -75,6 +77,9 @@ def _mutate(state) -> None:
     state.world["winner_id"] = None
     state.world["relationship_started_at"] = None
     state.world["season"] = int(state.world.get("season", 1) or 1) + 1
+    # Nueva temporada: las propuestas pendientes se cancelan y la etapa vuelve a
+    # neutra. El historial confirmado se conserva (y queda en el archivo).
+    reset_season_world(state.world)
     for uid, entry in state.affinity.items():
         if str(uid).startswith("_") or not isinstance(entry, dict):
             continue

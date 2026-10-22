@@ -83,3 +83,42 @@ def test_changed_season_is_stale():
         current_season=2,
         current_date=None,
     ) is GuardDecision.STALE_SEASON
+
+
+def test_changed_relationship_stage_is_stale():
+    from airi.domain.relationships import RelationshipFingerprint
+
+    assert validate_turn(
+        draft_season=1,
+        draft_date=None,
+        current_season=1,
+        current_date=None,
+        draft_relationship=RelationshipFingerprint("none", None, None),
+        current_relationship=RelationshipFingerprint("interest", None, None),
+    ) is GuardDecision.STALE_RELATIONSHIP
+
+
+def test_changed_pending_proposal_is_stale():
+    from airi.domain.relationships import RelationshipFingerprint
+
+    assert validate_turn(
+        draft_season=1,
+        draft_date=None,
+        current_season=1,
+        current_date=None,
+        draft_relationship=RelationshipFingerprint("enamored", None, None),
+        current_relationship=RelationshipFingerprint("enamored", "42", 10.0),
+    ) is GuardDecision.STALE_RELATIONSHIP
+
+
+def test_unchanged_relationship_is_valid():
+    from airi.domain.relationships import RelationshipFingerprint
+
+    assert validate_turn(
+        draft_season=1,
+        draft_date=None,
+        current_season=1,
+        current_date=None,
+        draft_relationship=RelationshipFingerprint("interest", None, None),
+        current_relationship=RelationshipFingerprint("interest", None, None),
+    ) is GuardDecision.VALID

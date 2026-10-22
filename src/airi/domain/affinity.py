@@ -53,8 +53,13 @@ def level_rank(name):
 
 
 def can_date(points):
-    """Las citas requieren al menos el nivel 'Amiga'."""
-    return affinity_level(points)[0] in ("Amiga", "Interés", "Enamorada", "Novios")
+    """Las citas requieren al menos el nivel social 'Amiga'."""
+    return affinity_level(points)[0] in (
+        "Amiga",
+        "Cercana",
+        "Muy cercana",
+        "Inseparables",
+    )
 
 
 def affinity_summary(points):
@@ -109,6 +114,7 @@ def default_world():
         "relationship_started_at": None,
         "season": 1,
         "preferences": default_preferences(),
+        "relationships": {},
     }
 
 
@@ -171,9 +177,11 @@ def apply_affinity_delta(
 
 
 def maybe_crown_winner(world, affinity_data, now):
-    """Corona al único ganador si alguien cruza el umbral.
+    """[Obsoleto] Corona al único ganador si alguien cruza el umbral.
 
-    Devuelve el user_id coronado, o None si no cambia nada.
+    La feature de relación basada en evidencia ya no usa esta función: la
+    afinidad no establece pareja. Se conserva solo por compatibilidad con
+    código/tests antiguos. Devuelve el user_id coronado o None.
     """
     if not isinstance(world, dict):
         return None

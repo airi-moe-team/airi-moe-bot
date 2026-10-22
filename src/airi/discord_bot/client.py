@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import discord
 
-from airi.discord_bot import turn
+from airi.discord_bot import embeds, turn
 from airi.domain.constants import DATE_DELTA_MAX
 from airi.services.channel_queue import ChannelDispatcher
 
@@ -59,6 +59,23 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
     debounce = _Debouncer()
     dispatcher = ChannelDispatcher()
     shutdown = {"started": False, "phase": "running"}
+
+    async def _resolve_channel(target_id=None):
+        target = channel_id if target_id is None else target_id
+        try:
+            target = int(target)
+        except (TypeError, ValueError):
+            pass
+        getter = getattr(client, "get_channel", None)
+        channel = getter(target) if getter is not None else None
+        if channel is None:
+            fetcher = getattr(client, "fetch_channel", None)
+            if fetcher is not None:
+                try:
+                    channel = await fetcher(target)
+                except Exception:
+                    channel = None
+        return channel
 
     def _wire_shutdown(ctx):
         """Conecta la decisión de Airi con el cierre global del cliente."""
@@ -107,6 +124,14 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
             async def close_after_reply():
                 # Deja terminar el envío de la despedida antes de cerrar.
                 await asyncio.sleep(0.5)
+                channel = await _resolve_channel(getattr(ctx, "channel_id", None))
+                if channel is not None:
+                    try:
+                        await channel.send(
+                            embed=embeds.disconnecting_embed(clean_reason)
+                        )
+                    except Exception:
+                        log.exception("No se pudo enviar el aviso de desconexión")
                 try:
                     await discord.Client.close(client)
                 except Exception:
@@ -140,6 +165,13 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
     async def on_ready():
         log.info("Bot conectado como %s", client.user)
         log.info("Canal autorizado: %s", channel_id)
+        if not shutdown["started"]:
+            channel = await _resolve_channel()
+            if channel is not None:
+                try:
+                    await channel.send(embed=embeds.connected_embed())
+                except Exception:
+                    log.exception("No se pudo enviar el aviso de conexión")
         if on_ready_extra is not None:
             try:
                 await on_ready_extra(client)
@@ -210,7 +242,12 @@ def build_date_glue(state, *, llm_url, request_timeout):
     """
     from airi.adapters.discord_notifier import DiscordNotifier
     from airi.adapters.http_llm import HttpLlmClient
-    from airi.domain.affinity import affinity_level, affinity_summary, clamp_delta
+    from airi.domain.affinity import (
+        affinity_level,
+        affinity_summary,
+        clamp_delta,
+        is_winner,
+    )
     from airi.domain.constants import (
         DATE_BUSY_NOTICE_COOLDOWN,
         DATE_QUESTION_DELTA_MAX,
@@ -236,11 +273,18 @@ def build_date_glue(state, *, llm_url, request_timeout):
         affinity_prompt_section,
         preferences_prompt_section,
         relationship_status_section,
+        romantic_relationship_section,
+    )
+    from airi.domain.relationship_claims import (
+        relationship_claim_problem,
+        soften_relationship_claims,
     )
     from airi.domain.text_filters import clean_reply
     from airi.services.date_service import DateService
+    from airi.services.relationships import RelationshipService
 
     busy_notice_at = {}  # uid -> timestamp del último aviso (anti-spam).
+    relationships = RelationshipService(state)
 
     async def request_llama(session, messages, *, schema, max_tokens=None, temperature):
         llm = HttpLlmClient(
@@ -312,12 +356,21 @@ def build_date_glue(state, *, llm_url, request_timeout):
             now=time.time(),
         )
         prefs_desc = preferences_prompt_section(state.world)
+        romantic_view = relationships.view(
+            uid, turn_key=f"gift:{uid}:{int(time.time())}" if uid is not None else None,
+            channel_id=0,
+        )
+        romantic_view["allowed_refs"] = []
+        romantic_desc = romantic_relationship_section(
+            romantic_view, display
+        ) if uid is not None else ""
         recent = [str(g) for g in (recent_gifts or [])]
         recent_desc = ", ".join(recent) if recent else "(ninguno)"
         system_prompt = (
             SYSTEM_PROMPT
             + affinity_desc
             + relationship_desc
+            + romantic_desc
             + prefs_desc
             + GIFT_JUDGE_PROMPT
         )
@@ -347,6 +400,15 @@ def build_date_glue(state, *, llm_url, request_timeout):
 
         reply_raw = parsed.get("reply")
         reply = clean_reply(reply_raw) if isinstance(reply_raw, str) else ""
+        if reply and uid is not None:
+            stage = state.read_relationship(uid)["stage"]
+            partner = is_winner(state.world, uid)
+            if relationship_claim_problem(
+                reply, stage=stage, partner_confirmed=partner
+            ):
+                reply = soften_relationship_claims(
+                    reply, stage=stage, partner_confirmed=partner
+                )
         delta_raw = parsed.get("affinity_delta", 0)
         if isinstance(delta_raw, bool) or not isinstance(delta_raw, (int, float)):
             delta = 0
@@ -606,7 +668,6 @@ def run_bot(argv=None):
     import asyncio
     import logging
     import os
-    from io import BytesIO
 
     import aiohttp
     from dotenv import load_dotenv
@@ -621,7 +682,6 @@ def run_bot(argv=None):
     from airi.adapters.nekosbest import NekosBestProvider
     from airi.adapters.state_store import StateStore
     from airi.config import Settings
-    from airi.discord_bot import embeds
     from airi.discord_bot import turn as discord_turn
     from airi.discord_bot.commands import build_registry
     from airi.discord_bot.context import BotContext
@@ -630,11 +690,8 @@ def run_bot(argv=None):
         AFFINITY_DELTA_MIN,
         apply_affinity_delta,
         apply_winner_lock,
-        maybe_crown_winner,
     )
-    from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
     from airi.domain.state_schema import CURRENT_SCHEMA_VERSION
-    from airi.domain.texts import confession_text
     from airi.logging_setup import install_correlation_format
     from airi.observability.trace_store import TraceStore
     from airi.services.bootstrap import BootstrapError, bootstrap_state
@@ -870,36 +927,6 @@ def run_bot(argv=None):
     def apply_affinity_change(uid, delta, *, now=None, delta_max=None):
         return state.apply_affinity(uid, delta, now=now, delta_max=delta_max)
 
-    async def send_selected_gif(session, channel, user, gif_type):
-        """Envía un GIF de NekosBest (usado para la confesión)."""
-        if gif_type == "none" or gif_type not in ALLOWED_GIF_TYPES:
-            return
-        log.info("El modelo ha seleccionado el GIF: %s", gif_type)
-        provider = NekosBestProvider(
-            session, contact=NEKOSBEST_CONTACT, timeout=GIF_TIMEOUT
-        )
-        gif_bytes = await provider.fetch(gif_type)
-        if not gif_bytes:
-            log.warning("No se encontró un GIF válido en NekosBest para %s", gif_type)
-            return
-        try:
-            filename = f"airi_{gif_type}.gif"
-            embed = discord.Embed(
-                title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
-                color=embeds.GIF_EMBED_COLOR,
-            )
-            if user is not None:
-                embed.set_footer(
-                    text=glue.affinity_footer_text(user.id, user.display_name),
-                    icon_url=user.display_avatar.url,
-                )
-            embed.set_image(url=f"attachment://{filename}")
-            file = discord.File(BytesIO(gif_bytes), filename=filename)
-            await channel.send(embed=embed, file=file)
-            log.info("GIF enviado correctamente: %s", gif_type)
-        except discord.HTTPException:
-            log.exception("Discord no pudo enviar el GIF")
-
     def user_display_name(user_id):
         entry = users_data.get(str(user_id))
         if isinstance(entry, dict) and entry.get("name"):
@@ -907,32 +934,17 @@ def run_bot(argv=None):
         return "alguien"
 
     async def settle_relationship(channel, now, session=None, user=None):
-        """Corona al ganador (confesión automática) y bloquea al resto."""
-        winner = maybe_crown_winner(world_data, affinity_data, now)
+        """Compatibilidad: mantiene el bloqueo monógamo, sin coronar a nadie.
+
+        La pareja oficial solo se confirma con una propuesta y una aceptación
+        validadas por el dominio relacional. Esta función no crea parejas por
+        puntuación de afinidad.
+        """
         async with commit_lock:
             with persistence.transaction():
-                if winner:
-                    apply_winner_lock(world_data, affinity_data)
-                    state.save_world()
-                    state.save_affinity()
-                    state.log_diary_event(
-                        "confession",
-                        winner,
-                        f"Me he dado cuenta de que quiero estar con "
-                        f"{user_display_name(winner)}. ¡Hoy nos hemos hecho novios!",
-                    )
-                elif world_data.get("winner_id"):
+                if world_data.get("winner_id"):
                     apply_winner_lock(world_data, affinity_data)
                     state.save_affinity()
-        if winner:
-            await channel.send(confession_text(user_display_name(winner)))
-            log.info("¡Ganador coronado! %s es ahora pareja de Airi", winner)
-            if session is not None and user is not None and str(user.id) == str(winner):
-                try:
-                    await send_selected_gif(session, channel, user, "kiss")
-                except Exception:
-                    log.exception("No se pudo enviar el GIF de la confesión")
-            return winner
         return None
 
     async def resume_pending(discord_client):
@@ -987,7 +999,7 @@ def run_bot(argv=None):
         log.info("Búsqueda web: Brave Search API")
         log.info("Proveedor de GIFs: NekosBest API v2")
         log.info(
-            "Simulador de citas activo: confesión al llegar a %d (temporada %s)",
+            "Afinidad máxima %d (elegibilidad, no confesión) · temporada %s",
             CONFESS_THRESHOLD,
             world_data.get("season"),
         )

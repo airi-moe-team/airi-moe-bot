@@ -12,7 +12,8 @@
 │   ├── logging_setup.py
 │   ├── domain/                        (lógica pura: sin I/O, sin Discord, sin HTTP)
 │   │   ├── constants.py               # env_int, env_float + CONSTANTES (afinidad, citas, diario)
-│   │   ├── affinity.py                # niveles, deltas, decay, clamp, coronación, ranking
+│   │   ├── affinity.py                # niveles, deltas, decay, clamp y ranking
+│   │   ├── relationships.py           # etapas afectivas, evidencia y propuestas
 │   │   ├── dates.py                   # máquina de estados de la cita
 │   │   ├── gifts.py                   # catálogo y efectos de regalos
 │   │   ├── diary.py                   # entradas, consultas, formato relativo
@@ -136,16 +137,32 @@ Tres mecanismos sostienen el tono (ver `src/airi/domain/prompts.py`):
    acciones narrativas solo cuando aportan algo y a no terminar siempre con una
    pregunta.
 2. **Citas conversacionales.** Durante una cita NO hay botones por turno: la
-   conversación fluye sola. Airi dispone de **una única pregunta decisiva**
-   (`date_question` en el contrato JSON) con 2-3 alternativas; al responder se
-   tira el dado (`up_chance`) y se aplica el swing de afinidad (hasta ±25). Si
-   la IA no llega a preguntar, se lanza la pregunta de reserva en el turno
-   `DATE_QUESTION_FORCE_TURN`.
+   conversación fluye sola. Airi puede hacer **una única pregunta decisiva**
+   (`date_question` en el contrato JSON) con 2-3 alternativas, solo si el
+   momento la justifica; al responder se tira el dado (`up_chance`) y se aplica
+   el swing de afinidad (hasta ±25). No hay pregunta de reserva ni turno
+   forzado: la cita puede terminar sin pregunta.
 3. **Aislamiento por interlocutor.** El historial que se envía al modelo lleva
    una etiqueta por intervención (`[speaker=Nombre|affinity=N|level=Nivel]`)
    para que Airi no arrastre el tono ni el vínculo de otra persona. La
    afinidad visible es, por defecto, solo la de quien le habla
    (`AFFINITY_VIEW_SCOPE=recipient`; `all` muestra la de cada uno).
+
+## Relación natural basada en evidencia
+
+- La **afinidad** mide cercanía y elegibilidad (citas, propuestas); no cambia
+  por sí sola la etapa afectiva ni confirma una pareja.
+- Cada usuario tiene una **etapa romántica** (`none`, `curiosity`, `interest`,
+  `enamored`) en `world.relationships`. Solo avanza un paso por turno, con un
+  motivo y referencias a interacciones recuperables del mismo usuario. El
+  turno actual se ofrece como `turn:<channel>:<message>` y las transiciones
+  previas como `ev:<id>`; esas referencias no se pueden inventar.
+- Una **propuesta de pareja** solo es válida si la etapa `enamored` ya existía
+  antes del turno. Queda pendiente hasta que la persona destinataria acepte de
+  forma explícita; un rechazo cierra la propuesta y una respuesta ambigua no
+  cambia nada. Al aceptar se confirma `winner_id` y se aplica la monogamia.
+- Los cambios afectivos, la propuesta y `winner_id` se confirman en la misma
+  transacción del turno; si el commit falla, todo se revierte.
 
 ## Debugging y trazas
 
@@ -173,9 +190,6 @@ histórico (`AIRI_TRACE_DIR` → `TRACE_DIR`).
 ```bash
 # Guardar trazas en disco (vacío = solo ring en memoria)
 TRACE_DIR=./traces          # o AIRI_TRACE_DIR
-# Omitir la respuesta cruda del modelo (ahorra disco, pero el turno
-# deja de ser reproducible)
-TRACE_KEEP_RAW=1
 # Tamaño del ring en memoria (turnos inspeccionables con `!debug`)
 TRACE_KEEP_LAST=500         # o AIRI_TRACE_KEEP_LAST
 ```

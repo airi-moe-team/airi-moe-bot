@@ -1,6 +1,8 @@
-"""Notificador que envía mensajes a un canal de Discord."""
+"""Notificador que envía avisos de sistema como embeds de Discord."""
 
 from __future__ import annotations
+
+import discord
 
 
 class DiscordNotifier:
@@ -10,4 +12,9 @@ class DiscordNotifier:
         self.channel = channel
 
     async def send(self, content):
-        await self.channel.send(content)
+        embed = discord.Embed(
+            title="💗 Airi",
+            description=str(content),
+            color=discord.Color(0xFFB6D9),
+        )
+        await self.channel.send(embed=embed)

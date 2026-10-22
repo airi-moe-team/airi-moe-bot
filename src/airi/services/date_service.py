@@ -8,7 +8,6 @@ from airi.domain.dates import last_chance_recovery, step_date
 from airi.domain.texts import (
     DATE_CRISIS_TEXT,
     DATE_END_KEYWORDS,
-    DATE_QUESTION_FALLBACK,
     date_final_text,
 )
 from airi.services.state import AppState
@@ -83,7 +82,6 @@ class DateService:
             end_keyword=end_keyword,
             now=now,
             question=question,
-            fallback_question=DATE_QUESTION_FALLBACK,
         )
         log.info(
             "Cita de %s: turno %s → estado %s (evento=%s)",

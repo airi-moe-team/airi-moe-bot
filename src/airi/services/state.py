@@ -16,6 +16,11 @@ from airi.domain.affinity import (
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.memories import user_memories as _user_memories
+from airi.domain.relationships import (
+    default_relationship,
+    normalize_relationship,
+    normalize_world,
+)
 from airi.domain.self_model import (
     apply_decay,
     mark_reflection,
@@ -114,6 +119,35 @@ class AppState:
         )
         self.save_affinity()
         return applied
+
+    # ------------------------------------------------------------------
+    # Relación afectiva por usuario
+    # ------------------------------------------------------------------
+
+    def relationships(self) -> dict:
+        """Mapa `world.relationships` normalizado (crea el contenedor si falta)."""
+        normalize_world(self.world)
+        return self.world["relationships"]
+
+    def read_relationship(self, user_id) -> dict:
+        """Vista normalizada sin crear ni mutar el registro persistido."""
+        relationships = self.world.get("relationships")
+        raw = (
+            relationships.get(str(user_id))
+            if isinstance(relationships, dict)
+            else None
+        )
+        return normalize_relationship(raw)
+
+    def relationship(self, user_id) -> dict:
+        """Registro relacional del usuario, creándolo con etapa neutra si falta."""
+        relationships = self.relationships()
+        key = str(user_id)
+        record = relationships.get(key)
+        if not isinstance(record, dict):
+            record = default_relationship()
+            relationships[key] = record
+        return record
 
     # ------------------------------------------------------------------
     # Diario

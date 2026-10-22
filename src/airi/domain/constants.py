@@ -59,12 +59,12 @@ AFFINITY_LEVELS = (
     (0, "Desconocida"),
     (10, "Conocida"),
     (25, "Amiga"),
-    (45, "Interés"),
-    (70, "Enamorada"),
-    (100, "Novios"),
+    (45, "Cercana"),
+    (70, "Muy cercana"),
+    (100, "Inseparables"),
 )
 
-CONFESS_THRESHOLD = env_int("CONFESS_THRESHOLD", 100)  # Afinidad para "Novios".
+CONFESS_THRESHOLD = env_int("CONFESS_THRESHOLD", 100)  # Techo de afinidad/elegibilidad.
 FRIENDZONE_CAP = env_int("FRIENDZONE_CAP", 44)  # Techo del resto con ganador.
 AFFINITY_FLOOR = env_int("AFFINITY_FLOOR", -100)  # Piso mínimo de afinidad.
 AFFINITY_DELTA_MIN = env_int("AFFINITY_DELTA_MIN", -5)  # Cambio más duro de Airi.
@@ -98,10 +98,9 @@ DATE_DECISIONS = ("continue", "crisis", "end", "question")
 LAST_CHANCE_RESULTS = ("success", "partial", "fail", "none")
 
 # Pregunta decisiva de la cita: una sola por cita, con botones de respuesta.
-# La IA decide el momento (turno 1 = en cuanto el momento lo pida); la red de
-# seguridad lanza la pregunta de reserva en `DATE_QUESTION_FORCE_TURN`.
+# La IA decide si y cuándo hacerla; no existe turno forzado ni pregunta de
+# reserva (la cita puede terminar sin pregunta).
 DATE_QUESTION_MIN_TURNS = env_int("DATE_QUESTION_MIN_TURNS", 1)  # Turnos mínimos previos.
-DATE_QUESTION_FORCE_TURN = env_int("DATE_QUESTION_FORCE_TURN", 4)  # Turno en que se fuerza.
 DATE_QUESTION_OPTIONS = env_int("DATE_QUESTION_OPTIONS", 3)  # Alternativas máximas.
 DATE_QUESTION_DELTA_MAX = env_int("DATE_QUESTION_DELTA_MAX", 25)  # Swing máximo.
 DATE_QUESTION_CRISIS_DROP = env_int("DATE_QUESTION_CRISIS_DROP", 20)  # Fallo grave.

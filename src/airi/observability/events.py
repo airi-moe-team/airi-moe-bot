@@ -128,6 +128,16 @@ class TurnEvent:
     date_turns_before: int = 0
     date_turns_after: int = 0
 
+    # Relación afectiva
+    romantic_stage_before: str = "none"
+    romantic_stage_after: str = "none"
+    romantic_update: str | None = None
+    relationship_action: str = "none"
+    partner_confirmed: bool = False
+    proposal_pending: bool = False
+    relationship_claims_repaired: bool = False
+    relationship_notes: list = field(default_factory=list)
+
     # Errores y notas
     skipped: bool = False
     error: str | None = None

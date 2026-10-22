@@ -85,41 +85,6 @@ DATE_QUESTION_MISSED_TEXT = (
     "La próxima vez, ¿vale?»"
 )
 
-# Red de seguridad de la pregunta decisiva: si el modelo nunca la propone, al
-# final de la gracia se lanza esta pregunta determinista para garantizar que el
-# evento ocurra. Los deltas no llegan a DATE_QUESTION_CRISIS_DROP, así que la
-# reserva nunca provoca una crisis por fallo grave.
-DATE_QUESTION_FALLBACK = {
-    "text": (
-        "«...¿Puedo preguntarte algo que llevo un rato queriendo saber? "
-        "¿Qué es lo que más te gusta de pasar tiempo conmigo?»"
-    ),
-    "options": [
-        {
-            "label": "Que me escuchas de verdad",
-            "action": "le respondo con sinceridad",
-            "up_chance": 0.80,
-            "delta_up": 20,
-            "delta_down": -8,
-        },
-        {
-            "label": "Que me haces reír",
-            "action": "le digo que me hace reír",
-            "up_chance": 0.70,
-            "delta_up": 18,
-            "delta_down": -8,
-        },
-        {
-            "label": "No sabría decirte",
-            "action": "me quedo pensando",
-            "up_chance": 0.35,
-            "delta_up": 12,
-            "delta_down": -12,
-        },
-    ],
-}
-
-
 def date_question_result_note(win, delta):
     """Nota interna para el turno de reacción tras responder la pregunta.
 

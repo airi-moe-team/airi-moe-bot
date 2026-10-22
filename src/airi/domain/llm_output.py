@@ -18,6 +18,13 @@ from airi.domain.constants import (
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.narrative_claims import disconnect_claim_problem
+from airi.domain.relationships import (
+    EVIDENCE_KINDS,
+    RELATIONSHIP_ACTIONS,
+    ROMANTIC_STAGES,
+    normalize_action,
+    normalize_update,
+)
 from airi.domain.self_model import (
     SELF_UPDATE_OPS,
     SELF_UPDATE_SCHEMA,
@@ -82,6 +89,10 @@ class ModelOutput(NamedTuple):
     disconnect: object = None
     # Cambio de identidad propuesto: {"key","op","value","reason","evidence"}.
     self_update: object = None
+    # Cambio afectivo propuesto (StageUpdate) o None si no hay cambio.
+    romantic_update: object = None
+    # Propuesta/aceptación/rechazo de pareja (RelationshipAction) o None.
+    relationship_action: object = None
 
 
 def _model_output(
@@ -97,11 +108,30 @@ def _model_output(
     event="none",
     disconnect=None,
     self_update=None,
+    romantic_update=None,
+    relationship_action=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
         question, event, disconnect, self_update,
+        romantic_update, relationship_action,
     )
+
+
+def romantic_update_none():
+    """Sentinel neutro del cambio afectivo."""
+    return {
+        "stage": "none",
+        "evidence_kind": "none",
+        "reason": "",
+        "evidence_refs": [],
+        "evidence_summary": "",
+    }
+
+
+def relationship_action_none():
+    """Sentinel neutro de la acción relacional."""
+    return {"action": "none", "reason": "", "evidence_refs": []}
 
 
 def assistant_history_content(answer, output=None):
@@ -127,6 +157,8 @@ def assistant_history_content(answer, output=None):
             "date_question": {"text": "", "options": []},
             "self_update": self_update_none(),
             "disconnect": {"leave": False, "reason": ""},
+            "romantic_update": romantic_update_none(),
+            "relationship_action": relationship_action_none(),
         }
     else:
         payload = {
@@ -151,6 +183,9 @@ def assistant_history_content(answer, output=None):
             "self_update": self_update_none(),
             # Marcharse es una acción única: en el historial se neutraliza.
             "disconnect": {"leave": False, "reason": ""},
+            # Las acciones relacionales no se repiten por inercia.
+            "romantic_update": romantic_update_none(),
+            "relationship_action": relationship_action_none(),
         }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -369,6 +404,10 @@ def parse_model_output(raw_output, delta_max=None):
     self_update = parse_self_update(parsed.get("self_update"))
     # Marcharse: decisión contextual y excepcional de Airi.
     disconnect = parse_disconnect(parsed.get("disconnect"))
+    # Relación: etapa afectiva y acción de pareja propuestas por el modelo.
+    # El dominio valida después; aquí solo se normaliza la forma.
+    romantic_update = normalize_update(parsed.get("romantic_update"))
+    relationship_action = normalize_action(parsed.get("relationship_action"))
     claim_problem = disconnect_claim_problem(
         reply, bool(disconnect and disconnect.get("leave"))
     )
@@ -385,7 +424,8 @@ def parse_model_output(raw_output, delta_max=None):
     return ModelOutput(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
-        affinity_event, disconnect, self_update,
+        affinity_event, disconnect, self_update, romantic_update,
+        relationship_action,
     )
 
 # Esquema JSON que la respuesta del modelo debe cumplir.
@@ -434,6 +474,46 @@ RESPONSE_SCHEMA = {
             "additionalProperties": False,
         },
         "self_update": SELF_UPDATE_SCHEMA,
+        "romantic_update": {
+            "type": "object",
+            "properties": {
+                "stage": {"type": "string", "enum": list(ROMANTIC_STAGES)},
+                "evidence_kind": {
+                    "type": "string",
+                    "enum": ["none", *EVIDENCE_KINDS],
+                },
+                "reason": {"type": "string"},
+                "evidence_refs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "evidence_summary": {"type": "string"},
+            },
+            "required": [
+                "stage",
+                "evidence_kind",
+                "reason",
+                "evidence_refs",
+                "evidence_summary",
+            ],
+            "additionalProperties": False,
+        },
+        "relationship_action": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": list(RELATIONSHIP_ACTIONS),
+                },
+                "reason": {"type": "string"},
+                "evidence_refs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["action", "reason", "evidence_refs"],
+            "additionalProperties": False,
+        },
         "disconnect": {
             "type": "object",
             "properties": {
@@ -459,6 +539,8 @@ RESPONSE_SCHEMA = {
         "last_chance_result",
         "date_question",
         "self_update",
+        "romantic_update",
+        "relationship_action",
         "disconnect",
     ],
     "additionalProperties": False,

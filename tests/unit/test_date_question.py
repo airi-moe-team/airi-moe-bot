@@ -15,7 +15,6 @@ from airi.domain.constants import (
     DATE_MAX_TURNS,
     DATE_QUESTION_CRISIS_DROP,
     DATE_QUESTION_DELTA_MAX,
-    DATE_QUESTION_FORCE_TURN,
     DATE_QUESTION_MIN_TURNS,
 )
 from airi.domain.dates import (
@@ -25,11 +24,9 @@ from airi.domain.dates import (
     question_failed_hard,
     question_option,
     roll_question,
-    should_force_question,
     step_date,
 )
 from airi.domain.llm_output import parse_date_question, parse_model_output
-from airi.domain.texts import DATE_QUESTION_FALLBACK
 
 NOW = 1_000_000.0
 
@@ -102,23 +99,6 @@ def test_question_not_allowed_outside_active():
     assert question_allowed(session) is False
 
 
-# --- should_force_question -------------------------------------------------
-
-
-def test_should_force_at_force_turn_when_not_used():
-    assert should_force_question(_session(DATE_QUESTION_FORCE_TURN)) is True
-
-
-def test_should_not_force_before_force_turn():
-    assert should_force_question(_session(DATE_QUESTION_FORCE_TURN - 1)) is False
-
-
-def test_should_not_force_if_already_used():
-    session = _session(DATE_QUESTION_FORCE_TURN)
-    session["question_used"] = True
-    assert should_force_question(session) is False
-
-
 # --- step_date con decision="question" --------------------------------------
 
 
@@ -172,37 +152,6 @@ def test_step_date_question_without_payload_is_ignored():
     assert session["question_used"] is False
 
 
-def test_forced_question_launches_the_reserve_at_the_force_turn():
-    """Si la IA no la hace, la pregunta de reserva se lanza igualmente."""
-    session = _session(DATE_QUESTION_FORCE_TURN - 1)
-    state, event = step_date(
-        session,
-        decision="continue",
-        points=40,
-        now=NOW,
-        fallback_question=DATE_QUESTION_FALLBACK,
-    )
-    assert (state, event) == ("active", "question")
-    assert session["question_forced"] is True
-    assert session["question"]["options"]
-    # La reserva nunca provoca una crisis por fallo grave.
-    for option in DATE_QUESTION_FALLBACK["options"]:
-        assert not question_failed_hard(int(option["delta_down"]))
-
-
-def test_reserve_question_is_copied_not_shared():
-    session = _session(DATE_QUESTION_FORCE_TURN - 1)
-    step_date(
-        session,
-        decision="continue",
-        points=40,
-        now=NOW,
-        fallback_question=DATE_QUESTION_FALLBACK,
-    )
-    session["question"]["options"][0]["label"] = "MUTADO"
-    assert DATE_QUESTION_FALLBACK["options"][0]["label"] != "MUTADO"
-
-
 def test_the_date_still_ends_when_the_turn_limit_arrives():
     session = _session(DATE_MAX_TURNS - 1)
     state, event = step_date(
@@ -210,10 +159,10 @@ def test_the_date_still_ends_when_the_turn_limit_arrives():
         decision="continue",
         points=40,
         now=NOW,
-        fallback_question=DATE_QUESTION_FALLBACK,
     )
     assert event == "ending"
     assert session["state"] == "final_scene"
+    assert session["question_used"] is False
 
 
 # --- roll_question ---------------------------------------------------------
@@ -334,3 +283,12 @@ def test_parse_model_output_propagates_date_question():
 def test_parse_model_output_without_date_question_is_none():
     output = parse_model_output('{"reply": "hola"}')
     assert output.date_question is None
+
+
+def test_date_ends_without_a_question_when_airi_has_none():
+    """No hay pregunta de reserva: la cita cierra con su flujo normal."""
+    session = _session(DATE_MAX_TURNS - 1)
+    state, event = step_date(session, decision="continue", points=40, now=NOW)
+    assert (state, event) == ("final_scene", "ending")
+    assert session["question_used"] is False
+    assert session["question_pending"] is False

@@ -133,3 +133,42 @@ def test_archive_failure_aborts_before_mutation(tmp_path, monkeypatch):
     assert ctx.state.affinity["1"]["points"] == 90
     assert message.channel.sent == []
     assert message.replies and "No pude" in message.replies[0]
+
+
+def test_season_reset_cancels_pending_proposals_and_resets_stages(tmp_path):
+    ctx, _, _, persistence = make_ctx(tmp_path)
+    ctx.state.world["relationships"] = {
+        "1": {
+            "stage": "enamored",
+            "history": [
+                {
+                    "id": "r1",
+                    "from": "interest",
+                    "to": "enamored",
+                    "evidence_kind": "support",
+                    "reason": "Me apoyó",
+                    "evidence_refs": ["turn:7:1"],
+                    "evidence_summary": "Me apoyó.",
+                    "season": 3,
+                    "created_at": 10.0,
+                }
+            ],
+            "pending_proposal": None,
+        },
+        "2": {
+            "stage": "interest",
+            "history": [],
+            "pending_proposal": {"target_user_id": "2"},
+        },
+    }
+    persistence.save()
+    message = FakeMessage(FakeAuthor(1), FakeChannel())
+
+    run(season.handle(ctx, message))
+
+    record = ctx.state.world["relationships"]["1"]
+    assert record["stage"] == "none"
+    assert record["pending_proposal"] is None
+    assert record["history"][0]["id"] == "r1"
+    assert ctx.state.world["relationships"]["2"]["pending_proposal"] is None
+    assert ctx.state.world["winner_id"] is None

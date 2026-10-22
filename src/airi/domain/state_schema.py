@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from airi.domain.relationships import EVIDENCE_KINDS, ROMANTIC_STAGES
+
 CURRENT_SCHEMA_VERSION = 1
 
 #: Claves obligatorias del agregado y su tipo esperado.
@@ -71,6 +73,10 @@ def validate_state(data: object) -> ValidationResult:
             f"soportada ({CURRENT_SCHEMA_VERSION})"
         )
 
+    world = data.get("world")
+    if isinstance(world, dict):
+        _validate_world(world, errors, "estado.world")
+
     return ValidationResult(not errors, tuple(errors))
 
 
@@ -92,7 +98,78 @@ def validate_legacy_dataset(name: str, data: object) -> ValidationResult:
         return ValidationResult(
             False, (f"heredado {name}: se esperaba {names}",)
         )
+    if name == "world":
+        errors: list[str] = []
+        _validate_world(data, errors, "heredado world")
+        if errors:
+            return ValidationResult(False, tuple(errors))
     return ValidationResult(True, ())
+
+
+def _validate_world(world: dict, errors: list[str], label: str) -> None:
+    """Valida el estado romántico anidado dentro de `world`."""
+    if "relationships" not in world:
+        return
+    relationships = world.get("relationships")
+    if not isinstance(relationships, dict):
+        errors.append(f"{label}.relationships debe ser dict")
+        return
+    for uid, record in relationships.items():
+        where = f"{label}.relationships[{uid}]"
+        if not isinstance(record, dict):
+            errors.append(f"{where} debe ser un objeto")
+            continue
+        stage = record.get("stage", "none")
+        if stage not in ROMANTIC_STAGES:
+            errors.append(f"{where}.stage no es una etapa válida")
+        history = record.get("history", [])
+        if not isinstance(history, list):
+            errors.append(f"{where}.history debe ser una lista")
+            history = []
+        for index, entry in enumerate(history):
+            _validate_history_entry(entry, errors, f"{where}.history[{index}]")
+        pending = record.get("pending_proposal")
+        if pending is not None:
+            _validate_pending(pending, errors, f"{where}.pending_proposal")
+    winner = world.get("winner_id")
+    if winner is not None and not isinstance(winner, (str, int)):
+        errors.append(f"{label}.winner_id debe ser texto o entero")
+
+
+def _validate_history_entry(entry: object, errors: list[str], where: str) -> None:
+    if not isinstance(entry, dict):
+        errors.append(f"{where} debe ser un objeto")
+        return
+    if entry.get("from") not in ROMANTIC_STAGES:
+        errors.append(f"{where}.from no es una etapa válida")
+    if entry.get("to") not in ROMANTIC_STAGES:
+        errors.append(f"{where}.to no es una etapa válida")
+    kind = entry.get("evidence_kind")
+    if kind not in EVIDENCE_KINDS and kind != "legacy":
+        errors.append(f"{where}.evidence_kind no es válida")
+    if not _is_nonempty_str(entry.get("reason")):
+        errors.append(f"{where}.reason no puede estar vacío")
+    if not isinstance(entry.get("evidence_refs"), list):
+        errors.append(f"{where}.evidence_refs debe ser una lista")
+    if "evidence_summary" in entry and not isinstance(
+        entry.get("evidence_summary"), str
+    ):
+        errors.append(f"{where}.evidence_summary debe ser texto")
+
+
+def _validate_pending(pending: object, errors: list[str], where: str) -> None:
+    if not isinstance(pending, dict):
+        errors.append(f"{where} debe ser un objeto o null")
+        return
+    if not _is_nonempty_str(pending.get("target_user_id")):
+        errors.append(f"{where}.target_user_id no puede estar vacío")
+    refs = pending.get("evidence_refs", [])
+    if refs is not None and not isinstance(refs, list):
+        errors.append(f"{where}.evidence_refs debe ser una lista")
+
+
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _check_keys(
