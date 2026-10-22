@@ -15,6 +15,7 @@ from airi.services.state import AppState
 
 log = logging.getLogger(__name__)
 
+
 # Textos de cierre del diario según el desenlace de la cita.
 def _finish_diary_text(event, name, scene):
     if event == "recovered":
@@ -38,7 +39,7 @@ def _finish_diary_text(event, name, scene):
 
 
 class DateService:
-    """Avanza y cierra citas; notifica vía el Notifier (no conoce Discord)."""
+    """Avanza y cierra citas; los avisos se pueden diferir al commit."""
 
     def __init__(self, *, state: AppState, notifier=None, clock=None):
         self.state = state
@@ -54,7 +55,7 @@ class DateService:
 
         return _time.time()
 
-    async def process_turn(
+    def advance(
         self,
         session,
         *,
@@ -68,10 +69,7 @@ class DateService:
         now=None,
         question=None,
     ):
-        """Avanza un turno de la cita, comunica el resultado y cierra si toca.
-
-        Devuelve el evento del turno (ver airi.domain.dates.step_date).
-        """
+        """Avanza la cita sin enviar avisos. Devuelve `(evento, avisos)`."""
         now = self._now(now)
         uid = str(user.id)
         end_keyword = any(kw in text.lower() for kw in DATE_END_KEYWORDS)
@@ -100,28 +98,39 @@ class DateService:
                 self.state.apply_affinity(user.id, recovered, now=now)
                 log.info("La cita con %s se reconduce: +%d de afinidad", uid, recovered)
 
+        notices = []
         if event == "crisis":
-            if self.notifier is not None:
-                await self.notifier.send(DATE_CRISIS_TEXT)
             self.state.save_dates()
-            return event
+            notices.append(DATE_CRISIS_TEXT)
+            return event, notices
 
         if event == "continue":
             self.state.save_dates()
-            return event
+            return event, notices
 
         # La pregunta decisiva: la cita sigue abierta, solo se publica la
         # pregunta con sus botones.
         if event == "question":
             self.state.save_dates()
-            return event
+            return event, notices
 
         # Eventos que cierran la cita: recovered / partial_recovery /
         # failed_last_chance / ending.
-        if self.notifier is not None:
-            await self.notifier.send(date_final_text(event))
         self.finish_date(user.id, session, event, now=now)
+        notices.append(date_final_text(event))
+        return event, notices
+
+    async def process_turn(self, *args, **kwargs):
+        """Compatibilidad: avanza y envía los avisos inmediatamente."""
+        event, notices = self.advance(*args, **kwargs)
+        if self.notifier is not None:
+            for notice in notices:
+                await self.notifier.send(notice)
         return event
+
+    def process_turn_deferred(self, *args, **kwargs):
+        """Avanza y devuelve los avisos para publicarlos tras el commit."""
+        return self.advance(*args, **kwargs)
 
     def finish_date(self, user_id, session, event, *, now):
         """Cierra la cita: registra el resultado en el diario y la elimina."""

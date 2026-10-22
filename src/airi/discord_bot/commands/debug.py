@@ -30,6 +30,7 @@ DEBUG_USAGE = (
     "• `!debug id <cid>` — JSON del evento con ese correlation_id.\n"
     "• `!debug errores` — eventos recientes con errores.\n"
     "• `!debug clear` — vacía el ring de eventos en memoria.\n"
+    "• `!debug estado` — diagnóstico seguro del almacén.\n"
     "• `!debug turno` — resumen de tu último turno.\n"
     "• `!debug trace` — JSON de tu último turno."
 )
@@ -116,6 +117,32 @@ async def handle(ctx, message):
             f"Ring de eventos vaciado ({n} eventos). El disco no se toca.",
             mention_author=False,
         )
+        return
+
+    if sub == "estado":
+        info = ctx.storage_info if isinstance(ctx.storage_info, dict) else {}
+        if not info:
+            await message.reply(
+                "No hay diagnóstico de almacenamiento disponible.",
+                mention_author=False,
+            )
+            return
+        lines = [
+            f"ruta: `{info.get('path', '-')}`",
+            f"schema_version: {info.get('schema_version', '-')}",
+            f"state_version: {info.get('state_version', '-')}",
+            f"recuperado: {'sí' if info.get('recovered') else 'no'}",
+            f"migración: {info.get('migration') or 'ninguna'}",
+            f"publicaciones pendientes: {info.get('pending_publications', 0)}",
+        ]
+        quarantine = info.get("quarantine_path")
+        if quarantine:
+            lines.append(f"cuarentena: `{quarantine}`")
+        embed = discord.Embed(
+            title="🗄️ Estado persistente",
+            description="\n".join(lines)[:4000],
+        )
+        await message.channel.send(embed=embed)
         return
 
     if sub == "ultimo":

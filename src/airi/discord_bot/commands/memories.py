@@ -1,6 +1,7 @@
 """Comandos !memorias y !olvidar."""
 
 from airi.discord_bot import embeds
+from airi.discord_bot.persistence import async_state_transaction
 from airi.domain import diary as domain_diary
 from airi.domain import memories as domain_memories
 
@@ -30,11 +31,12 @@ async def handle_olvidar(ctx, message):
         return
     arg = parts[1].strip().lower()
     if arg == "todo":
-        if domain_memories.forget_memory(state.memories, uid):
-            state.save_memories()
-        removed = domain_diary.purge_user_diary(state.diary, uid)
-        if removed:
-            state.save_diary()
+        async with async_state_transaction(ctx):
+            if domain_memories.forget_memory(state.memories, uid):
+                state.save_memories()
+            removed = domain_diary.purge_user_diary(state.diary, uid)
+            if removed:
+                state.save_diary()
         await message.reply(
             "Listo... ¡olvidado todo! (memorias y diario) Empezamos de cero~",
             mention_author=False,

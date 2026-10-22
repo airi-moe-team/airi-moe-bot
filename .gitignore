@@ -28,3 +28,15 @@ venv/
 
 # Transient stuff
 .traces/
+traces/
+
+# Airi operational state (personal data and recovery artifacts)
+data/state.json
+data/state.json.bak
+data/state.json.tmp
+data/state.json.bak.tmp
+data/migration.json
+data/.airi.lock
+data/backups/
+data/quarantine/
+data/archive/

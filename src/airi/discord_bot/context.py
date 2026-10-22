@@ -12,7 +12,7 @@ añaden los "pegamentos" que resuelven globales de `bot.py` en tiempo de llamada
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from airi.services.state import AppState
@@ -40,10 +40,16 @@ class BotContext:
     request_timeout: int = 300
     llama_url: str = "http://127.0.0.1:8081"
     # Observabilidad (Fase 5): si `trace_dir` está definido, cada turno se
-    # guarda en `TRACE_DIR/YYYY-MM-DD/<cid>.json`. `trace_keep_raw=False`
-    # omite la respuesta cruda (la traza deja de ser reproducible).
+    # guarda en `TRACE_DIR/YYYY-MM-DD/<cid>.json`.
     trace_dir: str = ""
-    trace_keep_raw: bool = True
+    # Diagnóstico seguro del almacén (sin datos privados).
+    storage_info: dict = field(default_factory=dict)
+    # Servicios de persistencia/archivo disponibles en producción.
+    persistence: Any = None
+    season_archiver: Any = None
+    retention: Any = None
+    turn_journal: Any = None
+    commit_lock: Any = None
 
     build_service: Callable[..., Any] = _noop
     settle_relationship: Callable[..., Any] = _anoop
@@ -67,6 +73,9 @@ class BotContext:
     apply_question_result: Callable[..., Any] = _noop
     expire_question: Callable[..., Any] = _noop
     log_diary_event: Callable[..., Any] = _noop_bool
+    # Cierre global solicitado por Airi (None/False fuera de producción).
+    request_shutdown: Callable[..., Any] = _anoop
+    is_shutting_down: Callable[[], bool] = lambda: False
 
     def remember_trace(self, trace):
         """Persiste la traza en el TraceStore compartido (cross-message)."""

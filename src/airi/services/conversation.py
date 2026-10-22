@@ -33,12 +33,14 @@ from airi.domain.llm_output import (
     assistant_history_content,
     parse_model_output,
 )
+from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.prompts import SEARCH_QUERY_PROMPT
 from airi.domain.text_filters import (
     clean_reply,
     remove_repeated_previous_reply,
     strip_repetition_loop,
 )
+from airi.domain.turn_guard import DateFingerprint, fingerprint_of
 from airi.domain.web import needs_web_search
 from airi.logging_setup import (
     get_logger,
@@ -68,6 +70,20 @@ GROUNDED_FALLBACK_TEXT = (
 )
 
 MEMORY_SAVED_NOTICE = "Airi recordará este evento"
+
+DISCONNECT_REPAIR_PROMPT = (
+    "Tu respuesta anterior no fue coherente con tu decisión de marcharte. "
+    "Devuelve de nuevo el objeto JSON completo: si en \"reply\" dices que te "
+    "vas, que te duermes o que te desconectas, \"disconnect.leave\" debe ser "
+    "true con un motivo breve; si te quedas, \"leave\" debe ser false y no "
+    "debes despedirte como si te fueras. No añadas texto fuera del JSON."
+)
+
+
+def _read_only_memories(memories, user_id) -> list:
+    """Vista de memorias que no crea una entrada vacía durante la generación."""
+    entries = memories.get(str(user_id)) if isinstance(memories, dict) else None
+    return list(entries) if isinstance(entries, list) else []
 
 
 @dataclass
@@ -105,9 +121,32 @@ class TurnResult:
     web_context: str | None = None
     memory_saved: bool = False
     diary_saved: bool = False
+    disconnect_reason: str | None = None
     history: list = field(default_factory=list)
+    notices: list = field(default_factory=list)
     skipped: bool = False
     trace: TurnEvent | None = None
+
+
+@dataclass
+class TurnDraft:
+    """Resultado de la generación, sin mutaciones de dominio."""
+
+    user: object
+    messages: tuple
+    context: TurnContext
+    history: list
+    date_fingerprint: DateFingerprint | None
+    season: int
+    now: float
+    output: ModelOutput
+    answer: str
+    gif_bytes: bytes | None
+    web_context: str | None
+    grounded: bool
+    timings: dict
+    trace: TurnEvent
+    skipped: bool = False
 
 
 class ConversationService:
@@ -141,8 +180,8 @@ class ConversationService:
         # Almacén de eventos: por defecto el del AppState.
         self.traces = traces if traces is not None else getattr(state, "traces", None)
 
-    async def run_turn(self, user, messages, ctx: TurnContext) -> TurnResult:
-        """Procesa un turno (lista de `(user_obj, texto)` ya unida)."""
+    async def generate_turn(self, user, messages, ctx: TurnContext) -> TurnDraft:
+        """Genera una respuesta sin mutar el estado de dominio."""
         import time as _time
 
         cid = ctx.correlation_id or uuid.uuid4().hex[:12]
@@ -180,10 +219,7 @@ class ConversationService:
             ev.date_turns_before = (
                 int(_sess0.get("turns", 0) or 0) if isinstance(_sess0, dict) else 0
             )
-            ev.affinity_before = entry_points(self.state.affinity_entry(uid))
-
-            for who, _part in messages:
-                self._register_user(who, now)
+            ev.affinity_before = entry_points(self.state.affinity.get(str(uid)))
 
             # Durante una cita el historial es privado de esa cita; fuera de
             # ella se usa el historial público del canal.
@@ -258,12 +294,23 @@ class ConversationService:
                 log.info("Se omitió una respuesta duplicada sin contenido nuevo.")
                 ev.skipped = True
                 ev.timings_ms = timings
-                return TurnResult(
-                    skipped=True,
-                    in_date=in_date,
-                    web_context=web_context,
+                ev.finish()
+                return TurnDraft(
+                    user=user,
+                    messages=tuple(messages),
+                    context=ctx,
                     history=history,
+                    date_fingerprint=fingerprint_of(date_session),
+                    season=int(self.state.world.get("season", 1) or 1),
+                    now=now,
+                    output=output,
+                    answer="",
+                    gif_bytes=None,
+                    web_context=web_context,
+                    grounded=True,
+                    timings=timings,
                     trace=ev,
+                    skipped=True,
                 )
 
             # Filtro anti-alucinación antes de publicar.
@@ -279,120 +326,35 @@ class ConversationService:
                 )
                 grounded = False
             ev.grounded = grounded
-
-            # Motor de afinidad juzgado por la IA (con decay por inactividad).
-            # El tope ya se aplicó al parsear; aquí se reusa para persistir.
-            entry = self.state.affinity_entry(uid)
-            level_before = affinity_level(entry_points(entry))[0]
-            ev.affinity_delta_requested = output.affinity_delta
-            # Un turno puede NO mover la afinidad (p. ej. la reacción a la
-            # respuesta de la pregunta decisiva: el swing ya lo aplicó el motor).
-            delta_to_apply = output.affinity_delta
-            if ctx.suppress_affinity:
-                if delta_to_apply:
-                    log.info(
-                        "El turno no mueve la afinidad (ya aplicada por el sistema)."
-                    )
-                delta_to_apply = 0
-            applied = self.state.apply_affinity(
-                uid, delta_to_apply, now=now, delta_max=delta_max
-            )
-            points_now = self.state.entry_points(uid)
-            level_after = affinity_level(points_now)[0]
-            leveled_up = level_rank(level_after) > level_rank(level_before)
-            if leveled_up:
-                self.state.log_diary_event(
-                    "level",
-                    user,
-                    f"Empiezo a sentir algo más por {self.state.display_name(uid)}; "
-                    f"nuestra relación ha subido a «{level_after}».",
-                )
-            log.info(
-                "afinidad %+d (aplicado %+d) total=%d (%s→%s)",
-                output.affinity_delta, applied, points_now,
-                level_before, level_after,
-            )
-
-            # El diario solo se escribe en turnos-hito (subida de nivel aquí, o
-            # fin de cita fuera, en DateService).
-            diary_saved = False
-            if leveled_up and output.diary.lower() != "none":
-                diary_saved = self._add_diary_reflection(uid, output.diary, now)
-
-            memory_saved = domain_memories.process_memory_action(
-                self.state.memories, uid, output.memory, now=now
-            )
-            if memory_saved:
-                self.state.save_memories()
-                if self.notifier is not None:
-                    try:
-                        await self.notifier.send(MEMORY_SAVED_NOTICE)
-                    except Exception:
-                        log.warning("No se pudo enviar el aviso de memoria guardada")
-
-            history.append({
-                "role": "assistant",
-                "content": assistant_history_content(answer, output),
-                "reply_to_user_id": str(uid),
-                "reply_to_user_name": getattr(user, "display_name", None),
-            })
-            if in_date and isinstance(date_session, dict):
-                date_session["history"] = history[-DATE_HISTORY_MAX:]
-                self.state.save_dates()
-            else:
-                self.state.histories[ctx.channel_id] = history[-self.max_history:]
+            ev.final_reply = answer
+            ev.gif = output.gif
+            ev.web_context = web_context
 
             gif_bytes = None
             if output.gif != "none" and self.gifs is not None:
                 gif_bytes = await self.gifs.fetch(output.gif)
-
-            ev.final_reply = answer
-            ev.gif = output.gif
             ev.gif_sent = gif_bytes is not None
             ev.gif_fetched = gif_bytes is not None
-            ev.memory_saved = output.memory if memory_saved else None
-            ev.diary_saved = output.diary if diary_saved else None
-            ev.affinity_after = points_now
-            ev.affinity_applied = applied
-            ev.affinity_event = output.affinity_event
-            ev.level_before = level_before
-            ev.level_after = level_after
-            ev.leveled_up = leveled_up
-            ev.date_decision = output.date_decision
-            ev.date_turns_after = (
-                int(date_session.get("turns", 0) or 0)
-                if in_date and isinstance(date_session, dict) else 0
-            )
+            ev.affinity_delta_requested = output.affinity_delta
             ev.timings_ms = timings
-            result = TurnResult(
-                reply=answer,
-                gif=output.gif,
-                gif_bytes=gif_bytes,
-                memory_action=output.memory,
-                diary_action=output.diary,
-                affinity_delta=output.affinity_delta,
-                affinity_applied=applied,
-                affinity_event=output.affinity_event,
-                level_before=level_before,
-                level_after=level_after,
-                leveled_up=leveled_up,
-                in_date=in_date,
-                date_decision=output.date_decision,
-                date_reason=output.date_reason,
-                last_chance_result=output.last_chance_result,
-                date_question=output.date_question if in_date else None,
-                grounded=grounded,
-                web_context=web_context,
-                memory_saved=memory_saved,
-                diary_saved=diary_saved,
+            ev.finish()
+
+            return TurnDraft(
+                user=user,
+                messages=tuple(messages),
+                context=ctx,
                 history=history,
+                date_fingerprint=fingerprint_of(date_session),
+                season=int(self.state.world.get("season", 1) or 1),
+                now=now,
+                output=output,
+                answer=answer,
+                gif_bytes=gif_bytes,
+                web_context=web_context,
+                grounded=grounded,
+                timings=timings,
                 trace=ev,
             )
-            log.info(
-                "turno ok reply=%d chars gif=%s grounded=%s",
-                len(answer), output.gif, grounded,
-            )
-            return result
         except Exception as exc:
             ev.errors.append({
                 "type": type(exc).__name__,
@@ -400,13 +362,160 @@ class ConversationService:
                 "tb": traceback.format_exc(),
             })
             ev.error = str(exc)
+            ev.finish()
+            await self._save_trace(ev)
+            self._emit_trace(ctx, ev)
             raise
         finally:
-            ev.finish()
-            if self.traces is not None:
-                await self.traces.save(ev)
-            self._emit_trace(ctx, ev)
             reset_correlation_id(token)
+
+    def apply_turn(self, draft: TurnDraft) -> TurnResult:
+        """Aplica las mutaciones de un borrador ya validado (síncrono)."""
+        ev = draft.trace
+        if draft.skipped:
+            # El registro del interlocutor sí ocurre aunque la respuesta se
+            # omita por ser duplicada.
+            for who, _part in draft.messages:
+                self._register_user(who, draft.now)
+            return TurnResult(
+                skipped=True,
+                in_date=draft.date_fingerprint is not None,
+                web_context=draft.web_context,
+                history=list(draft.history),
+                trace=ev,
+            )
+
+        for who, _part in draft.messages:
+            self._register_user(who, draft.now)
+
+        uid = draft.user.id
+        date_session = self.state.dates.get(str(uid))
+        in_date = draft.date_fingerprint is not None and isinstance(date_session, dict)
+        entry = self.state.affinity_entry(uid)
+        level_before = affinity_level(entry_points(entry))[0]
+        output = draft.output
+        disconnect_reason = (
+            output.disconnect.get("reason") if output.disconnect else None
+        )
+
+        delta_to_apply = output.affinity_delta
+        if draft.context.suppress_affinity:
+            if delta_to_apply:
+                log.info("El turno no mueve la afinidad (ya aplicada por el sistema).")
+            delta_to_apply = 0
+        delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
+        applied = self.state.apply_affinity(
+            uid, delta_to_apply, now=draft.now, delta_max=delta_max
+        )
+        points_now = self.state.entry_points(uid)
+        level_after = affinity_level(points_now)[0]
+        leveled_up = level_rank(level_after) > level_rank(level_before)
+        if leveled_up:
+            self.state.log_diary_event(
+                "level",
+                draft.user,
+                f"Empiezo a sentir algo más por {self.state.display_name(uid)}; "
+                f"nuestra relación ha subido a «{level_after}».",
+            )
+        log.info(
+            "afinidad %+d (aplicado %+d) total=%d (%s→%s)",
+            output.affinity_delta, applied, points_now, level_before, level_after,
+        )
+
+        diary_saved = False
+        if leveled_up and output.diary.lower() != "none":
+            diary_saved = self._add_diary_reflection(uid, output.diary, draft.now)
+
+        memory_saved = domain_memories.process_memory_action(
+            self.state.memories, uid, output.memory, now=draft.now
+        )
+        notices = []
+        if memory_saved:
+            self.state.save_memories()
+            notices.append(MEMORY_SAVED_NOTICE)
+
+        history = list(draft.history)
+        history.append({
+            "role": "assistant",
+            "content": assistant_history_content(draft.answer, output),
+            "reply_to_user_id": str(uid),
+            "reply_to_user_name": getattr(draft.user, "display_name", None),
+        })
+        if in_date and isinstance(date_session, dict):
+            date_session["history"] = history[-DATE_HISTORY_MAX:]
+            self.state.save_dates()
+        else:
+            self.state.histories[draft.context.channel_id] = history[-self.max_history:]
+            self.state.save_state()
+
+        ev.affinity_after = points_now
+        ev.affinity_applied = applied
+        ev.affinity_event = output.affinity_event
+        ev.level_before = level_before
+        ev.level_after = level_after
+        ev.leveled_up = leveled_up
+        ev.memory_saved = output.memory if memory_saved else None
+        ev.diary_saved = output.diary if diary_saved else None
+        ev.date_decision = output.date_decision
+        ev.date_reason = output.date_reason
+        ev.date_turns_after = (
+            int(date_session.get("turns", 0) or 0)
+            if in_date and isinstance(date_session, dict) else 0
+        )
+        ev.timings_ms = draft.timings
+
+        return TurnResult(
+            reply=draft.answer,
+            gif=output.gif,
+            gif_bytes=draft.gif_bytes,
+            memory_action=output.memory,
+            diary_action=output.diary,
+            affinity_delta=output.affinity_delta,
+            affinity_applied=applied,
+            affinity_event=output.affinity_event,
+            level_before=level_before,
+            level_after=level_after,
+            leveled_up=leveled_up,
+            in_date=in_date,
+            date_decision=output.date_decision,
+            date_reason=output.date_reason,
+            last_chance_result=output.last_chance_result,
+            date_question=output.date_question if in_date else None,
+            grounded=draft.grounded,
+            web_context=draft.web_context,
+            memory_saved=memory_saved,
+            diary_saved=diary_saved,
+            disconnect_reason=disconnect_reason,
+            history=history,
+            notices=notices,
+            trace=ev,
+        )
+
+    async def run_turn(self, user, messages, ctx: TurnContext) -> TurnResult:
+        """Compatibilidad: generar, aplicar y publicar avisos post-commit."""
+        draft = await self.generate_turn(user, messages, ctx)
+        try:
+            result = self.apply_turn(draft)
+        except Exception:
+            await self._save_trace(draft.trace)
+            self._emit_trace(ctx, draft.trace)
+            raise
+        await self.finish_trace(ctx, result.trace)
+        for notice in result.notices:
+            if self.notifier is not None:
+                try:
+                    await self.notifier.send(notice)
+                except Exception:
+                    log.warning("No se pudo enviar el aviso post-turno")
+        return result
+
+    async def _save_trace(self, trace: TurnEvent) -> None:
+        if self.traces is not None:
+            await self.traces.save(trace)
+
+    async def finish_trace(self, ctx: TurnContext, trace: TurnEvent) -> None:
+        await self._save_trace(trace)
+        self._emit_trace(ctx, trace)
 
     # ------------------------------------------------------------------
 
@@ -438,7 +547,9 @@ class ConversationService:
             domain_prompts.date_context_section(
                 date_session if isinstance(date_session, dict) else None
             ),
-            domain_prompts.memories_prompt_section(state.user_memories(user.id)),
+            domain_prompts.memories_prompt_section(
+                _read_only_memories(state.memories, user.id)
+            ),
             domain_prompts.known_users_prompt_section(
                 state.users,
                 state.diary,
@@ -482,6 +593,45 @@ class ConversationService:
             raw = await self.llm.chat(messages, schema=RESPONSE_SCHEMA)
             meta = LLMMeta()
         output = parse_model_output(raw, delta_max=delta_max)
+        problem = disconnect_claim_problem(
+            output.reply or "", bool(output.disconnect)
+        )
+        if problem:
+            log.warning("Salida incoherente sobre la marcha: %s", problem)
+            repair_messages = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": f"{DISCONNECT_REPAIR_PROMPT}\n\nProblema: {problem}",
+                },
+            ]
+            try:
+                if hasattr(self.llm, "chat_with_meta"):
+                    try:
+                        repaired_raw, repaired_meta = await self.llm.chat_with_meta(
+                            repair_messages,
+                            schema=RESPONSE_SCHEMA,
+                            strict_schema=True,
+                        )
+                    except Exception:
+                        repaired_raw, repaired_meta = await self.llm.chat_with_meta(
+                            repair_messages, schema=RESPONSE_SCHEMA
+                        )
+                else:
+                    repaired_raw = await self.llm.chat(
+                        repair_messages, schema=RESPONSE_SCHEMA
+                    )
+                    repaired_meta = LLMMeta()
+                repaired = parse_model_output(repaired_raw, delta_max=delta_max)
+                if not disconnect_claim_problem(
+                    repaired.reply or "", bool(repaired.disconnect)
+                ):
+                    raw = repaired_raw
+                    meta = repaired_meta
+                    output = repaired
+            except Exception:
+                log.warning("No se pudo reparar la coherencia de la marcha")
+
         if not output.reply:
             return (
                 system_prompt,

@@ -17,6 +17,10 @@ from dataclasses import dataclass
 from airi.domain.constants import env_int
 
 DEFAULT_TRACE_KEEP_LAST = 500
+DEFAULT_BACKUP_RETENTION = 5
+DEFAULT_SEASON_RETENTION = 3
+DEFAULT_PUBLISH_TTL_SECONDS = 900
+DEFAULT_TURN_RETENTION_SECONDS = 7 * 24 * 3600
 
 
 def _env_first(*names, default=""):
@@ -38,6 +42,21 @@ class Settings:
     trace_dir: str = ""
     # Tamaño del ring buffer en memoria (eventos inspeccionables con !debug).
     trace_keep_last: int = DEFAULT_TRACE_KEEP_LAST
+    # Retención de copias y archivos de temporada.
+    backup_retention: int = DEFAULT_BACKUP_RETENTION
+    season_retention: int = DEFAULT_SEASON_RETENTION
+    # Vigencia de una respuesta confirmada pendiente de publicar.
+    publish_ttl_seconds: int = DEFAULT_PUBLISH_TTL_SECONDS
+    # Tiempo que se conserva un registro de turno ya resuelto.
+    turn_retention_seconds: int = DEFAULT_TURN_RETENTION_SECONDS
+
+    @property
+    def state_path(self) -> str:
+        return os.path.join(self.data_dir, "state.json")
+
+    @property
+    def lock_path(self) -> str:
+        return os.path.join(self.data_dir, ".airi.lock")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -48,5 +67,17 @@ class Settings:
             trace_keep_last=env_int(
                 "AIRI_TRACE_KEEP_LAST",
                 env_int("TRACE_KEEP_LAST", DEFAULT_TRACE_KEEP_LAST),
+            ),
+            backup_retention=env_int(
+                "AIRI_BACKUP_RETENTION", DEFAULT_BACKUP_RETENTION
+            ),
+            season_retention=env_int(
+                "AIRI_SEASON_RETENTION", DEFAULT_SEASON_RETENTION
+            ),
+            publish_ttl_seconds=env_int(
+                "AIRI_PUBLISH_TTL_SECONDS", DEFAULT_PUBLISH_TTL_SECONDS
+            ),
+            turn_retention_seconds=env_int(
+                "AIRI_TURN_RETENTION_SECONDS", DEFAULT_TURN_RETENTION_SECONDS
             ),
         )

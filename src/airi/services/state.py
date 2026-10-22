@@ -43,6 +43,10 @@ class AppState:
     diary: list = field(default_factory=list)
     users: dict = field(default_factory=dict)
     histories: dict = field(default_factory=dict)
+    turn_records: dict = field(default_factory=dict)
+    message_index: dict = field(default_factory=dict)
+    archive: dict = field(default_factory=dict)
+    state_version: int = 0
 
     save_affinity: Callable[[], None] = _noop
     save_world: Callable[[], None] = _noop
@@ -50,6 +54,8 @@ class AppState:
     save_memories: Callable[[], None] = _noop
     save_diary: Callable[[], None] = _noop
     save_users: Callable[[], None] = _noop
+    # Persistencia genérica (historiales y cambios que no tienen callback propio).
+    save_state: Callable[[], None] = _noop
     # Hook opcional para aplicar afinidad vía la fachada externa (bot.py),
     # de modo que se mantengan sus logs y sea monkeypatchable en tests.
     apply_affinity_fn: Callable[..., int] | None = None

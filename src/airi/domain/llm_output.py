@@ -17,6 +17,7 @@ from airi.domain.constants import (
     LAST_CHANCE_RESULTS,
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES
+from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.text_filters import clean_reply
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,8 @@ class ModelOutput(NamedTuple):
     last_chance_result: str
     date_question: object = None
     affinity_event: str = "none"
+    # Desconexión voluntaria: {"leave": True, "reason": str} o None.
+    disconnect: object = None
 
 
 def _model_output(
@@ -85,10 +88,11 @@ def _model_output(
     last_chance="none",
     question=None,
     event="none",
+    disconnect=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
-        question, event,
+        question, event, disconnect,
     )
 
 
@@ -113,6 +117,7 @@ def assistant_history_content(answer, output=None):
             "date_reason": "none",
             "last_chance_result": "none",
             "date_question": {"text": "", "options": []},
+            "disconnect": {"leave": False, "reason": ""},
         }
     else:
         payload = {
@@ -133,6 +138,8 @@ def assistant_history_content(answer, output=None):
                 getattr(output, "date_question", None)
                 or {"text": "", "options": []}
             ),
+            # Marcharse es una acción única: en el historial se neutraliza.
+            "disconnect": {"leave": False, "reason": ""},
         }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -206,6 +213,26 @@ def parse_scene_list(raw_scenes):
         if len(scenes) >= DATE_SCENE_MAX:
             break
     return scenes
+
+
+def parse_disconnect(raw_disconnect):
+    """Normaliza la decisión de marcharse propuesta por el modelo.
+
+    Solo se acepta si `leave` es verdadero y hay un motivo no vacío. La
+    decisión contextual la toma el modelo; no hay candado por afinidad.
+    """
+    if not isinstance(raw_disconnect, dict):
+        return None
+    leave = raw_disconnect.get("leave")
+    if isinstance(leave, str):
+        leave = leave.strip().lower() in ("true", "1", "yes", "sí", "si")
+    if not leave:
+        return None
+    reason = raw_disconnect.get("reason")
+    reason = reason.strip()[:300] if isinstance(reason, str) else ""
+    if not reason:
+        return None
+    return {"leave": True, "reason": reason}
 
 
 def parse_model_output(raw_output, delta_max=None):
@@ -287,6 +314,17 @@ def parse_model_output(raw_output, delta_max=None):
         last_chance_result = "none"
     # [CAMBIO] Citas: la pregunta decisiva (una sola vez por cita).
     date_question = parse_date_question(parsed.get("date_question"))
+    # Marcharse: decisión contextual y excepcional de Airi.
+    disconnect = parse_disconnect(parsed.get("disconnect"))
+    claim_problem = disconnect_claim_problem(
+        reply, bool(disconnect and disconnect.get("leave"))
+    )
+    if claim_problem:
+        # No se apaga el bot si el texto y la decisión no coinciden. La capa
+        # de generación puede pedir una reparación; aquí se descarta la parte
+        # insegura para no fingir una marcha.
+        log.warning("Salida incoherente sobre la marcha: %s", claim_problem)
+        disconnect = None
     reply = clean_reply(reply)
     if not reply:
         log.warning("La respuesta quedó vacía después de limpiarla")
@@ -294,7 +332,7 @@ def parse_model_output(raw_output, delta_max=None):
     return ModelOutput(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
-        affinity_event,
+        affinity_event, disconnect,
     )
 
 # Esquema JSON que la respuesta del modelo debe cumplir.
@@ -342,6 +380,15 @@ RESPONSE_SCHEMA = {
             "required": ["text", "options"],
             "additionalProperties": False,
         },
+        "disconnect": {
+            "type": "object",
+            "properties": {
+                "leave": {"type": "boolean"},
+                "reason": {"type": "string"},
+            },
+            "required": ["leave", "reason"],
+            "additionalProperties": False,
+        },
     },
     # Modo estricto (json_schema): TODAS las propiedades deben ir en `required`
     # y `additionalProperties: false` en cada nivel. `parse_model_output` tolera
@@ -357,6 +404,7 @@ RESPONSE_SCHEMA = {
         "date_reason",
         "last_chance_result",
         "date_question",
+        "disconnect",
     ],
     "additionalProperties": False,
 }

@@ -12,12 +12,14 @@ import asyncio
 import logging
 import random
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import discord
 
 from airi.discord_bot import turn
 from airi.domain.constants import DATE_DELTA_MAX
+from airi.services.channel_queue import ChannelDispatcher
 
 log = logging.getLogger(__name__)
 
@@ -50,11 +52,85 @@ class _Debouncer:
         self.seq.pop(key, None)
 
 
-def create_client(*, build_ctx, registry, channel_id):
+def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
     intents = discord.Intents.default()
     intents.message_content = True
     client = discord.Client(intents=intents)
     debounce = _Debouncer()
+    dispatcher = ChannelDispatcher()
+    shutdown = {"started": False, "phase": "running"}
+
+    def _wire_shutdown(ctx):
+        """Conecta la decisión de Airi con el cierre global del cliente."""
+        ctx.is_shutting_down = lambda: bool(shutdown["started"])
+
+        async def request_shutdown(reason, user_id=None):
+            if shutdown["started"]:
+                log.info("Cierre ya en curso; se ignora la solicitud duplicada")
+                return
+            shutdown["started"] = True
+            shutdown["phase"] = "closing"
+            clean_reason = str(reason or "").strip()[:300]
+            log.info("Airi decide desconectarse: %s", clean_reason)
+
+            persistence = getattr(ctx, "persistence", None)
+            if persistence is not None:
+                async with (getattr(ctx, "commit_lock", None) or nullcontext()):
+                    try:
+                        with persistence.transaction():
+                            ctx.state.world["last_shutdown"] = {
+                                "kind": "self",
+                                "reason": clean_reason,
+                                "user_id": (
+                                    str(user_id) if user_id is not None else ""
+                                ),
+                                "status": "closing",
+                            }
+                            ctx.state.save_world()
+                    except Exception:
+                        log.exception("No se pudo guardar el motivo del cierre")
+
+            def record_shutdown_status(status):
+                if persistence is None:
+                    return
+                try:
+                    with persistence.transaction():
+                        entry = ctx.state.world.get("last_shutdown")
+                        if not isinstance(entry, dict):
+                            entry = {"kind": "self", "reason": clean_reason}
+                        entry["status"] = status
+                        ctx.state.world["last_shutdown"] = entry
+                        ctx.state.save_world()
+                except Exception:
+                    log.exception("No se pudo registrar el resultado del cierre")
+
+            async def close_after_reply():
+                # Deja terminar el envío de la despedida antes de cerrar.
+                await asyncio.sleep(0.5)
+                try:
+                    await discord.Client.close(client)
+                except Exception:
+                    log.exception("Discord no pudo cerrar la conexión")
+                    shutdown["phase"] = "failed"
+                    shutdown["started"] = False
+                    record_shutdown_status("failed")
+                    return
+                try:
+                    closed = bool(client.is_closed())
+                except Exception:
+                    closed = True
+                if closed:
+                    shutdown["phase"] = "closed"
+                    record_shutdown_status("confirmed")
+                else:
+                    shutdown["phase"] = "failed"
+                    shutdown["started"] = False
+                    record_shutdown_status("failed")
+                    log.error("El cierre no se confirmó; Airi sigue disponible")
+
+            asyncio.create_task(close_after_reply())
+
+        ctx.request_shutdown = request_shutdown
 
     def _reset_conversation(ctx, ch_id, author_id):
         debounce.reset(ch_id, author_id)
@@ -64,9 +140,16 @@ def create_client(*, build_ctx, registry, channel_id):
     async def on_ready():
         log.info("Bot conectado como %s", client.user)
         log.info("Canal autorizado: %s", channel_id)
+        if on_ready_extra is not None:
+            try:
+                await on_ready_extra(client)
+            except Exception:
+                log.exception("La tarea de arranque posterior falló")
 
     @client.event
     async def on_message(message):
+        if shutdown["started"]:
+            return
         if message.author.bot or message.channel.id != channel_id:
             return
         content = message.content.strip()
@@ -74,6 +157,7 @@ def create_client(*, build_ctx, registry, channel_id):
             return
 
         ctx = build_ctx(message.channel)
+        _wire_shutdown(ctx)
         ctx.reset_conversation = (
             lambda ch_id, author_id: _reset_conversation(ctx, ch_id, author_id)
         )
@@ -103,8 +187,12 @@ def create_client(*, build_ctx, registry, channel_id):
         merged = debounce.pop(key)
         if not merged:
             return
-        await turn.run_user_turn(
-            ctx, message.channel, message.author, merged, reply_target=message
+        await dispatcher.submit(
+            message.channel.id,
+            lambda: turn.run_user_turn(
+                ctx, message.channel, message.author, merged, reply_target=message
+            ),
+            message_ids=[getattr(message, "id", None)],
         )
 
     return client
@@ -287,6 +375,7 @@ def build_date_glue(state, *, llm_url, request_timeout):
         last_chance_result,
         now,
         question=None,
+        defer=False,
     ):
         """Avanza un turno de la cita y cierra si toca.
 
@@ -294,8 +383,10 @@ def build_date_glue(state, *, llm_url, request_timeout):
         lógica vive en `airi.services.date_service.DateService`.
         """
         service = DateService(state=state, notifier=DiscordNotifier(channel))
-        return await service.process_turn(
+        args = (
             date_session,
+        )
+        kwargs = dict(
             user=user,
             text=text,
             delta=delta,
@@ -306,6 +397,9 @@ def build_date_glue(state, *, llm_url, request_timeout):
             now=now,
             question=question,
         )
+        if defer:
+            return service.process_turn_deferred(*args, **kwargs)
+        return await service.process_turn(*args, **kwargs)
 
     def resolve_question(session, option_index):
         """Tira el dado de la alternativa elegida. Devuelve el resultado o None.
@@ -510,7 +604,6 @@ def run_bot(argv=None):
     Construye la aplicación modular hexagonal y ejecuta el cliente de Discord.
     """
     import asyncio
-    import json
     import logging
     import os
     from io import BytesIO
@@ -520,7 +613,12 @@ def run_bot(argv=None):
     from airi.adapters.brave_search import BraveSearchClient
     from airi.adapters.discord_notifier import DiscordNotifier
     from airi.adapters.http_llm import HttpLlmClient
+    from airi.adapters.instance_lock import (
+        InstanceAlreadyRunningError,
+        InstanceLock,
+    )
     from airi.adapters.nekosbest import NekosBestProvider
+    from airi.adapters.state_store import StateStore
     from airi.config import Settings
     from airi.discord_bot import embeds
     from airi.discord_bot import turn as discord_turn
@@ -534,11 +632,17 @@ def run_bot(argv=None):
         maybe_crown_winner,
     )
     from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
+    from airi.domain.state_schema import CURRENT_SCHEMA_VERSION
     from airi.domain.texts import confession_text
     from airi.logging_setup import install_correlation_format
     from airi.observability.trace_store import TraceStore
+    from airi.services.bootstrap import BootstrapError, bootstrap_state
     from airi.services.conversation import ConversationService
-    from airi.services.state import AppState
+    from airi.services.migration import LegacyMigrator
+    from airi.services.publication import PublicationResumer
+    from airi.services.retention import RetentionService
+    from airi.services.season_archive import SeasonArchiver
+    from airi.services.turn_journal import TurnJournal
 
     load_dotenv()
 
@@ -562,83 +666,64 @@ def run_bot(argv=None):
     CONFESS_THRESHOLD = int(os.getenv("CONFESS_THRESHOLD", "100"))
 
     # Datos globales
-    generation_lock = asyncio.Lock()
-    world_data_dir = os.getenv("DATA_DIR", "data")
-    world_file = os.path.join(world_data_dir, "world.json")
-    affinity_file = os.path.join(world_data_dir, "affinity.json")
-    dates_file = os.path.join(world_data_dir, "dates.json")
-    diary_file = os.path.join(world_data_dir, "diary.json")
-    memories_file = os.path.join(world_data_dir, "memories.json")
-    users_file = os.path.join(world_data_dir, "users.json")
+    commit_lock = asyncio.Lock()
 
-    # Cargar datos
-    with open(world_file, "r", encoding="utf-8") as f:
-        world_data = json.load(f)
-    with open(affinity_file, "r", encoding="utf-8") as f:
-        affinity_data = json.load(f)
-    with open(dates_file, "r", encoding="utf-8") as f:
-        dates_data = json.load(f)
-    with open(diary_file, "r", encoding="utf-8") as f:
-        diary_data = json.load(f)
-    with open(memories_file, "r", encoding="utf-8") as f:
-        memories_data = json.load(f)
-    with open(users_file, "r", encoding="utf-8") as f:
-        users_data = json.load(f)
-
-    # Persistencia
-    def save_world():
-        with open(world_file, "w", encoding="utf-8") as f:
-            json.dump(world_data, f, indent=2)
-
-    def save_affinity():
-        with open(affinity_file, "w", encoding="utf-8") as f:
-            json.dump(affinity_data, f, indent=2)
-
-    def save_dates():
-        with open(dates_file, "w", encoding="utf-8") as f:
-            json.dump(dates_data, f, indent=2)
-
-    def save_diary():
-        with open(diary_file, "w", encoding="utf-8") as f:
-            json.dump(diary_data, f, indent=2)
-
-    def save_memories():
-        with open(memories_file, "w", encoding="utf-8") as f:
-            json.dump(memories_data, f, indent=2)
-
-    def save_users():
-        with open(users_file, "w", encoding="utf-8") as f:
-            json.dump(users_data, f, indent=2)
-
-    # Settings
+    # Settings y almacén
     settings = Settings.from_env()
     trace_store = TraceStore(settings.trace_dir, settings.trace_keep_last)
     install_correlation_format()
 
-    # Estado
-    state = AppState(
-        world=world_data,
-        affinity=affinity_data,
-        dates=dates_data,
-        diary=diary_data,
-        memories=memories_data,
-        users=users_data,
-        save_world=save_world,
-        save_affinity=save_affinity,
-        save_dates=save_dates,
-        save_diary=save_diary,
-        save_memories=save_memories,
-        save_users=save_users,
-        apply_affinity_fn=lambda uid, delta, now=None, delta_max=None, delta_min=None: (
-            lambda entry: apply_affinity_delta(
-                entry,
-                delta,
-                now or time.time(),
-                delta_max if delta_max is not None else AFFINITY_DELTA_MAX,
-                delta_min if delta_min is not None else AFFINITY_DELTA_MIN,
-            )
-        )(state.affinity_entry(uid)),
-        traces=trace_store,
+    run_lock = InstanceLock(settings.lock_path)
+    try:
+        run_lock.acquire()
+    except InstanceAlreadyRunningError as exc:
+        log.error("%s", exc)
+        return 1
+
+    try:
+        store = StateStore(settings.data_dir)
+        migrator = LegacyMigrator(settings.data_dir, store)
+        boot = bootstrap_state(store=store, migrator=migrator)
+    except BootstrapError as exc:
+        log.error("Estado bloqueado; el bot no puede arrancar: %s", exc)
+        if exc.quarantine_path:
+            log.error("Copia en cuarentena: %s", exc.quarantine_path)
+        run_lock.release()
+        return 1
+
+    state = boot.state
+    persistence = boot.persistence
+    state.traces = trace_store
+    if boot.recovered:
+        log.warning("Estado recuperado desde la copia de seguridad")
+    if boot.migration is not None:
+        log.info(
+            "Migración de datos heredados: %s (origen %s)",
+            boot.migration.status.value,
+            boot.migration.source_hash[:12],
+        )
+
+    state.apply_affinity_fn = lambda uid, delta, now=None, delta_max=None, delta_min=None: (
+        lambda entry: apply_affinity_delta(
+            entry,
+            delta,
+            now or time.time(),
+            delta_max if delta_max is not None else AFFINITY_DELTA_MAX,
+            delta_min if delta_min is not None else AFFINITY_DELTA_MIN,
+        )
+    )(state.affinity_entry(uid))
+
+    # Alias de compatibilidad para el pegamento de citas/coronación.
+    world_data = state.world
+    affinity_data = state.affinity
+    users_data = state.users
+
+    turn_journal = TurnJournal(state, persistence=persistence)
+    season_archiver = SeasonArchiver(settings.data_dir)
+    retention = RetentionService(
+        settings.data_dir,
+        season_limit=settings.season_retention,
+        backup_limit=settings.backup_retention,
     )
 
     # Pegamentos Discord↔dominio (citas, regalos, diario). Ver `build_date_glue`.
@@ -666,17 +751,41 @@ def run_bot(argv=None):
             date_delta_max=DATE_DELTA_MAX,
         )
 
+    def build_storage_info():
+        """Diagnóstico seguro: nunca incluye diario, memorias ni respuestas."""
+        pending = sum(
+            1
+            for record in (state.turn_records or {}).values()
+            if isinstance(record, dict) and record.get("status") == "committed"
+        )
+        return {
+            "path": str(store.active_path),
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "state_version": int(state.state_version),
+            "recovered": bool(boot.recovered),
+            "migration": (
+                boot.migration.status.value if boot.migration is not None else ""
+            ),
+            "pending_publications": pending,
+            "quarantine_path": boot.load.quarantine_path,
+        }
+
     def build_ctx(channel):
         ctx = BotContext(
             channel_id=channel.id,
             state=build_app_state(),
-            lock=generation_lock,
+            lock=commit_lock,
             owner_id=OWNER_ID,
             debounce_seconds=DEBOUNCE_SECONDS,
             request_timeout=REQUEST_TIMEOUT,
             llama_url=LLAMA_URL,
             trace_dir=settings.trace_dir,
-            trace_keep_raw=True,
+            storage_info=build_storage_info(),
+            persistence=boot.persistence,
+            season_archiver=season_archiver,
+            retention=retention,
+            turn_journal=turn_journal,
+            commit_lock=commit_lock,
             build_service=build_conversation_service,
             settle_relationship=settle_relationship,
             process_date_turn=glue.process_date_turn,
@@ -756,17 +865,23 @@ def run_bot(argv=None):
     async def settle_relationship(channel, now, session=None, user=None):
         """Corona al ganador (confesión automática) y bloquea al resto."""
         winner = maybe_crown_winner(world_data, affinity_data, now)
+        async with commit_lock:
+            with persistence.transaction():
+                if winner:
+                    apply_winner_lock(world_data, affinity_data)
+                    state.save_world()
+                    state.save_affinity()
+                    state.log_diary_event(
+                        "confession",
+                        winner,
+                        f"Me he dado cuenta de que quiero estar con "
+                        f"{user_display_name(winner)}. ¡Hoy nos hemos hecho novios!",
+                    )
+                elif world_data.get("winner_id"):
+                    apply_winner_lock(world_data, affinity_data)
+                    state.save_affinity()
         if winner:
-            apply_winner_lock(world_data, affinity_data)
-            save_world()
-            save_affinity()
             await channel.send(confession_text(user_display_name(winner)))
-            state.log_diary_event(
-                "confession",
-                winner,
-                f"Me he dado cuenta de que quiero estar con "
-                f"{user_display_name(winner)}. ¡Hoy nos hemos hecho novios!",
-            )
             log.info("¡Ganador coronado! %s es ahora pareja de Airi", winner)
             if session is not None and user is not None and str(user.id) == str(winner):
                 try:
@@ -774,12 +889,54 @@ def run_bot(argv=None):
                 except Exception:
                     log.exception("No se pudo enviar el GIF de la confesión")
             return winner
-        if world_data.get("winner_id"):
-            apply_winner_lock(world_data, affinity_data)
-            save_affinity()
         return None
 
-    client = create_client(build_ctx=build_ctx, registry=registry, channel_id=CHANNEL_ID)
+    async def resume_pending(discord_client):
+        """Reanuda respuestas confirmadas que no llegaron a publicarse."""
+        channel = discord_client.get_channel(CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await discord_client.fetch_channel(CHANNEL_ID)
+            except Exception:
+                log.exception("No se pudo resolver el canal para reanudar envíos")
+                return
+
+        now = time.time()
+        abandoned = turn_journal.abandon_stale_processing(
+            now=now, ttl=settings.publish_ttl_seconds
+        )
+        if abandoned:
+            log.warning(
+                "Turnos interrumpidos marcados como fallidos: %d", abandoned
+            )
+        try:
+            turn_journal.prune(
+                now=now, retain_seconds=settings.turn_retention_seconds
+            )
+        except Exception:
+            log.exception("No se pudo podar el registro de turnos")
+
+        async def publish(record):
+            text = record.reply_text or ""
+            while text:
+                await channel.send(text[:2000])
+                text = text[2000:]
+
+        resumer = PublicationResumer(
+            turn_journal,
+            ttl=settings.publish_ttl_seconds,
+            clock=time.time,
+        )
+        published = await resumer.resume(publish)
+        if published:
+            log.info("Respuestas pendientes republicadas: %d", published)
+
+    client = create_client(
+        build_ctx=build_ctx,
+        registry=registry,
+        channel_id=CHANNEL_ID,
+        on_ready_extra=resume_pending,
+    )
 
     def log_startup():
         log.info("API local: %s", LLAMA_URL)
@@ -802,4 +959,7 @@ def run_bot(argv=None):
             log.warning("Define BRAVE_API_KEY en .env para habilitar la búsqueda web.")
 
     log_startup()
-    client.run(TOKEN)
+    try:
+        client.run(TOKEN)
+    finally:
+        run_lock.release()

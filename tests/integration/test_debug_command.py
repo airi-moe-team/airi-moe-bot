@@ -286,6 +286,40 @@ def test_debug_clear_empties_ring():
     assert len(ctx.state.traces) == 0
 
 
+def test_debug_estado_shows_storage_info_without_private_data():
+    ctx = make_ctx()
+    ctx.storage_info = {
+        "path": "data/state.json",
+        "schema_version": 1,
+        "state_version": 4,
+        "recovered": False,
+        "migration": "migrated",
+        "pending_publications": 2,
+        "quarantine_path": "",
+    }
+    channel = FakeChannel()
+    msg = FakeMessage("!debug estado", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    _kind, embed = channel.files[0]
+    assert "state.json" in embed.description
+    assert "state_version: 4" in embed.description
+    assert "migrated" in embed.description
+    assert "pendientes: 2" in embed.description
+    assert "recuerdo" not in embed.description
+
+
+def test_debug_estado_without_storage_info_replies_safely():
+    ctx = make_ctx()
+    channel = FakeChannel()
+    msg = FakeMessage("!debug estado", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    assert "diagnóstico" in msg.replies[0].lower()
+
+
 def test_debug_unknown_subcommand_shows_usage():
     ctx = make_ctx()
     channel = FakeChannel()

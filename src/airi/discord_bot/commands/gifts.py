@@ -4,6 +4,7 @@ import time
 
 import aiohttp
 
+from airi.discord_bot.persistence import async_state_transaction
 from airi.domain.constants import CONFESS_THRESHOLD, GIFT_COOLDOWN, MAX_RECENT_GIFTS
 from airi.domain.gifts import GIFTS, gift_effect
 from airi.domain.texts import gift_reaction
@@ -58,13 +59,6 @@ async def handle(ctx, message):
             reaction, effect, gift_reason = judged
             if not reaction:
                 reaction = gift_reaction(item, effect)
-        state.apply_affinity(uid, effect, now=now)
-        entry["last_gift"] = now
-        entry["gifts"] = ([item] + [g for g in recent if g != item])[
-            :MAX_RECENT_GIFTS
-        ]
-        state.save_affinity()
-        await message.channel.send(reaction)
         name = state.display_name(uid)
         if gift_reason and gift_reason.lower() not in ("none", "ninguno", "null"):
             gift_note = f"{name} me ha regalado {item}. {gift_reason}"
@@ -79,7 +73,15 @@ async def handle(ctx, message):
             gift_note = (
                 f"{name} me ha regalado {item}. Es el detalle lo que cuenta."
             )
-        ctx.log_diary_event("gift", message.author, gift_note)
+        async with async_state_transaction(ctx):
+            state.apply_affinity(uid, effect, now=now)
+            entry["last_gift"] = now
+            entry["gifts"] = ([item] + [g for g in recent if g != item])[
+                :MAX_RECENT_GIFTS
+            ]
+            state.save_affinity()
+            ctx.log_diary_event("gift", message.author, gift_note)
+        await message.channel.send(reaction)
         if state.entry_points(uid) >= CONFESS_THRESHOLD:
             await ctx.settle_relationship(
                 message.channel, now, session=session, user=message.author
