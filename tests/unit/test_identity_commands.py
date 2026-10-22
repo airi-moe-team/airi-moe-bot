@@ -46,6 +46,19 @@ def test_yo_shows_current_identity_embed():
     assert "Mis rasgos" in embed.description
 
 
+def test_yo_does_not_show_private_notes():
+    ctx = make_ctx()
+    ctx.state.self_model()
+    ctx.state.add_self_note(
+        "La confianza que comparto con KOKODA me hace crecer", now=10.0
+    )
+    message = FakeMessage("!yo")
+    run(identity.handle_yo(ctx, message))
+    embed = message.channel.sent[0][1]["embed"]
+    assert "KOKODA" not in embed.description
+    assert "Mis rasgos" in embed.description
+
+
 def test_yo_historia_without_changes():
     ctx = make_ctx()
     message = FakeMessage("!yo historia")

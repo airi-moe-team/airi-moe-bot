@@ -109,6 +109,50 @@ def test_reset_clears_affinity_memories_diary_dates_and_histories():
     assert state.world["relationship_started_at"] is None
 
 
+def test_reset_forgets_self_notes_but_keeps_identity_traits_and_tastes():
+    state, _ = make_state(
+        world={
+            "season": 2,
+            "self": {
+                "self_concept": "Todavía me estoy descubriendo",
+                "traits": {"juguetona": 5, "curiosa": 4},
+                "values": ["honestidad"],
+                "tastes": {"loves": ["videojuegos"], "dislikes": ["grosero"]},
+                "discoveries": [
+                    {"ts": 1.0, "text": "Confío en KOKODA", "source": "reflection"}
+                ],
+                "history": [
+                    {
+                        "ts": 2.0,
+                        "key": "traits.curiosa",
+                        "op": "inc",
+                        "from": 3,
+                        "to": 4,
+                        "reason": "KOKODA me animó",
+                        "evidence": "me animó",
+                    }
+                ],
+            },
+            "self_notes": [
+                {"ts": 1.0, "text": "Confío en KOKODA", "source": "reflection"}
+            ],
+        }
+    )
+    ctx = _ctx(state)
+    message = FakeMessage(FakeAuthor(1), FakeChannel())
+
+    run(season.handle(ctx, message))
+
+    model = state.world["self"]
+    assert "discoveries" not in model
+    assert model["history"] == []
+    assert state.world["self_notes"] == []
+    # El "yo" tipado sobrevive a la temporada.
+    assert model["traits"]["juguetona"] == 5
+    assert model["tastes"]["loves"] == ["videojuegos"]
+    assert model["values"] == ["honestidad"]
+
+
 def test_reset_advances_season_and_persists_all_stores():
     state, counters = _dirty_state()
     season_before = int(state.world.get("season", 1) or 1)

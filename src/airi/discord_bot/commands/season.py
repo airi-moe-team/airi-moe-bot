@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from airi.domain.relationships import reset_season_world
+from airi.domain.self_notes import NOTES_KEY
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,14 @@ def _mutate(state) -> None:
     # contadores de interacción se inyectan en el prompt, así que se borran
     # los registros activos; la copia de la temporada anterior queda archivada.
     state.users.clear()
+    # Identidad: se conservan rasgos, valores, gustos y manías (el "yo" tipado),
+    # pero se olvidan los descubrimientos libres y el historial de cambios:
+    # son texto narrativo que puede nombrar a personas de la temporada anterior.
+    self_model = state.world.get("self")
+    if isinstance(self_model, dict):
+        self_model.pop("discoveries", None)
+        self_model["history"] = []
+    state.world[NOTES_KEY] = []
     state.dates.clear()
     state.memories.clear()
     state.histories.clear()

@@ -16,9 +16,13 @@ from airi.services.self_service import SelfService
 
 
 async def handle_yo(ctx, message):
-    """Muestra quién es Airi ahora."""
+    """Muestra quién es Airi ahora, sin notas que puedan nombrar a usuarios.
+
+    Las notas privadas de autodescubrimiento siguen alimentando su prompt,
+    pero el comando público muestra solo la identidad tipada.
+    """
     model = ctx.state.self_model()
-    text = render_self_narrative(model, notes=ctx.state.self_notes())
+    text = render_self_narrative(model, notes=[])
     await message.channel.send(embed=embeds.system_embed(text))
 
 
