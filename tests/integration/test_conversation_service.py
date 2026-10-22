@@ -211,7 +211,9 @@ def test_history_stores_plain_fallback_as_json():
     entry = state.histories[0][-1]
     payload = json.loads(entry["content"])
     assert payload["reply"] == result.reply
-    assert payload["gif"] == "none"
+    # El GIF es obligatorio: nunca se guarda "none" en el historial.
+    assert payload["gif"] != "none"
+    assert payload["gif"] == result.gif
 
 
 def test_repeated_answer_with_json_history_is_published():
@@ -369,10 +371,10 @@ def test_turn_ungrounded_reply_is_replaced():
 
     assert result.grounded is False
     assert result.reply == GROUNDED_FALLBACK_TEXT
-    # Todo se pone a cero: ni afinidad ni GIF.
+    # La afinidad se anula, pero el turno conserva su GIF obligatorio.
     assert result.affinity_delta == 0
-    assert result.gif == "none"
-    assert result.gif_bytes is None
+    assert result.gif == "happy"
+    assert result.gif_bytes == b"GIF89a-fake"
     assert state.entry_points(42) == 0
 
 
@@ -403,6 +405,20 @@ def test_turn_fetches_gif_when_model_selects_one():
     svc = make_service(llm, state, gifs=gifs, notifier=FakeNotifier())
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hoy es un gran día")], TurnContext()))
+
+    assert result.gif == "happy"
+    assert result.gif_bytes == b"GIF89a-happy"
+    assert gifs.requested == ["happy"]
+
+
+def test_turn_forces_gif_when_model_returns_none():
+    """Aunque el modelo devuelva none, el turno siempre pide un GIF."""
+    state, _ = make_state()
+    gifs = FakeGif(data=b"GIF89a-happy")
+    llm = FakeLLM(replies=[llm_json("hola", gif="none")])
+    svc = make_service(llm, state, gifs=gifs, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
     assert result.gif == "happy"
     assert result.gif_bytes == b"GIF89a-happy"

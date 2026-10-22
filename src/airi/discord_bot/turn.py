@@ -69,12 +69,15 @@ async def send_long_message(channel, content, *, reference=None):
 
 
 async def send_gif_bytes(ctx, channel, user, gif_type, data):
-    """Envía el GIF obtenido (bytes) como embed con el pie de afinidad."""
-    if not data or gif_type == "none" or gif_type not in ALLOWED_GIF_TYPES:
+    """Envía el embed emocional con el GIF y el pie de afinidad.
+
+    Si el proveedor no devolvió bytes, el embed se envía igualmente sin imagen:
+    la afinidad del turno nunca debe desaparecer por un fallo de NekosBest.
+    """
+    if gif_type == "none" or gif_type not in ALLOWED_GIF_TYPES:
         return
     log.info("El modelo ha seleccionado el GIF: %s", gif_type)
     try:
-        filename = f"airi_{gif_type}.gif"
         embed = discord.Embed(
             title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
             color=embeds.GIF_EMBED_COLOR,
@@ -84,10 +87,18 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data):
                 text=ctx.affinity_footer(user),
                 icon_url=user.display_avatar.url,
             )
-        embed.set_image(url=f"attachment://{filename}")
-        file = discord.File(BytesIO(data), filename=filename)
-        await channel.send(embed=embed, file=file)
-        log.info("GIF enviado correctamente: %s", gif_type)
+        if data:
+            filename = f"airi_{gif_type}.gif"
+            embed.set_image(url=f"attachment://{filename}")
+            file = discord.File(BytesIO(data), filename=filename)
+            await channel.send(embed=embed, file=file)
+            log.info("GIF enviado correctamente: %s", gif_type)
+        else:
+            await channel.send(embed=embed)
+            log.warning(
+                "El proveedor no devolvió el GIF %s; se envió solo la afinidad",
+                gif_type,
+            )
     except discord.HTTPException:
         log.exception("Discord no pudo enviar el GIF")
 

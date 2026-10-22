@@ -148,7 +148,6 @@ SYSTEM_PROMPT = (
 
 # Guía breve de cada emoción para ayudar al modelo a elegir el GIF adecuado.
 GIF_EMOTION_GUIDE = (
-    "none: sin GIF (por defecto; temas serios, técnicos o búsquedas web). "
     "happy: alegría o buen ánimo. "
     "shy: vergüenza, cumplido o coqueteo tímido. "
     "hug: apoyo cariñoso o consuelo. "
@@ -203,8 +202,9 @@ GIF_DECISION_PROMPT = (
     '1. Escribe todo el diálogo y las acciones de roleplay dentro de "reply".\n'
     "2. No escribas texto, explicaciones ni bloques Markdown fuera del objeto JSON.\n"
     "3. No añadas claves adicionales.\n"
-    '4. El valor de "gif" debe pertenecer a la lista permitida. Utiliza "none" si no\n'
-    f"   corresponde enviar un GIF. Lista permitida: {', '.join(sorted(ALLOWED_GIF_TYPES))}.\n"
+    '4. El valor de "gif" SIEMPRE debe ser una emoción de la lista permitida y NUNCA\n'
+    "   \"none\": el GIF acompaña cada respuesta y muestra tu afinidad. Elige la\n"
+    f"   emoción que mejor encaje. Lista permitida: {', '.join(sorted(ALLOWED_GIF_TYPES - {'none'}))}.\n"
     '5. No escribas emojis Unicode en "reply". Expresa las emociones mediante palabras\n'
     "   y acciones entre asteriscos.\n"
     "6. Conserva el idioma, la personalidad y la continuidad de la conversación.\n"
@@ -342,7 +342,7 @@ GIF_DECISION_PROMPT = (
     "Guía rápida de cada valor de gif:\n"
     f"{GIF_EMOTION_GUIDE}\n\n"
     "Ejemplo de estructura (fuera de una cita):\n\n"
-    '{"reply":"Ehhh... *inclina la cabeza con curiosidad*....","gif":"none","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","date_decision":"continue","date_reason":"none","last_chance_result":"none","date_question":{"text":"","options":[]},"self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n\n'
+    '{"reply":"Ehhh... *inclina la cabeza con curiosidad*....","gif":"think","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","date_decision":"continue","date_reason":"none","last_chance_result":"none","date_question":{"text":"","options":[]},"self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n\n'
     "Devuelve exclusivamente el objeto JSON, sin texto antes ni después.\n"
 )
 
@@ -355,7 +355,7 @@ COMPACT_OUTPUT_PROMPT = (
     "\n\n=== FORMATO DE SALIDA (TURNO BREVE) ===\n"
     "Devuelve exclusivamente un objeto JSON válido con el esquema del sistema.\n"
     '- "reply": tu respuesta completa como Airi, en español y sin emojis.\n'
-    '- "gif": "none" salvo que un GIF encaje de verdad; usa solo la lista permitida.\n'
+    '- "gif": elige SIEMPRE una emoción de la lista permitida; nunca uses "none".\n'
     '- "memory": un dato duradero del usuario, "olvidar: <n>" si lo pide, o "none".\n'
     '- "diary": una reflexión personal breve o "none".\n'
     '- "affinity_delta": entero -5..5; 0 salvo que este mensaje cambie de verdad '
@@ -363,7 +363,7 @@ COMPACT_OUTPUT_PROMPT = (
     '- "affinity_event": motivo breve o "none".\n'
     "- Usa EXACTAMENTE los valores neutros del ejemplo para los campos de cita, "
     "identidad, romance, pareja y desconexión.\n"
-    'Ejemplo: {"reply":"...","gif":"none","memory":"none","diary":"none",'
+    'Ejemplo: {"reply":"...","gif":"happy","memory":"none","diary":"none",'
     '"affinity_delta":0,"affinity_event":"none",'
     '"date_decision":"continue","date_reason":"none",'
     '"last_chance_result":"none","date_question":{"text":"","options":[]},'

@@ -32,6 +32,7 @@ from airi.domain.constants import (
     SEARCH_QUERY_MAX_TOKENS,
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
+from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.grounding import reply_seems_grounded
 from airi.domain.history_tags import AffinityInfo, build_inference_history
 from airi.domain.llm_output import (
@@ -110,6 +111,26 @@ _QUICK_BLOCKED_HINTS = (
 # no soporta json_schema). Un timeout o un fallo de conexión NO se reintenta:
 # repetir la espera duplicaría la latencia sin cambiar el resultado.
 _STRICT_RETRY_STATUSES = (400, 404, 405, 415, 422, 501)
+
+#: Niveles de afinidad negativos: el GIF de respaldo refleja ese malestar.
+_NEGATIVE_AFFINITY_LEVELS = ("Distante", "Molesta", "Enfadada", "Bloqueada")
+
+
+def guaranteed_gif(gif_type, level_name):
+    """Devuelve siempre una emoción válida; `none` se sustituye por una afín.
+
+    El modelo debería elegir siempre una, pero el contrato admite `none` por
+    compatibilidad. Aquí se garantiza que cada turno lleve GIF y que el respaldo
+    no contradiga el tono: feliz por defecto, negativo si la afinidad es hostil.
+    """
+    if (
+        isinstance(gif_type, str)
+        and gif_type in ALLOWED_GIF_TYPES
+        and gif_type != "none"
+    ):
+        return gif_type
+    return "nope" if level_name in _NEGATIVE_AFFINITY_LEVELS else "happy"
+
 
 MEMORY_SAVED_NOTICE = "Airi recordará este evento"
 SELF_CHANGED_NOTICE = (
@@ -412,12 +433,17 @@ class ConversationService:
                 grounded = False
             ev.grounded = grounded
             ev.final_reply = answer
-            ev.gif = output.gif
+            # Cada turno lleva GIF: si el modelo devolvió "none" (o un tipo
+            # inválido), se sustituye por una emoción coherente con la afinidad.
+            level_name = affinity_level(self.state.entry_points(uid))[0]
+            gif_type = guaranteed_gif(output.gif, level_name)
+            output = output._replace(gif=gif_type)
+            ev.gif = gif_type
             ev.web_context = web_context
 
             gif_bytes = None
-            if output.gif != "none" and self.gifs is not None:
-                gif_bytes = await self.gifs.fetch(output.gif)
+            if self.gifs is not None:
+                gif_bytes = await self.gifs.fetch(gif_type)
             ev.gif_sent = gif_bytes is not None
             ev.gif_fetched = gif_bytes is not None
             ev.affinity_delta_requested = output.affinity_delta
