@@ -23,6 +23,24 @@ def env_int(name, default):
         return default
 
 
+ENV_TRUE_VALUES = ("1", "true", "yes", "on")
+ENV_FALSE_VALUES = ("0", "false", "no", "off")
+
+
+def env_flag(name, default):
+    """Lee un booleano del entorno; un valor ausente o inválido usa default."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value in ENV_TRUE_VALUES:
+        return True
+    if value in ENV_FALSE_VALUES:
+        return False
+    warnings.warn(f"{name}={raw!r} no es un booleano válido; se usa {default}.")
+    return default
+
+
 def env_float(name, default):
     """Lee un float del entorno; si falta o no es válido, devuelve `default`."""
     raw = os.getenv(name)
