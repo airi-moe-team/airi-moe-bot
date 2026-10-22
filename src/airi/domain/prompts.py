@@ -346,6 +346,35 @@ GIF_DECISION_PROMPT = (
     "Devuelve exclusivamente el objeto JSON, sin texto antes ni después.\n"
 )
 
+# Contrato reducido para turnos rápidos (mensajes cortos sin web ni cita).
+# El esquema JSON estricto sigue garantizando la forma; aquí solo se explican
+# los campos que importan en una conversación breve. Evita ~2.5k tokens de
+# reglas (cita, identidad, romance, pareja, desconexión) que en un saludo
+# únicamente devolverían sus valores neutros.
+COMPACT_OUTPUT_PROMPT = (
+    "\n\n=== FORMATO DE SALIDA (TURNO BREVE) ===\n"
+    "Devuelve exclusivamente un objeto JSON válido con el esquema del sistema.\n"
+    '- "reply": tu respuesta completa como Airi, en español y sin emojis.\n'
+    '- "gif": "none" salvo que un GIF encaje de verdad; usa solo la lista permitida.\n'
+    '- "memory": un dato duradero del usuario, "olvidar: <n>" si lo pide, o "none".\n'
+    '- "diary": una reflexión personal breve o "none".\n'
+    '- "affinity_delta": entero -5..5; 0 salvo que este mensaje cambie de verdad '
+    'tu cercanía. Si no es 0, explica el motivo en "affinity_event".\n'
+    '- "affinity_event": motivo breve o "none".\n'
+    "- Usa EXACTAMENTE los valores neutros del ejemplo para los campos de cita, "
+    "identidad, romance, pareja y desconexión.\n"
+    'Ejemplo: {"reply":"...","gif":"none","memory":"none","diary":"none",'
+    '"affinity_delta":0,"affinity_event":"none",'
+    '"date_decision":"continue","date_reason":"none",'
+    '"last_chance_result":"none","date_question":{"text":"","options":[]},'
+    '"self_update":{"key":"none","op":"none","value":"","reason":"",'
+    '"evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none",'
+    '"reason":"","evidence_refs":[],"evidence_summary":""},'
+    '"relationship_action":{"action":"none","reason":"","evidence_refs":[]},'
+    '"disconnect":{"leave":false,"reason":""}}\n'
+    "No escribas nada fuera del JSON.\n"
+)
+
 SEARCH_QUERY_PROMPT = (
     "Reformula el mensaje del usuario en una consulta de búsqueda web breve, "
     "clara y objetiva, en el idioma más adecuado para encontrar la información "
@@ -483,13 +512,19 @@ WEB_SEARCH_FOOTER = (
 )
 
 
-def build_system_prompt(web_context=None, sections=()):
-    """Ensambla el prompt final: base (+ contexto web) + secciones + GIFs."""
+def build_system_prompt(web_context=None, sections=(), *, compact=False):
+    """Ensambla el prompt final: base (+ contexto web) + secciones + contrato.
+
+    `compact=True` sustituye el contrato completo por `COMPACT_OUTPUT_PROMPT`
+    para turnos breves: misma personalidad y mismo esquema estricto, menos
+    reglas que explicar.
+    """
     if web_context:
         base = WEB_SEARCH_HEADER + str(web_context) + WEB_SEARCH_FOOTER + SYSTEM_PROMPT
     else:
         base = SYSTEM_PROMPT
-    return base + "".join(sections) + GIF_DECISION_PROMPT
+    contract = COMPACT_OUTPUT_PROMPT if compact else GIF_DECISION_PROMPT
+    return base + "".join(sections) + contract
 
 
 def affinity_prompt_section(points, level_name, display_name):

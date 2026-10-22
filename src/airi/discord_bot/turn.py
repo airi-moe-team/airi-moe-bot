@@ -176,7 +176,15 @@ async def run_user_turn(
                 if result is not None:
                     ctx.remember_trace(result.trace)
 
-            if result is None or result.skipped:
+            if result is None:
+                return
+            if result.skipped:
+                # Nunca dejar el mensaje sin respuesta: si el filtro descartó
+                # una repetición, se pide contexto en vez de quedarse callada.
+                await _reply(
+                    "Mmm... siento que ya te había dicho algo muy parecido. "
+                    "¿Me cuentas un poco más para no repetirme?"
+                )
                 return
             if not result.reply:
                 await _reply(

@@ -175,7 +175,17 @@ def test_remote_health_failure_does_not_block_turn(monkeypatch):
     ctx, service = _ctx(provider="openai")
     channel = _run_turn(monkeypatch, ctx)
     assert service.called is True
-    assert channel.sent == []
+    # El servicio falso devuelve skipped: ahora se contesta en vez de callar.
+    assert channel.sent
+
+
+def test_skipped_turn_answers_instead_of_silence(monkeypatch):
+    """Un turno sin contenido no debe dejar al usuario sin respuesta."""
+    ctx, service = _ctx(provider="llama")
+    channel = _run_turn(monkeypatch, ctx)
+    assert service.called is True
+    assert channel.sent
+    assert "parecido" in channel.sent[0][0]
 
 
 def test_health_check_disabled_makes_no_request(monkeypatch):

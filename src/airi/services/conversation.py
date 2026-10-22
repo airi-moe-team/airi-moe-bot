@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable
+
+import aiohttp
 
 from airi.domain import memories as domain_memories
 from airi.domain import prompts as domain_prompts
@@ -22,7 +25,10 @@ from airi.domain.constants import (
     AFFINITY_VIEW_SCOPE,
     DATE_HISTORY_MAX,
     DIARY_REFLECTION_MIN_INTERVAL,
+    LLM_SHORT_MAX_TOKENS,
     MAX_HISTORY_MESSAGES,
+    QUICK_HISTORY_MESSAGES,
+    QUICK_REPLY_MAX_CHARS,
     SEARCH_QUERY_MAX_TOKENS,
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
@@ -45,11 +51,7 @@ from airi.domain.self_model import (
     apply_self_update,
     sync_preferences_from_self,
 )
-from airi.domain.text_filters import (
-    clean_reply,
-    remove_repeated_previous_reply,
-    strip_repetition_loop,
-)
+from airi.domain.text_filters import clean_reply, strip_repetition_loop
 from airi.domain.turn_guard import DateFingerprint, fingerprint_of
 from airi.domain.web import needs_web_search
 from airi.logging_setup import (
@@ -79,6 +81,35 @@ GROUNDED_FALLBACK_TEXT = (
     "¿Quieres que busque con otras palabras, o me das más pistas "
     "sobre qué fuente prefieres consultar?"
 )
+
+# Palabras que piden contexto o efectos que el turno rápido no cubre: si
+# aparecen, se usa el prompt completo aunque el mensaje sea corto.
+_QUICK_BLOCKED_HINTS = (
+    "recuerda",
+    "acuerdas",
+    "memoria",
+    "diario",
+    "cita",
+    "pareja",
+    "novi",
+    "amor",
+    "quieres",
+    "sientes",
+    "regalo",
+    "ayer",
+    "antes",
+    "pasado",
+    "olvida",
+    "promesa",
+    "secreto",
+    "relación",
+    "relacion",
+)
+
+# Errores HTTP que sí justifican reintentar sin salida estricta (servidor que
+# no soporta json_schema). Un timeout o un fallo de conexión NO se reintenta:
+# repetir la espera duplicaría la latencia sin cambiar el resultado.
+_STRICT_RETRY_STATUSES = (400, 404, 405, 415, 422, 501)
 
 MEMORY_SAVED_NOTICE = "Airi recordará este evento"
 SELF_CHANGED_NOTICE = (
@@ -302,12 +333,20 @@ class ConversationService:
             ev.web_context = web_context
 
             delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
+            quick = self._is_quick_turn(
+                merged_text,
+                in_date=in_date,
+                web_context=web_context,
+                kind=ctx.kind,
+                extra_note=ctx.extra_note,
+            )
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
                 history, web_context, user, date_session, delta_max,
                 extra_note=ctx.extra_note,
                 relationship_view=relationship_view,
                 now=now,
+                quick=quick,
             )
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.prompt_system = system_prompt
@@ -332,8 +371,9 @@ class ConversationService:
                 "romantic_update": output.romantic_update,
                 "relationship_action": output.relationship_action,
             }
-            answer = remove_repeated_previous_reply(output.reply, history)
-            answer = strip_repetition_loop(answer)
+            # Sin filtro de duplicados: si el modelo repite, se publica igual.
+            # Solo se cortan bucles internos de palabras dentro de la respuesta.
+            answer = strip_repetition_loop(output.reply)
             if not answer:
                 log.info("Se omitió una respuesta duplicada sin contenido nuevo.")
                 ev.skipped = True
@@ -646,6 +686,30 @@ class ConversationService:
 
     # ------------------------------------------------------------------
 
+    def _is_quick_turn(self, text, *, in_date, web_context, kind, extra_note):
+        """True si el turno admite el contrato reducido y menos historial."""
+        if in_date or web_context is not None or kind != "message" or extra_note:
+            return False
+        clean = " ".join((text or "").split())
+        if not clean or len(clean) > QUICK_REPLY_MAX_CHARS:
+            return False
+        low = clean.casefold()
+        return not any(hint in low for hint in _QUICK_BLOCKED_HINTS)
+
+    @staticmethod
+    def _can_retry_without_strict(exc):
+        """Solo reintenta si el fallo apunta a un json_schema no soportado."""
+        if isinstance(
+            exc,
+            (asyncio.TimeoutError, aiohttp.ClientConnectionError,
+             aiohttp.ServerTimeoutError),
+        ):
+            return False
+        status = getattr(exc, "status", None)
+        if isinstance(status, int) and status not in _STRICT_RETRY_STATUSES:
+            return False
+        return True
+
     async def _generate(
         self,
         history,
@@ -656,85 +720,131 @@ class ConversationService:
         extra_note=None,
         relationship_view=None,
         now=None,
+        quick=False,
     ):
         now = self.clock() if now is None else now
         state = self.state
         points = state.entry_points(user.id)
-        sections = [
-            domain_prompts.affinity_prompt_section(
-                points, affinity_level(points)[0], user.display_name
-            ),
-            domain_prompts.relationship_status_section(
-                state.world,
-                state.users,
-                user_id=user.id,
-                display_name=user.display_name,
-                now=now,
-            ),
-            domain_prompts.romantic_relationship_section(
-                relationship_view or {
-                    "stage": "none",
-                    "history": [],
-                    "allowed_refs": [],
-                    "pending": None,
-                    "is_partner": False,
-                },
-                user.display_name,
-            ),
-            domain_prompts.preferences_prompt_section(state.world),
-            domain_prompts.last_shutdown_prompt_section(state.world),
-            domain_prompts.identity_tags_prompt_section(),
-            domain_prompts.date_context_section(
-                date_session if isinstance(date_session, dict) else None
-            ),
-            domain_prompts.self_model_prompt_section(
-                state.world,
-                notes=state.world.get("self_notes") or [],
-            ),
-            domain_prompts.memories_prompt_section(
-                _read_only_memories(state.memories, user.id)
-            ),
-            domain_prompts.known_users_prompt_section(
-                state.users,
-                state.diary,
-                state.world,
-                user_id=user.id,
-                display_name=user.display_name,
-            ),
-            domain_prompts.diary_prompt_section(state.diary, user.id, now),
-        ]
+        affinity_section = domain_prompts.affinity_prompt_section(
+            points, affinity_level(points)[0], user.display_name
+        )
+        relationship_section = domain_prompts.relationship_status_section(
+            state.world,
+            state.users,
+            user_id=user.id,
+            display_name=user.display_name,
+            now=now,
+        )
+        self_section = domain_prompts.self_model_prompt_section(
+            state.world,
+            notes=state.world.get("self_notes") or [],
+        )
+        if quick:
+            # Turno breve: tono, relación y yo. Sin diario, memorias, usuarios
+            # conocidos ni explicación de etiquetas (el mensaje es corto y no
+            # los necesita); esto recorta el prompt y acelera el prefill.
+            sections = [
+                affinity_section,
+                relationship_section,
+                domain_prompts.romantic_relationship_section(
+                    relationship_view or {
+                        "stage": "none",
+                        "history": [],
+                        "allowed_refs": [],
+                        "pending": None,
+                        "is_partner": False,
+                    },
+                    user.display_name,
+                ),
+                domain_prompts.preferences_prompt_section(state.world),
+                domain_prompts.last_shutdown_prompt_section(state.world),
+                self_section,
+            ]
+        else:
+            sections = [
+                affinity_section,
+                relationship_section,
+                domain_prompts.romantic_relationship_section(
+                    relationship_view or {
+                        "stage": "none",
+                        "history": [],
+                        "allowed_refs": [],
+                        "pending": None,
+                        "is_partner": False,
+                    },
+                    user.display_name,
+                ),
+                domain_prompts.preferences_prompt_section(state.world),
+                domain_prompts.last_shutdown_prompt_section(state.world),
+                domain_prompts.identity_tags_prompt_section(),
+                domain_prompts.date_context_section(
+                    date_session if isinstance(date_session, dict) else None
+                ),
+                self_section,
+                domain_prompts.memories_prompt_section(
+                    _read_only_memories(state.memories, user.id)
+                ),
+                domain_prompts.known_users_prompt_section(
+                    state.users,
+                    state.diary,
+                    state.world,
+                    user_id=user.id,
+                    display_name=user.display_name,
+                ),
+                domain_prompts.diary_prompt_section(state.diary, user.id, now),
+            ]
         if extra_note:
             sections.append(
                 f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
             )
-        system_prompt = domain_prompts.build_system_prompt(web_context, sections)
+        system_prompt = domain_prompts.build_system_prompt(
+            web_context, sections, compact=quick
+        )
         # Vista de inferencia: el historial canónico se envía etiquetado con la
         # identidad y la afinidad de cada interlocutor. La etiqueta se
         # reconstruye en cada inferencia (nunca se persiste en el historial).
+        visible_history = (
+            history[-QUICK_HISTORY_MESSAGES:] if quick else history
+        )
         view = build_inference_history(
-            history,
+            visible_history,
             self._inference_resolver(getattr(user, "id", None)),
             users=state.users,
         )
         messages = [{"role": "system", "content": system_prompt}, *view]
+        request_tokens = LLM_SHORT_MAX_TOKENS if quick else None
         if hasattr(self.llm, "chat_with_meta"):
             try:
                 # Salida estricta: la gramática del servidor garantiza JSON
                 # aunque el modelo quiera responder en texto plano.
                 raw, meta = await self.llm.chat_with_meta(
-                    messages, schema=RESPONSE_SCHEMA, strict_schema=True
+                    messages,
+                    schema=RESPONSE_SCHEMA,
+                    strict_schema=True,
+                    max_tokens=request_tokens,
+                    disable_thinking=quick,
                 )
-            except Exception:
+            except Exception as exc:
+                if not self._can_retry_without_strict(exc):
+                    raise
                 log.warning(
                     "La salida estricta no está soportada por el servidor; "
                     "se reintenta en modo json_object.",
                     exc_info=True,
                 )
                 raw, meta = await self.llm.chat_with_meta(
-                    messages, schema=RESPONSE_SCHEMA
+                    messages,
+                    schema=RESPONSE_SCHEMA,
+                    max_tokens=request_tokens,
+                    disable_thinking=quick,
                 )
         else:
-            raw = await self.llm.chat(messages, schema=RESPONSE_SCHEMA)
+            raw = await self.llm.chat(
+                messages,
+                schema=RESPONSE_SCHEMA,
+                max_tokens=request_tokens,
+                disable_thinking=quick,
+            )
             meta = LLMMeta()
         output = parse_model_output(raw, delta_max=delta_max)
         problem = disconnect_claim_problem(
@@ -756,14 +866,22 @@ class ConversationService:
                             repair_messages,
                             schema=RESPONSE_SCHEMA,
                             strict_schema=True,
+                            max_tokens=request_tokens,
+                            disable_thinking=quick,
                         )
                     except Exception:
                         repaired_raw, repaired_meta = await self.llm.chat_with_meta(
-                            repair_messages, schema=RESPONSE_SCHEMA
+                            repair_messages,
+                            schema=RESPONSE_SCHEMA,
+                            max_tokens=request_tokens,
+                            disable_thinking=quick,
                         )
                 else:
                     repaired_raw = await self.llm.chat(
-                        repair_messages, schema=RESPONSE_SCHEMA
+                        repair_messages,
+                        schema=RESPONSE_SCHEMA,
+                        max_tokens=request_tokens,
+                        disable_thinking=quick,
                     )
                     repaired_meta = LLMMeta()
                 repaired = parse_model_output(repaired_raw, delta_max=delta_max)

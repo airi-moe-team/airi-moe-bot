@@ -3,7 +3,9 @@
 import asyncio
 import json
 
-from airi.domain.constants import SEARCH_QUERY_MAX_TOKENS
+import pytest
+
+from airi.domain.constants import LLM_SHORT_MAX_TOKENS, SEARCH_QUERY_MAX_TOKENS
 from airi.domain.dates import new_date_session
 from airi.services.conversation import (
     GROUNDED_FALLBACK_TEXT,
@@ -84,7 +86,8 @@ def test_turn_delta_without_event_is_zeroed():
     assert state.entry_points(42) == 0
 
 
-def test_turn_duplicate_answer_is_skipped():
+def test_turn_repeated_answer_is_published():
+    """Sin filtro de duplicados, una respuesta repetida se envía igual."""
     state, _ = make_state()
     state.histories[0] = [
         {"role": "user", "content": "David: hola"},
@@ -95,12 +98,12 @@ def test_turn_duplicate_answer_is_skipped():
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.skipped is True
-    assert result.reply is None
-    # En skip no se persiste nada: el historial sigue igual que antes.
-    assert len(state.histories[0]) == 2
-    assert state.histories[0][-1] == {
-        "role": "assistant", "content": "Ya te dije hola antes"}
+    assert result.skipped is False
+    assert result.reply == "Ya te dije hola antes"
+    # Historial previo + mensaje nuevo del usuario + respuesta publicada.
+    assert len(state.histories[0]) == 4
+    assert state.histories[0][-2]["role"] == "user"
+    assert json.loads(state.histories[0][-1]["content"])["reply"] == result.reply
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +121,61 @@ def test_turn_uses_strict_json_schema():
 
     assert llm.calls[-1]["strict_schema"] is True
     assert llm.calls[-1]["schema"] is not None
+
+
+def test_short_turn_uses_compact_contract_and_output_cap():
+    """Un mensaje corto evita el contrato largo y limita la salida."""
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("¡Hola!")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    prompt = llm.last_system_prompt
+    assert "TURNO BREVE" in prompt
+    assert "FORMATO DE SALIDA OBLIGATORIO" not in prompt
+    assert llm.calls[-1]["max_tokens"] == LLM_SHORT_MAX_TOKENS
+    assert llm.calls[-1]["strict_schema"] is True
+    # El límite breve no deja sitio al razonamiento: debe desactivarse.
+    assert llm.calls[-1]["disable_thinking"] is True
+
+
+def test_long_turn_uses_full_contract():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Claro")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+    message = "explícame con mucho detalle cómo funciona un motor de combustión interna"
+
+    run(svc.run_turn(DAVID, [(DAVID, message)], TurnContext()))
+
+    prompt = llm.last_system_prompt
+    assert "FORMATO DE SALIDA OBLIGATORIO" in prompt
+    assert "TURNO BREVE" not in prompt
+    assert llm.calls[-1]["max_tokens"] is None
+    assert llm.calls[-1]["disable_thinking"] is False
+
+
+def test_short_memory_question_uses_full_contract():
+    """Un mensaje corto que pide memoria no puede perder ese contexto."""
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Claro")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    run(svc.run_turn(DAVID, [(DAVID, "¿te acuerdas de mi perro?")], TurnContext()))
+
+    assert "FORMATO DE SALIDA OBLIGATORIO" in llm.last_system_prompt
+
+
+def test_timeout_is_not_retried():
+    """Reintentar tras un timeout solo duplicaría la espera."""
+    state, _ = make_state()
+    llm = FakeLLM(strict_error=asyncio.TimeoutError())
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    with pytest.raises(asyncio.TimeoutError):
+        run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert len(llm.calls) == 1
 
 
 def test_turn_falls_back_when_strict_schema_unsupported():
@@ -156,8 +214,8 @@ def test_history_stores_plain_fallback_as_json():
     assert payload["gif"] == "none"
 
 
-def test_duplicate_detection_works_with_json_history():
-    """El filtro de duplicados extrae el reply del historial JSON."""
+def test_repeated_answer_with_json_history_is_published():
+    """Una respuesta idéntica al historial JSON también se publica."""
     state, _ = make_state()
     state.histories[0] = [
         {"role": "user", "content": "David: hola"},
@@ -168,12 +226,12 @@ def test_duplicate_detection_works_with_json_history():
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.skipped is True
-    assert result.reply is None
+    assert result.skipped is False
+    assert result.reply == "Ya te dije hola antes"
 
 
-def test_history_keeps_plain_legacy_entries_working():
-    """Las entradas antiguas en texto plano siguen comparándose correctamente."""
+def test_repeated_answer_with_plain_history_is_published():
+    """Las entradas antiguas en texto plano tampoco bloquean la respuesta."""
     state, _ = make_state()
     state.histories[0] = [
         {"role": "user", "content": "David: hola"},
@@ -184,7 +242,8 @@ def test_history_keeps_plain_legacy_entries_working():
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.skipped is True
+    assert result.skipped is False
+    assert result.reply == "Ya te dije hola antes"
 
 
 # ---------------------------------------------------------------------------

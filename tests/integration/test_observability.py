@@ -102,7 +102,7 @@ def test_run_turn_broken_hook_does_not_break_turn():
     assert result.reply == "hola"
 
 
-def test_run_turn_trace_skipped_turn():
+def test_run_turn_trace_repeated_answer_is_not_skipped():
     state, _ = make_state()
     state.histories[0] = [
         {"role": "user", "content": "David: hola"},
@@ -113,9 +113,10 @@ def test_run_turn_trace_skipped_turn():
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.skipped is True
+    assert result.skipped is False
+    assert result.reply == "Ya te dije hola antes"
     assert result.trace is not None
-    assert result.trace.skipped is True
+    assert result.trace.skipped is False
     assert result.trace.raw_llm is not None
 
 
@@ -181,7 +182,7 @@ def test_replay_without_raw_is_not_reproducible(tmp_path):
     assert report["reproducible"] is False
 
 
-def test_replay_skipped_turn_matches(tmp_path):
+def test_replay_repeated_answer_matches(tmp_path):
     state_kw = {"histories": {0: [
         {"role": "user", "content": "David: hola"},
         {"role": "assistant", "content": "Ya te dije hola antes"},

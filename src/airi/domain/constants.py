@@ -283,6 +283,11 @@ DIARY_PROMPT_MAX_USER = env_int("DIARY_PROMPT_MAX_USER", 6)
 DIARY_PROMPT_MAX_CHARS = env_int("DIARY_PROMPT_MAX_CHARS", 900)
 KNOWN_USERS_PROMPT_MAX = env_int("KNOWN_USERS_PROMPT_MAX", 10)
 MAX_HISTORY_MESSAGES = env_int("MAX_HISTORY_MESSAGES", 12)
+# Turno rápido: mensajes cortos sin web ni cita usan un contrato de salida
+# reducido, menos historial y un tope de salida bajo para responder antes.
+QUICK_REPLY_MAX_CHARS = env_int("QUICK_REPLY_MAX_CHARS", 60)
+QUICK_HISTORY_MESSAGES = env_int("QUICK_HISTORY_MESSAGES", 6)
+LLM_SHORT_MAX_TOKENS = env_int("LLM_SHORT_MAX_TOKENS", 400)
 
 # ============================================================
 # IDENTIDAD DE AIRI (self model)
