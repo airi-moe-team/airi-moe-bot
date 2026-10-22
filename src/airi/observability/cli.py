@@ -10,6 +10,7 @@ import argparse
 import os
 import sys
 
+import airi.env_boot  # noqa: F401
 from airi.observability.trace_store import load_events_from_dir
 
 

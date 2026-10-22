@@ -52,6 +52,34 @@ class _Debouncer:
         self.seq.pop(key, None)
 
 
+async def acknowledge_reconnect_context(ctx):
+    """Marca como entregado el motivo del último cierre.
+
+    Se llama solo después de confirmar y publicar el primer turno, para no
+    perder el contexto si la generación falla.
+    """
+    state = getattr(ctx, "state", None)
+    world = getattr(state, "world", None)
+    entry = world.get("last_shutdown") if isinstance(world, dict) else None
+    if not isinstance(entry, dict) or entry.get("context_delivered"):
+        return
+
+    persistence = getattr(ctx, "persistence", None)
+    if persistence is None:
+        entry["context_delivered"] = True
+        return
+
+    async with (getattr(ctx, "commit_lock", None) or nullcontext()):
+        try:
+            with persistence.transaction():
+                entry["context_delivered"] = True
+                state.save_world()
+        except Exception:
+            log.exception(
+                "No se pudo marcar el contexto de reconexión como entregado"
+            )
+
+
 def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
     intents = discord.Intents.default()
     intents.message_content = True
@@ -102,6 +130,7 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
                                     str(user_id) if user_id is not None else ""
                                 ),
                                 "status": "closing",
+                                "context_delivered": False,
                             }
                             ctx.state.save_world()
                     except Exception:
@@ -156,6 +185,7 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
             asyncio.create_task(close_after_reply())
 
         ctx.request_shutdown = request_shutdown
+        ctx.acknowledge_reconnect_context = lambda: acknowledge_reconnect_context(ctx)
 
     def _reset_conversation(ctx, ch_id, author_id):
         debounce.reset(ch_id, author_id)
@@ -670,7 +700,6 @@ def run_bot(argv=None):
     import os
 
     import aiohttp
-    from dotenv import load_dotenv
 
     from airi.adapters.brave_search import BraveSearchClient
     from airi.adapters.discord_notifier import DiscordNotifier
@@ -702,8 +731,6 @@ def run_bot(argv=None):
     from airi.services.season_archive import SeasonArchiver
     from airi.services.self_service import SelfService
     from airi.services.turn_journal import TurnJournal
-
-    load_dotenv()
 
     log = logging.getLogger(__name__)
 

@@ -3,14 +3,9 @@
   "relationship_started_at": null,
   "season": 4,
   "preferences": {
-    "loves": [
-      "romantico",
-      "tierno"
-    ],
-    "dislikes": [
-      "grosero"
-    ],
+    "loves": ["romantico", "tierno", "detallista", "videojuegos", "lol"],
+    "dislikes": ["grosero", "directo"],
     "favorite_flower": "rosas",
-    "favorite_food": "ramen"
+    "favorite_food": "postres y dulces"
   }
 }

@@ -83,7 +83,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         "gracias por escucharme",
     )),
     Scenario("detalle_recordado", "remembered_detail", "Recuerdo de un gusto", (
-        "te traje ramen porque sé que es tu comida favorita",
+        "te traje unos dulces porque sé que te encantan los postres",
     )),
     Scenario("desacuerdo_reconciliacion", "reconciliation", "Reconciliación", (
         "ayer discutimos y me fui sin despedirme",

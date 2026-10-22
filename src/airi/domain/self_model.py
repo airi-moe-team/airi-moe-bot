@@ -32,6 +32,7 @@ from airi.domain.constants import (
     SELF_DISCOVERIES_MAX,
     SELF_DISCOVERY_MAX_CHARS,
     SELF_HISTORY_MAX,
+    SELF_KEY_DAILY_LIMIT,
     SELF_KEY_DAILY_SECONDS,
     SELF_MAX_QUIRKS,
     SELF_MAX_TASTES,
@@ -303,12 +304,17 @@ def _rate_limited(model, key, now):
     last_ts = float(history[-1].get("ts", 0.0) or 0.0)
     if last_ts and float(now) - last_ts < SELF_UPDATE_MIN_INTERVAL:
         return True
-    same_key = [e for e in history if str(e.get("key")) == key]
-    if same_key:
-        ts = float(same_key[-1].get("ts", 0.0) or 0.0)
-        if ts and float(now) - ts < SELF_KEY_DAILY_SECONDS:
-            return True
-    return False
+    same_key_recent = 0
+    for entry in history:
+        if str(entry.get("key")) != key:
+            continue
+        try:
+            timestamp = float(entry.get("ts", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if timestamp and float(now) - timestamp < SELF_KEY_DAILY_SECONDS:
+            same_key_recent += 1
+    return same_key_recent >= SELF_KEY_DAILY_LIMIT
 
 
 def _get_list(model, key):

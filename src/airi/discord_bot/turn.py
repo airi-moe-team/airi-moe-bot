@@ -188,6 +188,12 @@ async def run_user_turn(
                     ctx, channel, author, result, reply_target=reply_target
                 )
 
+            # El motivo del cierre anterior es de un solo uso: solo se marca
+            # entregado cuando la respuesta ya se publicó correctamente.
+            acknowledge = getattr(ctx, "acknowledge_reconnect_context", None)
+            if callable(acknowledge):
+                await acknowledge()
+
             now = time.time()
             uid = author_id
             date_session = state.dates.get(str(uid))

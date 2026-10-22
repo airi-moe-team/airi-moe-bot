@@ -1,0 +1,33 @@
+{
+  "feature": "business-config-env",
+  "generated_at": "2026-10-22T07:50:29Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Centralizar la carga de dotenv en todos los entrypoints",
+      "severity": "major",
+      "impact": "La implementación actual carga dotenv solo por el comando del bot. Los entrypoints directos airi-trace y airi-replay pueden importar configuración del dominio antes de cargar .env; además, el proyecto ya tenía una decisión de centralizar este bootstrap.",
+      "recommendation": "Actualizar diseño y tareas para crear airi.env_boot, importarlo antes de cualquier otro módulo airi.* en airi.__main__, airi.observability.cli y airi.observability.replay, conservar handlers lazy y añadir pruebas de orden para los tres entrypoints.",
+      "targets": [
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [],
+        "design": [
+          "Centralizar el efecto de carga de dotenv en airi.env_boot; importarlo antes de cualquier otro módulo propio en __main__, el CLI de trazas y el replay directo. Mantener los imports lazy de comandos en __main__.",
+          "Actualizar análisis y pruebas para cubrir los entrypoints airi, airi-trace y airi-replay."
+        ],
+        "tasks": [
+          "Crear airi.env_boot y cargarlo primero en los tres entrypoints antes de que se importen constantes del dominio.",
+          "Ampliar las pruebas de integración de import order para verificar los tres entrypoints en procesos aislados."
+        ]
+      },
+      "owner": "Implementador; revisión de documentos a cargo del usuario"
+    }
+  ],
+  "approvals_to_reset": [
+    "design",
+    "tasks"
+  ]
+}

@@ -54,12 +54,7 @@ def level_rank(name):
 
 def can_date(points):
     """Las citas requieren al menos el nivel social 'Amiga'."""
-    return affinity_level(points)[0] in (
-        "Amiga",
-        "Cercana",
-        "Muy cercana",
-        "Inseparables",
-    )
+    return level_rank(affinity_level(points)[0]) >= 6
 
 
 def affinity_summary(points):
@@ -101,10 +96,10 @@ def default_entry():
 
 def default_preferences():
     return {
-        "loves": ["romantico", "tierno"],
+        "loves": ["romantico", "tierno", "videojuegos", "lol"],
         "dislikes": ["grosero"],
         "favorite_flower": "rosas",
-        "favorite_food": "ramen",
+        "favorite_food": "postres y dulces",
     }
 
 
@@ -252,4 +247,3 @@ def ranking(affinity_data, users_data, winner_id=None):
         })
     rows.sort(key=lambda r: (-r["points"], r["name"].lower(), r["user_id"]))
     return rows
-

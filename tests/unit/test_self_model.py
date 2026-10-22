@@ -31,7 +31,8 @@ def update(**overrides):
 def test_default_self_has_allowlisted_traits_and_default_tastes():
     model = default_self()
     assert set(model["traits"]) == set(SELF_BASE_TRAITS)
-    assert model["tastes"]["favorite_food"] == "ramen"
+    assert model["tastes"]["favorite_food"] == "postres y dulces"
+    assert {"videojuegos", "lol"} <= set(model["tastes"]["loves"])
     assert model["history"] == []
 
 
@@ -77,6 +78,34 @@ def test_rate_limit_blocks_second_change():
         user_id=42,
         source="message",
     ) is None
+
+
+def test_configured_daily_limit_allows_two_changes_then_blocks_until_window_expires(
+    monkeypatch,
+):
+    import airi.domain.self_model as self_model
+
+    monkeypatch.setattr(self_model, "SELF_KEY_DAILY_LIMIT", 2)
+    monkeypatch.setattr(self_model, "SELF_KEY_DAILY_SECONDS", 100)
+    monkeypatch.setattr(self_model, "SELF_UPDATE_MIN_INTERVAL", 0)
+    model = default_self()
+
+    assert apply_self_update(
+        model, update(op="set", value="5"), now=NOW, user_id=42, source="message"
+    )
+    assert apply_self_update(
+        model, update(op="set", value="4"), now=NOW + 10, user_id=42,
+        source="message",
+    )
+    assert apply_self_update(
+        model, update(op="set", value="5"), now=NOW + 20, user_id=42,
+        source="message",
+    ) is None
+
+    assert apply_self_update(
+        model, update(op="set", value="5"), now=NOW + 111, user_id=42,
+        source="message",
+    )
 
 
 def test_revert_restores_previous_value():

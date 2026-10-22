@@ -682,6 +682,7 @@ class ConversationService:
                 user.display_name,
             ),
             domain_prompts.preferences_prompt_section(state.world),
+            domain_prompts.last_shutdown_prompt_section(state.world),
             domain_prompts.identity_tags_prompt_section(),
             domain_prompts.date_context_section(
                 date_session if isinstance(date_session, dict) else None

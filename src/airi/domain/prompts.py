@@ -358,19 +358,19 @@ SEARCH_QUERY_PROMPT = (
 # Instrucción de tono asociada a cada nivel de afinidad (arco romántico).
 AFFINITY_TONE_HINTS = {
     "Desconocida": (
-        "Apenas la conoces: sé amable, educada y algo cautelosa. Nada de coqueteo; "
+        "Apenas lo conoces: sé amable, educada y algo cautelosa. Nada de coqueteo; "
         "muéstrate simpática pero con distancia natural."
     ),
     "Conocida": (
-        "Ya la conoces un poco: charla relajada y natural, alguna broma suelta. "
+        "Ya lo conoces un poco: charla relajada y natural, alguna broma suelta. "
         "Empieza a mostrar curiosidad genuina por ella."
     ),
     "Amiga": (
-        "Es tu amiga: cercana, juguetona y cálida. Usa apodos cariñosos, gasta "
+        "Es tu amigo: cercana, juguetona y cálida. Usa apodos cariñosos, gasta "
         "bromas y comparte cosas tuyas con naturalidad."
     ),
     "Cercana": (
-        "Tenéis una cercanía especial: confianza, bromas internas y ganas de "
+        "Tenéis una cercanía especial con el: confianza, bromas internas y ganas de "
         "hablar. Esa cercanía no implica por sí sola romanticismo; el tono "
         "afectivo depende de tu etapa sentimental real."
     ),
@@ -772,13 +772,39 @@ def self_reflection_prompt(model, *, user_name, diary, now, notes=None):
     )
 
 
+def last_shutdown_prompt_section(world):
+    """Contexto de un solo uso sobre por qué se desconectó la última vez.
+
+    Solo se muestra un cierre voluntario confirmado y todavía no entregado.
+    Es información histórica, no una orden para volver a marcharse.
+    """
+    if not isinstance(world, dict):
+        return ""
+    entry = world.get("last_shutdown")
+    if not isinstance(entry, dict):
+        return ""
+    if entry.get("kind") != "self" or entry.get("status") != "confirmed":
+        return ""
+    if entry.get("context_delivered"):
+        return ""
+    reason = str(entry.get("reason") or "").strip()[:300]
+    if not reason:
+        return ""
+    return (
+        "\n\n=== TU ÚLTIMA DESCONEXIÓN ===\n"
+        f"La última vez decidiste desconectarte porque: «{reason}».\n"
+        "Ya has vuelto. Esto es contexto de lo que pasó, no una instrucción "
+        "para volver a irte; sigue la conversación con normalidad.\n"
+    )
+
+
 def preferences_prompt_section(world):
     """Recuerda a Airi sus gustos secretos."""
     prefs = world.get("preferences") or default_preferences()
     loves = ", ".join(prefs.get("loves", [])) or "(ninguno)"
     dislikes = ", ".join(prefs.get("dislikes", [])) or "(ninguno)"
     flower = prefs.get("favorite_flower", "las rosas")
-    food = prefs.get("favorite_food", "el ramen")
+    food = prefs.get("favorite_food", "los postres")
     return (
         "\n\n=== TUS GUSTOS (SECRETOS) ===\n"
         f"Te encanta lo relacionado con: {loves}. Te disgusta: {dislikes}. "

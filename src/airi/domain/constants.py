@@ -6,6 +6,7 @@ heredado), pero este módulo no hace I/O de red ni conoce Discord.
 
 from __future__ import annotations
 
+import json
 import os
 import warnings
 
@@ -46,12 +47,135 @@ def env_choice(name, default, choices):
     return value
 
 
+def _json_env(name, default, validate):
+    """Lee JSON de entorno, lo valida y conserva `default` si no es válido."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return validate(json.loads(raw))
+    except (TypeError, ValueError) as exc:
+        warnings.warn(
+            f"{name} no es válido ({exc}); se usa el valor por defecto.",
+            stacklevel=2,
+        )
+        return default
+
+
+def _validate_affinity_levels(value):
+    if not isinstance(value, list) or len(value) < 7:
+        raise ValueError("se requieren al menos siete niveles")
+    levels = []
+    names = set()
+    previous_threshold = None
+    for item in value:
+        if not isinstance(item, list) or len(item) != 2:
+            raise ValueError("cada nivel debe ser [umbral, nombre]")
+        threshold, name = item
+        if isinstance(threshold, bool) or not isinstance(threshold, int):
+            raise ValueError("los umbrales deben ser enteros")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("los nombres de nivel no pueden estar vacíos")
+        name = name.strip()
+        if name in names:
+            raise ValueError("los nombres de nivel deben ser únicos")
+        if previous_threshold is not None and threshold <= previous_threshold:
+            raise ValueError("los umbrales deben ser estrictamente crecientes")
+        levels.append((threshold, name))
+        names.add(name)
+        previous_threshold = threshold
+    return tuple(levels)
+
+
+def _validate_date_scenes(value):
+    if not isinstance(value, list) or not value:
+        raise ValueError("se requiere una lista no vacía de escenas")
+    scenes = []
+    for scene in value:
+        if not isinstance(scene, str) or not scene.strip():
+            raise ValueError("las escenas deben ser cadenas no vacías")
+        scene = scene.strip()
+        if scene in scenes:
+            raise ValueError("las escenas deben ser únicas")
+        scenes.append(scene)
+    return tuple(scenes)
+
+
+def _validate_trait_allowlist(value):
+    if not isinstance(value, list) or not value:
+        raise ValueError("se requiere una lista no vacía de rasgos")
+    traits = []
+    for trait in value:
+        if not isinstance(trait, str) or not trait.strip():
+            raise ValueError("los rasgos deben ser cadenas no vacías")
+        trait = trait.strip()
+        if trait in traits:
+            raise ValueError("los rasgos deben ser únicos")
+        traits.append(trait)
+    return tuple(traits)
+
+
+def _validate_base_traits(value, allowlist, trait_min, trait_max):
+    if not isinstance(value, dict) or set(value) != set(allowlist):
+        raise ValueError("las claves deben coincidir con SELF_TRAITS_ALLOWLIST")
+    for trait, score in value.items():
+        if (
+            not isinstance(trait, str)
+            or not trait.strip()
+            or isinstance(score, bool)
+            or not isinstance(score, int)
+            or not trait_min <= score <= trait_max
+        ):
+            raise ValueError("cada valor base debe ser un entero dentro del rango")
+    return dict(value)
+
+
+def _load_self_traits(default_allowlist, default_base, trait_min, trait_max):
+    raw_allowlist = os.getenv("SELF_TRAITS_ALLOWLIST")
+    raw_base = os.getenv("SELF_BASE_TRAITS")
+    has_allowlist = raw_allowlist is not None and raw_allowlist.strip() != ""
+    has_base = raw_base is not None and raw_base.strip() != ""
+    if not has_allowlist and not has_base:
+        return default_allowlist, default_base
+    if not has_allowlist or not has_base:
+        warnings.warn(
+            "SELF_TRAITS_ALLOWLIST y SELF_BASE_TRAITS deben configurarse juntos; "
+            "se usan los valores por defecto.",
+            stacklevel=2,
+        )
+        return default_allowlist, default_base
+    try:
+        allowlist = _validate_trait_allowlist(json.loads(raw_allowlist))
+        base = _validate_base_traits(
+            json.loads(raw_base), allowlist, trait_min, trait_max
+        )
+        return allowlist, base
+    except (TypeError, ValueError) as exc:
+        warnings.warn(
+            "SELF_TRAITS_ALLOWLIST/SELF_BASE_TRAITS no son válidos "
+            f"({exc}); se usan los valores por defecto.",
+            stacklevel=2,
+        )
+        return default_allowlist, default_base
+
+
+def _positive_env_int(name, default, *, maximum=None):
+    value = env_int(name, default)
+    if value < 1 or (maximum is not None and value > maximum):
+        bound = f" entre 1 y {maximum}" if maximum is not None else " positivo"
+        warnings.warn(
+            f"{name} debe ser un entero{bound}; se usa {default}.",
+            stacklevel=2,
+        )
+        return default
+    return value
+
+
 # ============================================================
 # CONSTANTES DE JUEGO
 # ============================================================
 
-# (puntos_minimos, nombre_del_nivel) — ordenado de menor a mayor.
-AFFINITY_LEVELS = (
+_DEFAULT_AFFINITY_LEVELS = (
     (-100, "Bloqueada"),
     (-50, "Enfadada"),
     (-20, "Molesta"),
@@ -62,6 +186,9 @@ AFFINITY_LEVELS = (
     (45, "Cercana"),
     (70, "Muy cercana"),
     (100, "Inseparables"),
+)
+AFFINITY_LEVELS = _json_env(
+    "AFFINITY_LEVELS", _DEFAULT_AFFINITY_LEVELS, _validate_affinity_levels
 )
 
 CONFESS_THRESHOLD = env_int("CONFESS_THRESHOLD", 100)  # Techo de afinidad/elegibilidad.
@@ -78,8 +205,7 @@ DATE_COOLDOWN = env_int("DATE_COOLDOWN", 6 * 3600)  # Enfriamiento entre citas.
 DATE_DELTA_MAX = env_int("DATE_DELTA_MAX", 8)  # Citas: emociones ampliadas.
 DATE_BUSY_NOTICE_COOLDOWN = env_int("DATE_BUSY_NOTICE_COOLDOWN", 30)  # Anti-spam.
 
-# Escenas de reserva si el modelo no propone ninguna.
-DATE_SCENES = (
+_DEFAULT_DATE_SCENES = (
     "un paseo por el parque al atardecer",
     "una tarde en una cafetería acogedora",
     "una sesión de cine con palomitas",
@@ -87,6 +213,7 @@ DATE_SCENES = (
     "una cena a la luz de las velas",
     "una feria con luces de colores",
 )
+DATE_SCENES = _json_env("DATE_SCENES", _DEFAULT_DATE_SCENES, _validate_date_scenes)
 DATE_CRISIS_MIN_TURNS = env_int("DATE_CRISIS_MIN_TURNS", 3)  # Turnos antes de crisis.
 DATE_END_MIN_TURNS = env_int("DATE_END_MIN_TURNS", 4)  # Turnos antes de poder cerrar.
 DATE_CRISIS_DROP = env_int("DATE_CRISIS_DROP", 4)  # Caída que desata la crisis.
@@ -144,7 +271,7 @@ MAX_HISTORY_MESSAGES = env_int("MAX_HISTORY_MESSAGES", 12)
 # ============================================================
 SELF_TRAIT_MIN = env_int("SELF_TRAIT_MIN", 1)
 SELF_TRAIT_MAX = env_int("SELF_TRAIT_MAX", 5)
-SELF_TRAITS_ALLOWLIST = (
+_DEFAULT_SELF_TRAITS_ALLOWLIST = (
     "expresiva",
     "timida",
     "juguetona",
@@ -152,7 +279,7 @@ SELF_TRAITS_ALLOWLIST = (
     "sarcastica",
     "curiosa",
 )
-SELF_BASE_TRAITS = {
+_DEFAULT_SELF_BASE_TRAITS = {
     "expresiva": 4,
     "timida": 3,
     "juguetona": 5,
@@ -160,6 +287,12 @@ SELF_BASE_TRAITS = {
     "sarcastica": 2,
     "curiosa": 4,
 }
+SELF_TRAITS_ALLOWLIST, SELF_BASE_TRAITS = _load_self_traits(
+    _DEFAULT_SELF_TRAITS_ALLOWLIST,
+    _DEFAULT_SELF_BASE_TRAITS,
+    SELF_TRAIT_MIN,
+    SELF_TRAIT_MAX,
+)
 SELF_CONCEPT_MAX_CHARS = env_int("SELF_CONCEPT_MAX_CHARS", 400)
 SELF_MAX_VALUES = env_int("SELF_MAX_VALUES", 5)
 SELF_VALUE_MAX_CHARS = env_int("SELF_VALUE_MAX_CHARS", 40)
@@ -173,7 +306,9 @@ SELF_NOTES_MAX = env_int("SELF_NOTES_MAX", SELF_DISCOVERIES_MAX)
 SELF_HISTORY_MAX = env_int("SELF_HISTORY_MAX", 200)
 SELF_HISTORY_VIEW_LIMIT = env_int("SELF_HISTORY_VIEW_LIMIT", 10)
 SELF_UPDATE_MIN_INTERVAL = env_int("SELF_UPDATE_MIN_INTERVAL", 3600)
-SELF_KEY_DAILY_LIMIT = env_int("SELF_KEY_DAILY_LIMIT", 1)
+SELF_KEY_DAILY_LIMIT = _positive_env_int(
+    "SELF_KEY_DAILY_LIMIT", 1, maximum=SELF_HISTORY_MAX
+)
 SELF_KEY_DAILY_SECONDS = env_int("SELF_KEY_DAILY_SECONDS", 86400)
 SELF_DECAY_DAYS = env_int("SELF_DECAY_DAYS", 7)
 SELF_DECAY_STEP = env_int("SELF_DECAY_STEP", 1)

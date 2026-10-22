@@ -76,6 +76,8 @@ class BotContext:
     # Cierre global solicitado por Airi (None/False fuera de producción).
     request_shutdown: Callable[..., Any] = _anoop
     is_shutting_down: Callable[[], bool] = lambda: False
+    # Marca como entregado el motivo del último cierre tras confirmar el turno.
+    acknowledge_reconnect_context: Callable[..., Any] = _anoop
     maybe_reflect: Callable[..., Any] = _anoop
 
     def remember_trace(self, trace):
