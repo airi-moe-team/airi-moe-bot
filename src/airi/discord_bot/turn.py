@@ -259,6 +259,20 @@ async def run_user_turn(
                         ctx, channel, uid, date_session, now=now
                     )
 
+            # Reflexión automática: se comprueba después del commit y se
+            # ejecuta en segundo plano para no retrasar la respuesta.
+            maybe_reflect = getattr(ctx, "maybe_reflect", None)
+            if (
+                callable(maybe_reflect)
+                and not result.disconnect_reason
+                and not (callable(getattr(ctx, "is_shutting_down", None)) and ctx.is_shutting_down())
+            ):
+                interactions = int(
+                    (state.users.get(str(uid)) or {}).get("interactions", 0) or 0
+                )
+                if state.should_reflect_self(interactions=interactions, now=now):
+                    asyncio.create_task(maybe_reflect(uid, now))
+
             # La marcha se solicita al final: la despedida y los efectos
             # confirmados del turno/cita ya se publicaron y persistieron.
             if result.disconnect_reason:

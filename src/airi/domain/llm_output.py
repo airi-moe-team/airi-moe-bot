@@ -18,6 +18,11 @@ from airi.domain.constants import (
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.narrative_claims import disconnect_claim_problem
+from airi.domain.self_model import (
+    SELF_UPDATE_OPS,
+    SELF_UPDATE_SCHEMA,
+    self_update_none,
+)
 from airi.domain.text_filters import clean_reply
 
 log = logging.getLogger(__name__)
@@ -75,6 +80,8 @@ class ModelOutput(NamedTuple):
     affinity_event: str = "none"
     # Desconexión voluntaria: {"leave": True, "reason": str} o None.
     disconnect: object = None
+    # Cambio de identidad propuesto: {"key","op","value","reason","evidence"}.
+    self_update: object = None
 
 
 def _model_output(
@@ -89,10 +96,11 @@ def _model_output(
     question=None,
     event="none",
     disconnect=None,
+    self_update=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
-        question, event, disconnect,
+        question, event, disconnect, self_update,
     )
 
 
@@ -117,6 +125,7 @@ def assistant_history_content(answer, output=None):
             "date_reason": "none",
             "last_chance_result": "none",
             "date_question": {"text": "", "options": []},
+            "self_update": self_update_none(),
             "disconnect": {"leave": False, "reason": ""},
         }
     else:
@@ -138,6 +147,8 @@ def assistant_history_content(answer, output=None):
                 getattr(output, "date_question", None)
                 or {"text": "", "options": []}
             ),
+            # Cambiar la identidad es una acción única: no se repite.
+            "self_update": self_update_none(),
             # Marcharse es una acción única: en el historial se neutraliza.
             "disconnect": {"leave": False, "reason": ""},
         }
@@ -213,6 +224,46 @@ def parse_scene_list(raw_scenes):
         if len(scenes) >= DATE_SCENE_MAX:
             break
     return scenes
+
+
+def parse_self_update(raw_update):
+    """Normaliza un cambio de identidad propuesto por el modelo.
+
+    La allowlist, los topes, el motivo obligatorio y el rate-limit se aplican
+    después en `airi.domain.self_model.apply_self_update`.
+    """
+    if not isinstance(raw_update, dict):
+        return None
+    key = raw_update.get("key")
+    op = raw_update.get("op")
+    if not isinstance(key, str) or not isinstance(op, str):
+        return None
+    key = key.strip()
+    op = op.strip().lower()
+    if not key or key.lower() in ("none", "ninguno", "null"):
+        return None
+    if not op or op not in SELF_UPDATE_OPS or op == "none":
+        return None
+    raw_value = raw_update.get("value", "")
+    if isinstance(raw_value, bool):
+        value = str(raw_value)
+    elif isinstance(raw_value, str):
+        value = raw_value
+    elif isinstance(raw_value, (int, float)):
+        value = str(raw_value)
+    else:
+        value = ""
+    reason = raw_update.get("reason", "")
+    evidence = raw_update.get("evidence", "")
+    reason = reason.strip() if isinstance(reason, str) else ""
+    evidence = evidence.strip() if isinstance(evidence, str) else ""
+    return {
+        "key": key[:80],
+        "op": op[:40],
+        "value": value.strip()[:200],
+        "reason": reason[:300],
+        "evidence": evidence[:300],
+    }
 
 
 def parse_disconnect(raw_disconnect):
@@ -314,6 +365,8 @@ def parse_model_output(raw_output, delta_max=None):
         last_chance_result = "none"
     # [CAMBIO] Citas: la pregunta decisiva (una sola vez por cita).
     date_question = parse_date_question(parsed.get("date_question"))
+    # Identidad: cambio de "yo" propuesto por Airi (opcional).
+    self_update = parse_self_update(parsed.get("self_update"))
     # Marcharse: decisión contextual y excepcional de Airi.
     disconnect = parse_disconnect(parsed.get("disconnect"))
     claim_problem = disconnect_claim_problem(
@@ -332,7 +385,7 @@ def parse_model_output(raw_output, delta_max=None):
     return ModelOutput(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
-        affinity_event, disconnect,
+        affinity_event, disconnect, self_update,
     )
 
 # Esquema JSON que la respuesta del modelo debe cumplir.
@@ -380,6 +433,7 @@ RESPONSE_SCHEMA = {
             "required": ["text", "options"],
             "additionalProperties": False,
         },
+        "self_update": SELF_UPDATE_SCHEMA,
         "disconnect": {
             "type": "object",
             "properties": {
@@ -404,6 +458,7 @@ RESPONSE_SCHEMA = {
         "date_reason",
         "last_chance_result",
         "date_question",
+        "self_update",
         "disconnect",
     ],
     "additionalProperties": False,

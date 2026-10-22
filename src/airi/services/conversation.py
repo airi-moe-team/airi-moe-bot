@@ -35,6 +35,10 @@ from airi.domain.llm_output import (
 )
 from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.prompts import SEARCH_QUERY_PROMPT
+from airi.domain.self_model import (
+    apply_self_update,
+    sync_preferences_from_self,
+)
 from airi.domain.text_filters import (
     clean_reply,
     remove_repeated_previous_reply,
@@ -70,6 +74,10 @@ GROUNDED_FALLBACK_TEXT = (
 )
 
 MEMORY_SAVED_NOTICE = "Airi recordará este evento"
+SELF_CHANGED_NOTICE = (
+    "Airi acaba de cambiar algo de sí misma — escribe `!identidad-airi` "
+    "para ver quién es ahora"
+)
 
 DISCONNECT_REPAIR_PROMPT = (
     "Tu respuesta anterior no fue coherente con tu decisión de marcharte. "
@@ -121,6 +129,8 @@ class TurnResult:
     web_context: str | None = None
     memory_saved: bool = False
     diary_saved: bool = False
+    self_changed: bool = False
+    self_update_action: object = None
     disconnect_reason: str | None = None
     history: list = field(default_factory=list)
     notices: list = field(default_factory=list)
@@ -287,6 +297,7 @@ class ConversationService:
                 "date_reason": output.date_reason,
                 "last_chance_result": output.last_chance_result,
                 "date_question": output.date_question,
+                "self_update": output.self_update,
             }
             answer = remove_repeated_previous_reply(output.reply, history)
             answer = strip_repetition_loop(answer)
@@ -434,6 +445,29 @@ class ConversationService:
             self.state.save_memories()
             notices.append(MEMORY_SAVED_NOTICE)
 
+        # Deriva lenta: si han pasado los días configurados, los rasgos se
+        # acercan un paso a su base. Es idempotente y no toca el núcleo.
+        self.state.decay_self(now=draft.now)
+
+        self_changed = False
+        self_entry = None
+        if output.self_update:
+            source = "gift" if draft.context.kind == "gift" else (
+                "date" if in_date else "message"
+            )
+            self_entry = apply_self_update(
+                self.state.self_model(),
+                output.self_update,
+                now=draft.now,
+                user_id=uid,
+                source=source,
+            )
+            if self_entry:
+                self_changed = True
+                sync_preferences_from_self(self.state.world)
+                self.state.save_identity()
+                notices.append(SELF_CHANGED_NOTICE)
+
         history = list(draft.history)
         history.append({
             "role": "assistant",
@@ -485,6 +519,8 @@ class ConversationService:
             web_context=draft.web_context,
             memory_saved=memory_saved,
             diary_saved=diary_saved,
+            self_changed=self_changed,
+            self_update_action=self_entry,
             disconnect_reason=disconnect_reason,
             history=history,
             notices=notices,
@@ -546,6 +582,10 @@ class ConversationService:
             domain_prompts.identity_tags_prompt_section(),
             domain_prompts.date_context_section(
                 date_session if isinstance(date_session, dict) else None
+            ),
+            domain_prompts.self_model_prompt_section(
+                state.world,
+                notes=state.world.get("self_notes") or [],
             ),
             domain_prompts.memories_prompt_section(
                 _read_only_memories(state.memories, user.id)

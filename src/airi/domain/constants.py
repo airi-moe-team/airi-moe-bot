@@ -122,7 +122,6 @@ MAX_RECENT_GIFTS = env_int("MAX_RECENT_GIFTS", 3)
 # LÍMITES DEL PIPELINE DE RESPUESTA (usados por el dominio)
 # ============================================================
 
-DATE_ACTION_MAX = env_int("DATE_ACTION_MAX", 4)
 DATE_SCENE_MAX_TOKENS = env_int("DATE_SCENE_MAX_TOKENS", 300)  # Citas UI generadas.
 SEARCH_QUERY_MAX_TOKENS = env_int("SEARCH_QUERY_MAX_TOKENS", 64)  # Reformulación búsqueda.
 DATE_ACTION_LABEL_MAX = env_int("DATE_ACTION_LABEL_MAX", 80)
@@ -140,3 +139,47 @@ DIARY_PROMPT_MAX_USER = env_int("DIARY_PROMPT_MAX_USER", 6)
 DIARY_PROMPT_MAX_CHARS = env_int("DIARY_PROMPT_MAX_CHARS", 900)
 KNOWN_USERS_PROMPT_MAX = env_int("KNOWN_USERS_PROMPT_MAX", 10)
 MAX_HISTORY_MESSAGES = env_int("MAX_HISTORY_MESSAGES", 12)
+
+# ============================================================
+# IDENTIDAD DE AIRI (self model)
+# ============================================================
+SELF_TRAIT_MIN = env_int("SELF_TRAIT_MIN", 1)
+SELF_TRAIT_MAX = env_int("SELF_TRAIT_MAX", 5)
+SELF_TRAITS_ALLOWLIST = (
+    "expresiva",
+    "timida",
+    "juguetona",
+    "celosa",
+    "sarcastica",
+    "curiosa",
+)
+SELF_BASE_TRAITS = {
+    "expresiva": 4,
+    "timida": 3,
+    "juguetona": 5,
+    "celosa": 2,
+    "sarcastica": 2,
+    "curiosa": 4,
+}
+SELF_CONCEPT_MAX_CHARS = env_int("SELF_CONCEPT_MAX_CHARS", 400)
+SELF_MAX_VALUES = env_int("SELF_MAX_VALUES", 5)
+SELF_VALUE_MAX_CHARS = env_int("SELF_VALUE_MAX_CHARS", 40)
+SELF_MAX_QUIRKS = env_int("SELF_MAX_QUIRKS", 8)
+SELF_QUIRK_MAX_CHARS = env_int("SELF_QUIRK_MAX_CHARS", 80)
+SELF_MAX_TASTES = env_int("SELF_MAX_TASTES", 8)
+SELF_TASTE_MAX_CHARS = env_int("SELF_TASTE_MAX_CHARS", 40)
+SELF_DISCOVERY_MAX_CHARS = env_int("SELF_DISCOVERY_MAX_CHARS", 200)
+SELF_DISCOVERIES_MAX = env_int("SELF_DISCOVERIES_MAX", 50)
+SELF_NOTES_MAX = env_int("SELF_NOTES_MAX", SELF_DISCOVERIES_MAX)
+SELF_HISTORY_MAX = env_int("SELF_HISTORY_MAX", 200)
+SELF_HISTORY_VIEW_LIMIT = env_int("SELF_HISTORY_VIEW_LIMIT", 10)
+SELF_UPDATE_MIN_INTERVAL = env_int("SELF_UPDATE_MIN_INTERVAL", 3600)
+SELF_KEY_DAILY_LIMIT = env_int("SELF_KEY_DAILY_LIMIT", 1)
+SELF_KEY_DAILY_SECONDS = env_int("SELF_KEY_DAILY_SECONDS", 86400)
+SELF_DECAY_DAYS = env_int("SELF_DECAY_DAYS", 7)
+SELF_DECAY_STEP = env_int("SELF_DECAY_STEP", 1)
+SELF_REFLECTION_EVERY_N = env_int("SELF_REFLECTION_EVERY_N", 10)
+SELF_REFLECTION_MIN_INTERVAL = env_int("SELF_REFLECTION_MIN_INTERVAL", 3600)
+SELF_REFLECTION_MAX_TOKENS = env_int("SELF_REFLECTION_MAX_TOKENS", 300)
+SELF_UPDATE_OPS = ("add", "remove", "inc", "set", "rewrite_concept", "none")
+SELF_UPDATE_SOURCES = ("message", "gift", "date", "reflection", "season")

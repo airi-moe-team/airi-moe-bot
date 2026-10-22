@@ -9,6 +9,15 @@ import discord
 
 GIF_EMBED_COLOR = discord.Color(0xFFB6D9)
 
+
+def system_embed(description, *, title=None):
+    """Embed neutro para avisos de sistema y resultados de comandos."""
+    return discord.Embed(
+        title=title,
+        description=description,
+        color=GIF_EMBED_COLOR,
+    )
+
 HELP_TEXT = (
     "**🎯 Objetivo**\n"
     "Ser el primero en llegar a **100 de afinidad** con Airi. Al cruzarlos, ella "
@@ -38,6 +47,9 @@ HELP_TEXT = (
     "• `!memorias` / `!olvidar <número>` — ver o borrar sus recuerdos sobre ti\n"
     "• `!diario` — leer el diario de recuerdos de Airi\n"
     "• `!usuarios` — gente del canal\n"
+    "• `!yo` — ver cómo es Airi ahora mismo\n"
+    "• `!yo historia` — cambios que Airi ha hecho en su forma de ser\n"
+    "• `!descubrir` — pedirle a Airi una reflexión sobre sí misma (solo dueño)\n"
     "• `!reset` — reiniciar vuestra conversación\n\n"
 
     "**🔧 Comandos de administrador**\n"

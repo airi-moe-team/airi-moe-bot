@@ -1,0 +1,134 @@
+"""Comandos de identidad de Airi: `!identidad-airi` (alias `!yo`)."""
+
+from __future__ import annotations
+
+import time
+
+import aiohttp
+
+from airi.adapters.http_llm import HttpLlmClient
+from airi.discord_bot import embeds
+from airi.domain.self_model import (
+    render_self_history,
+    render_self_narrative,
+    revert_self_update,
+)
+from airi.services.self_service import SelfService
+
+
+async def handle_yo(ctx, message):
+    """Muestra quién es Airi ahora."""
+    model = ctx.state.self_model()
+    text = render_self_narrative(model, notes=ctx.state.self_notes())
+    await message.channel.send(embed=embeds.system_embed(text))
+
+
+async def handle_yo_historia(ctx, message):
+    """Muestra el historial de cambios de identidad."""
+    model = ctx.state.self_model()
+    await message.channel.send(
+        embed=embeds.system_embed(render_self_history(model))
+    )
+
+
+def reflection_notice(outcome):
+    if outcome is None:
+        return (
+            "Ehh... no he conseguido mirarme por dentro ahora mismo. "
+            "¿Lo intentamos otra vez en un momentito?"
+        )
+    if not outcome.ran:
+        return (
+            "Aún no me toca una pausa para reflexionar (o el modelo no está "
+            "disponible). Prueba más tarde."
+        )
+    if not outcome.changed:
+        return (
+            "Me he quedado callada pensando en quién soy... pero esta vez no "
+            "he cambiado nada de mí."
+        )
+    lines = ["*Airi se ha mirado por dentro y algo ha cambiado:*"]
+    if outcome.discovery:
+        lines.append(f"• **Descubrimiento:** {outcome.discovery}")
+    if outcome.self_entry:
+        entry = outcome.self_entry
+        lines.append(
+            f"• **Cambio:** `{entry['key']}` {entry['from']} → {entry['to']}"
+        )
+    lines.append("Escribe `!identidad-airi` para verme completa.")
+    return "\n".join(lines)
+
+
+async def handle_descubrir(ctx, message):
+    """Fuerza una reflexión introspectiva. Solo el dueño."""
+    if ctx.owner_id and message.author.id != ctx.owner_id:
+        await message.reply(
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede forzar el autodescubrimiento."
+            ),
+            mention_author=False,
+        )
+        return
+    outcome = None
+    try:
+        timeout = aiohttp.ClientTimeout(total=ctx.request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            llm = HttpLlmClient(
+                ctx.llama_url,
+                session,
+                timeout=ctx.request_timeout,
+            )
+            service = SelfService(
+                llm=llm,
+                state=ctx.state,
+                clock=time.time,
+                lock=getattr(ctx, "commit_lock", None),
+                persistence=getattr(ctx, "persistence", None),
+            )
+            outcome = await service.reflect(
+                message.author.id, now=time.time(), force=True
+            )
+    except Exception:
+        pass
+    await message.reply(
+        embed=embeds.system_embed(reflection_notice(outcome)),
+        mention_author=False,
+    )
+
+
+async def handle_yo_revertir(ctx, message):
+    """Revierte un cambio del historial. Solo el dueño puede hacerlo."""
+    if ctx.owner_id and message.author.id != ctx.owner_id:
+        await message.reply(
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede revertir cambios de identidad."
+            ),
+            mention_author=False,
+        )
+        return
+    parts = message.content.split()
+    try:
+        index = int(parts[2])
+    except (IndexError, ValueError):
+        await message.reply(
+            embed=embeds.system_embed("El número debe ser entero."),
+            mention_author=False,
+        )
+        return
+    state = ctx.state
+    entry = revert_self_update(state.self_model(), index, now=time.time())
+    if not entry:
+        await message.reply(
+            embed=embeds.system_embed(
+                "No encontré ese cambio o no se puede revertir."
+            ),
+            mention_author=False,
+        )
+        return
+    state.save_identity()
+    await message.reply(
+        embed=embeds.system_embed(
+            f"Revertido cambio nº {index}: {entry['key']} → {entry['from']}."
+        ),
+        mention_author=False,
+    )

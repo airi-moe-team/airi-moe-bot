@@ -608,6 +608,7 @@ def run_bot(argv=None):
     import os
     from io import BytesIO
 
+    import aiohttp
     from dotenv import load_dotenv
 
     from airi.adapters.brave_search import BraveSearchClient
@@ -642,6 +643,7 @@ def run_bot(argv=None):
     from airi.services.publication import PublicationResumer
     from airi.services.retention import RetentionService
     from airi.services.season_archive import SeasonArchiver
+    from airi.services.self_service import SelfService
     from airi.services.turn_journal import TurnJournal
 
     load_dotenv()
@@ -719,6 +721,47 @@ def run_bot(argv=None):
     users_data = state.users
 
     turn_journal = TurnJournal(state, persistence=persistence)
+    try:
+        with persistence.transaction():
+            state.decay_self(now=time.time())
+    except Exception:
+        log.exception("No se pudo aplicar la deriva de identidad al arrancar")
+
+    reflection_inflight: set[str] = set()
+
+    async def maybe_reflect(user_id, now):
+        """Reflexión automática en segundo plano, sin retrasar la respuesta."""
+        key = str(user_id)
+        if key in reflection_inflight:
+            return
+        reflection_inflight.add(key)
+        try:
+            timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                llm = HttpLlmClient(
+                    LLAMA_URL, session, timeout=REQUEST_TIMEOUT
+                )
+                service = SelfService(
+                    llm=llm,
+                    state=state,
+                    clock=time.time,
+                    lock=commit_lock,
+                    persistence=persistence,
+                )
+                outcome = await service.reflect(
+                    user_id, now=now, trigger="interaction"
+                )
+                if outcome.changed:
+                    log.info(
+                        "Reflexión automática: discovery=%s self_change=%s",
+                        bool(outcome.discovery),
+                        outcome.self_entry is not None,
+                    )
+        except Exception:
+            log.exception("La reflexión automática falló")
+        finally:
+            reflection_inflight.discard(key)
+
     season_archiver = SeasonArchiver(settings.data_dir)
     retention = RetentionService(
         settings.data_dir,
@@ -786,6 +829,7 @@ def run_bot(argv=None):
             retention=retention,
             turn_journal=turn_journal,
             commit_lock=commit_lock,
+            maybe_reflect=maybe_reflect,
             build_service=build_conversation_service,
             settle_relationship=settle_relationship,
             process_date_turn=glue.process_date_turn,

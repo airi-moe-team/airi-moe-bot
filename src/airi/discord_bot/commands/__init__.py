@@ -6,6 +6,7 @@ from airi.discord_bot.commands import (
     debug,
     diary,
     gifts,
+    identity,
     memories,
     ranking,
     reset,
@@ -32,6 +33,14 @@ def build_registry() -> CommandRegistry:
     registry.exact("!cita")(command(dates.handle))
     registry.exact("!reiniciar-temporada", "!reiniciar_temporada")(command(season.handle))
     registry.exact("!reset")(command(reset.handle))
+    registry.exact("!identidad-airi", "!yo")(command(identity.handle_yo))
+    registry.exact("!descubrir")(command(identity.handle_descubrir))
+    registry.prefix("!identidad-airi historia", "!yo historia")(
+        command(identity.handle_yo_historia)
+    )
+    registry.prefix("!identidad-airi revertir", "!yo revertir")(
+        command(identity.handle_yo_revertir)
+    )
 
     registry.prefix("!regalo")(traced("gift")(gifts.handle))
     registry.prefix("!memorias")(command(memories.handle_memorias))

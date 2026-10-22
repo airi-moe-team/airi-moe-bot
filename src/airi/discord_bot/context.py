@@ -76,6 +76,7 @@ class BotContext:
     # Cierre global solicitado por Airi (None/False fuera de producción).
     request_shutdown: Callable[..., Any] = _anoop
     is_shutting_down: Callable[[], bool] = lambda: False
+    maybe_reflect: Callable[..., Any] = _anoop
 
     def remember_trace(self, trace):
         """Persiste la traza en el TraceStore compartido (cross-message)."""

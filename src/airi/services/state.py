@@ -16,6 +16,19 @@ from airi.domain.affinity import (
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.memories import user_memories as _user_memories
+from airi.domain.self_model import (
+    apply_decay,
+    mark_reflection,
+    migrate_from_world,
+    normalize_self,
+    should_reflect,
+    sync_preferences_from_self,
+)
+from airi.domain.self_notes import (
+    NOTES_KEY,
+    add_note,
+    normalize_notes,
+)
 from airi.observability.trace_store import TraceStore
 
 
@@ -144,3 +157,60 @@ class AppState:
         if isinstance(entry, dict) and entry.get("name"):
             return str(entry["name"])
         return "alguien"
+
+    # ------------------------------------------------------------------
+    # Identidad editable
+    # ------------------------------------------------------------------
+
+    def self_model(self) -> dict:
+        """Devuelve el "yo" mutable, sembrándolo desde preferences si falta."""
+        model = self.world.get("self")
+        if not isinstance(model, dict):
+            model = migrate_from_world(self.world)
+            self.world["self"] = model
+        normalize_self(model)
+        sync_preferences_from_self(self.world)
+        return model
+
+    def save_identity(self) -> None:
+        """La identidad vive dentro de `world`; se persiste con él."""
+        self.save_world()
+
+    def _notes_list(self) -> list:
+        notes = self.world.get(NOTES_KEY)
+        if not isinstance(notes, list):
+            notes = []
+            self.world[NOTES_KEY] = notes
+        return notes
+
+    def self_notes(self) -> list:
+        """Notas privadas de Airi en este servidor."""
+        return normalize_notes(self._notes_list())
+
+    def add_self_note(self, text, *, now, source="reflection"):
+        entry = add_note(self._notes_list(), text, now=now, source=source)
+        if entry is not None:
+            self.save_world()
+        return entry
+
+    def mark_self_reflection(self, *, now) -> None:
+        model = self.self_model()
+        mark_reflection(model, now)
+        self.save_identity()
+
+    def decay_self(self, *, now) -> bool:
+        model = self.self_model()
+        before = model.get("last_decay_at")
+        changed = apply_decay(model, now)
+        if changed or model.get("last_decay_at") != before:
+            self.save_identity()
+        return changed
+
+    def should_reflect_self(self, *, interactions, now, force=False) -> bool:
+        model = self.self_model()
+        return should_reflect(
+            interactions=interactions,
+            model=model,
+            now=now,
+            force=force,
+        )
