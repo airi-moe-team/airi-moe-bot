@@ -85,12 +85,10 @@ def _mutate(state) -> None:
             continue
         entry["points"] = 0
         entry["milestones"] = []
-    # Los contadores de interacción se inyectan al prompt de Airi
-    # (`known_users_prompt_section`), lo que sesgaría la nueva temporada hacia
-    # quien más habló antes. Se reinician a 0 conservando nombre y fechas.
-    for entry in state.users.values():
-        if isinstance(entry, dict):
-            entry["interactions"] = 0
+    # Nueva temporada: Airi no recuerda a nadie. Los nombres, fechas y
+    # contadores de interacción se inyectan en el prompt, así que se borran
+    # los registros activos; la copia de la temporada anterior queda archivada.
+    state.users.clear()
     state.dates.clear()
     state.memories.clear()
     state.histories.clear()

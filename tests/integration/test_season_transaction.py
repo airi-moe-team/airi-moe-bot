@@ -90,8 +90,11 @@ def test_season_reset_archives_and_commits_once(tmp_path):
     archive = data_dir / "archive" / "seasons" / "3" / "state.json"
     archived = json.loads(archive.read_text(encoding="utf-8"))
     assert archived["world"]["season"] == 3
+    # El archivo conserva los usuarios de la temporada cerrada.
+    assert archived["users"]["1"]["name"] == "Ana"
     active = json.loads(store.active_path.read_text(encoding="utf-8"))
     assert active["world"]["season"] == 4
+    assert active["users"] == {}
     assert active["state_version"] == 2
     assert message.channel.sent and "Nueva temporada" in message.channel.sent[0]
 
@@ -111,6 +114,7 @@ def test_season_reset_write_failure_restores_state_and_silences_success(
 
     assert ctx.state.world["season"] == 3
     assert ctx.state.affinity["1"]["points"] == 90
+    assert ctx.state.users["1"]["name"] == "Ana"
     assert message.channel.sent == []
     assert message.replies and "No pude" in message.replies[0]
     # El archivo activo sigue en la versión anterior.

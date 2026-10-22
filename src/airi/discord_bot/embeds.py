@@ -80,8 +80,8 @@ HELP_TEXT = (
     "• `!reset` — reiniciar vuestra conversación\n\n"
 
     "**🔧 Comandos de administrador**\n"
-    "• `!reiniciar-temporada` — nueva temporada: resetea afinidad, recuerdos, "
-    "diario y contadores de interacción\n"
+    "• `!reiniciar-temporada` — nueva temporada: olvida usuarios, afinidad, "
+    "recuerdos y diario\n"
     "• `!debug turno` / `!debug trace` — inspeccionar el último turno\n"
     "• `!debug ultimo [n]` — resumen de los últimos n eventos\n"
     "• `!debug id <cid>` — JSON crudo del evento con ese correlation_id\n"

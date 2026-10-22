@@ -81,18 +81,15 @@ def test_reset_by_non_owner_is_rejected():
     assert state.users["1"]["interactions"] == 72
 
 
-def test_reset_zeroes_interactions_for_every_user():
+def test_reset_forgets_every_user():
     state, _ = _dirty_state()
     ctx = _ctx(state)
     message = FakeMessage(FakeAuthor(1), FakeChannel())
 
     run(season.handle(ctx, message))
 
-    assert state.users["1"]["interactions"] == 0
-    assert state.users["2"]["interactions"] == 0
-    # Se conserva la identidad de los usuarios conocidos.
-    assert state.users["1"]["name"] == "David"
-    assert state.users["1"]["first_seen"] == 10.0
+    # Airi no debe recordar a nadie en la nueva temporada.
+    assert state.users == {}
 
 
 def test_reset_clears_affinity_memories_diary_dates_and_histories():
@@ -130,11 +127,11 @@ def test_reset_advances_season_and_persists_all_stores():
     assert counters["diary"] >= 1
 
 
-def test_reset_tolerates_non_dict_user_entries():
+def test_reset_clears_corrupt_user_entries_too():
     state, _ = make_state(users={"1": "corrupto", "2": {"name": "X", "interactions": 5}})
     ctx = _ctx(state)
     message = FakeMessage(FakeAuthor(1), FakeChannel())
 
     run(season.handle(ctx, message))
 
-    assert state.users["2"]["interactions"] == 0
+    assert state.users == {}
