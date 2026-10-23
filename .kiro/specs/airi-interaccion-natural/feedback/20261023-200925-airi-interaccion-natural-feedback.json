@@ -1,0 +1,29 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-23T20:09:25Z",
+  "items": [
+    {
+      "id": "FB-006",
+      "title": "Perfil estable de gustos configurable en .env como fuente canónica",
+      "severity": "major",
+      "impact": "El autodescubrimiento puede hoy modificar `tastes.loves/dislikes` y favoritos, y el matcher del modo espectador depende del modelo mutable: una evolución de personalidad cambiaría inadvertidamente qué temas despiertan a Airi.",
+      "recommendation": "Definir un único perfil canónico de gustos (loves/dislikes/favorite_food/favorite_flower) en una variable de entorno JSON. Cuando esté definido, bootstrap lo aplica al estado persistido (world['preferences']) con transacción y save; prompt y matcher leen ese mismo estado. Si no está definido, se conserva el perfil persistido o los defaults, sin inventar listas separadas ni duplicadas.",
+      "targets": ["requirements", "design"],
+      "updates": {
+        "requirements": [
+          "El perfil canónico de gustos es configurable por variable de entorno (JSON) y prevalece sobre lo persistido cuando está definido.",
+          "El matcher del modo espectador y el prompt de gustos usan la MISMA fuente canónica del estado, sin listas duplicadas.",
+          "El autodescubrimiento NO modifica los gustos estables ni favoritos; solo personalidad, valores, manías y forma de pensar."
+        ],
+        "design": [
+          "Bootstrap de run_bot: si AIRI_PROFILE está definida y es JSON válido, se persiste en world['preferences'] dentro de transacción/persistence; inválida o vacía se ignora con warning y fallback al perfil persistido/default.",
+          "self_model: se retiran las claves tastes de la allowlist de self_update (y del texto de reglas del prompt). El histórico se conserva; sync_preferences_from_self deja de tocar gustos.",
+          "client._evaluate_spectator_event usa positive_taste_terms(world/preferences) en lugar de self_model().",
+          "Nuevo test unitario del parseo del perfil env y de la aplicación al estado; tests existentes de self_model adaptados."
+        ],
+        "tasks": []
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design"]
+}

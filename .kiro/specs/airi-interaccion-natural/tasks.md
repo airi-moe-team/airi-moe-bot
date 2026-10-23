@@ -79,3 +79,16 @@
     - Confirmar ausencia de llamadas LLM cuando no hay intervención
     - Preparar el flag de configuración para activar en producción
     - _Requirements: 5.8_
+
+- [ ] 6. Perfil estable de gustos (FB-006)
+  - [ ] 6.1 Perfil canónico configurable por entorno
+    - Definir `AIRI_PROFILE` (JSON: loves/dislikes/favorite_food/favorite_flower)
+    - Parseo tolerante: vacía o inválida ⇒ warning y fallback al perfil persistido/defaults
+    - Al arrancar, si está definida y válida, persistirla en `world["preferences"]` con transacción
+    - Matcher y prompt de gustos leen esa misma fuente del estado (sin listas duplicadas)
+    - _Requirements: 2.6, 2.10, 2.11_
+  - [ ] 6.2 Congelar gustos ante el autodescubrimiento
+    - Retirar las claves `tastes.*` de la allowlist de cambios de identidad
+    - Actualizar el texto de reglas del prompt y los tests de self_model afectados
+    - Verificar que un self_update de gustos ya no aplica y el historial queda íntegro
+    - _Requirements: 2.12_

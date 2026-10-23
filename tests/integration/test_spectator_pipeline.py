@@ -207,14 +207,14 @@ def test_modo_activado_tema_despierta_un_solo_turno(monkeypatch, service_llm):
     monkeypatch.setattr("airi.discord_bot.turn.log", logging.getLogger("t-turn"))
     client, channel, state = _setup(monkeypatch, service_llm, enabled=True)
     llm = service_llm
-    state.world.setdefault("self", {})
-    state.world["self"]["tastes"] = {
+    # Los gustos negativos del perfil persistido no despiertan a Airi.
+    state.world["preferences"] = {
         "loves": ["videojuegos"],
-        "dislikes": [],
+        "dislikes": ["grosero"],
         "favorite_food": "postres y dulces",
         "favorite_flower": "rosas",
     }
-    msg = _send_message(channel, mid=3, content="¿jugamos videojuegos luego?")
+    msg = _send_message(channel, mid=3, content="¿funcionamos bien, y los videojuegos? luego")
     asyncio.run(_drive(client, msg, channel, debug=True))
     assert len(llm.calls) == 1
     assert channel.sent, "la respuesta espontánea se publicó"

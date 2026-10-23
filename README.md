@@ -213,7 +213,11 @@ AIRI_SPECTATOR_AFFINITY_POINTS=20  # umbral de afinidad por autor
 AIRI_SPECTATOR_PROB_TOPIC=0.55     # probabilidad cuando hay tema
 AIRI_SPECTATOR_PROB_AFFINITY=0.35  # probabilidad cuando hay afinidad
 AIRI_SPECTATOR_COOLDOWN_SECONDS=300
-AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
+"AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
+# Perfil estable de gustos (JSON). Si está definida y es válida, prevalece
+# sobre lo persistido y sobre cualquier cambio posterior de identidad.
+# AIRI_PROFILE='{"loves":["videojuegos","ramen"],"dislikes":[],"favorite_food":"postres y dulces","favorite_flower":"las rosas'"'"'"
+
 ```
 
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del

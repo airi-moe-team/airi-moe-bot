@@ -101,16 +101,22 @@ graph TB
 - Trade-offs: Airi puede reaccionar sin recordar por siempre ese hilo; el snapshot
  engeance el prompt un poco más largo pero acotado.
 
-**Decision 2 — Matcher puro y determinista en `domain/`.**
-- Context: La detección de interés debe coste casi cero y ser testable sin red.
-- Alternatives: LLM para interpretar; keyword embedding; solo afinidad.
-- Selected: `domain/spectator.py`: normalizador Unicode/casefold, formas word-boundary
-  (regex precompilada) y alias list derivados de `world["self"]["tastes"]` refrescados si
-  el perfil cambia por hash de contenido.
-- Rationale: Coherente con las reglas de arquitectura (pureza, coste O(n) sobre el buffer),
-  reutiliza el modelo mutable de identidad para no duplicar lista de temas.
-- Trade-offs: No detecta lenguaje figurado; los alias deben declararse explícitos por
-  configuración si se quiere cubrir variantes.
+**Decision 2 — Matcher puro y determinista en `domain/`, con perfil canónico estable.**
+- Context: La detección de interés debe ser coste casi cero, testeable sin red, y debe
+      usar el perfil de gustos estable; el modelo mutable de identidad no altera qué
+      despierta a Airi ni los gustos que el prompt conoce.
+- Alternatives: LLM para interpretar; keyword embedding; solo afinidad; self-model
+      mutable como fuente.
+- Selected: `domain/spectator.py`: normalizador Unicode/casefold, word-boundary (regex
+      precompilada) y alias declarados explícitamente; fuente canónica del perfil de
+      gustos configurable desde `AIRI_PROFILE` (JSON): si está definida y es válida, el
+      bootstrap la persiste en `world["preferences"]` dentro de transacción; de lo
+      contrario, fallback al perfil persistido o a los defaults. El matcher y el prompt
+      leen ambos la misma fuente.
+- Rationale: Coherente con la pureza del dominio, evita duplicar lista de temas y la tu
+      evolución del self-model no afecta el comportamiento de activación ni su identidad.
+- Trade-offs: Sin sentido figurado; la edición del perfil se ve a través del env (editing
+      y reinicio), no por conversación.
 
 **Decision 3 — Probabilidad y cooldown como política inyectable.**
 - Context: La feature se probó en conversación natural; sin política, Airi responde a
@@ -259,15 +265,23 @@ def decide_activation(*, mentions: bool, topic: bool, affinity: bool,
 - Encapsula cooldown por canal/autor y tirada local (inyectable clock/random).
 - Ejecutado en `client.py` antes de abrir un turno, tras debounce.
 
+### Perfil canónico (bootstrap)
+
+- `AIRI_PROFILE` (JSON) se aplica en el arranque de `run_bot` a `world["preferences"]`
+  (transacción + save). El matcher usa `positive_taste_terms(world)` y el prompt
+  `preferences_prompt_section(world)`; el self-model conserva sus gustos registrados
+  históricos pero ya no los muta (allowlist sin claves `tastes.*`).
+
 ### Modificaciones punt aiming
 
 | Archivo | Cambio |
 |---|---|
-| `discord_bot/client.py` | Añadir `SpectatorPolicy`/`PassiveBuffer`, evaluar señales tras debounce antes del dispatcher; `kind="spectator"` |
+| `discord_bot/client.py` | Bootstrap del perfil canónico (`AIRI_PROFILE`), `SpectatorPolicy`/`PassiveBuffer`, evaluar señales tras debounce antes del dispatcher; `kind="spectator"` |
 | `discord_bot/turn.py` | `run_user_turn(... kind="spectator")`: acepta snapshot; al publicar con éxito, marca consumidos y cooldown |
 | `services/conversation.py` | `_generate` recibe `ctx.kind=="spectator"` y anexa `history_in` efímero con etiqueta interna clara pero sin revelar mecanística |
-| `observability/events.py` | Campos `spectator_*` thighs arriba |
+| `observability/events.py` | Campos `spectator_*` aditivos |
 | `domain/constants.py` | Constantes `AIRI_SPECTATOR_*` con `env_*` |
+| `domain/self_model.py` | Allowlist de self_update sin claves `tastes.*`; gustos quedan estables |
 
 ## Error Handling
 

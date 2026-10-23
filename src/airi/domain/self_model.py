@@ -55,8 +55,8 @@ from airi.domain.constants import (
 SELF_TRAIT_PREFIX = "traits."
 
 # Claves de lista (operaciones add/remove) y escalares (operación set).
-SELF_LIST_KEYS = ("values", "quirks", "tastes.loves", "tastes.dislikes")
-SELF_SCALAR_KEYS = ("tastes.favorite_flower", "tastes.favorite_food")
+SELF_LIST_KEYS = ("values", "quirks")
+SELF_SCALAR_KEYS = ()
 SELF_CONCEPT_KEY = "self_concept"
 
 # Topes y longitud por clave de lista.

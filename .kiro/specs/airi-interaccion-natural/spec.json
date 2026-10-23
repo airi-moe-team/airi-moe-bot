@@ -1,17 +1,17 @@
 {
   "feature_name": "airi-interaccion-natural",
   "created_at": "2026-10-22T00:00:00Z",
-  "updated_at": "2026-10-23T09:37:45Z",
+  "updated_at": "2026-10-23T20:11:12Z",
   "language": "es",
-  "phase": "tasks-generated",
+  "phase": "requirements-updated",
   "approvals": {
     "requirements": {
       "generated": true,
-      "approved": true
+      "approved": false
     },
     "design": {
       "generated": true,
-      "approved": true
+      "approved": false
     },
     "tasks": {
       "generated": true,
@@ -20,8 +20,8 @@
   },
   "ready_for_implementation": true,
   "feedback": {
-    "last_report_path": "feedback/20261023-041811-airi-interaccion-natural-feedback.json",
-    "last_applied_at": "2026-10-23T04:19:39Z",
-    "applied_item_ids": ["FB-001", "FB-002", "FB-003", "FB-004", "FB-005"]
+    "last_report_path": "feedback/20261023-200925-airi-interaccion-natural-feedback.json",
+    "last_applied_at": "2026-10-23T20:11:12Z",
+    "applied_item_ids": ["FB-001", "FB-002", "FB-003", "FB-004", "FB-005", "FB-006"]
   }
 }

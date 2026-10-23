@@ -55,9 +55,9 @@ ella o cuando detecta algo relevante, para que su participación se sienta espon
    intervención; no SHALL requerir que ambas condiciones se cumplan a la vez.
 5. IF ninguna mención ni señal espontánea coincide, THEN el bot SHALL conservar el
    mensaje en el buffer y no SHALL generar un turno.
-6. WHEN el bot detecta un tema de interés, THEN SHALL consultar los gustos positivos del
-   perfil/self-model existente de Airi como fuente canónica y no SHALL mantener una lista
-   duplicada de temas de activación.
+6. WHEN el bot detecta un tema de interés, THEN SHALL consultar el perfil canónico de
+   gustos del estado como única fuente y no SHALL mantener una lista duplicada de temas
+   de activación.
 7. WHILE se evalúa la coincidencia de tema, THE bot SHALL hacerlo SIN usar el LLM,
    mediante un matcher local de palabras clave y expresiones regulares precompiladas a
    partir del perfil positivo de Airi, con normalización de texto y límites de palabra.
@@ -65,6 +65,14 @@ ella o cuando detecta algo relevante, para que su participación se sienta espon
    precompilado para reflejar el perfil vigente.
 9. IF un sinónimo o variante debe activar el disparador, THEN el bot SHALL exigir que el
    alias esté definido explícitamente en la configuración del matcher.
+10. THE perfil canónico de gustos SHALL ser configurable por variable de entorno (JSON
+    con loves/dislikes/favorite_food/favorite_flower) y SHALL prevalecer sobre lo
+    persistido cuando esté definida.
+11. IF la variable no está definida o su JSON no es válido, THEN el bot SHALL conservar
+    el perfil persistido o los defaults y SHALL registrar el motivo.
+12. WHEN el autodescubrimiento propone un cambio de identidad, THEN SHALL afectar solo a
+    personalidad, valores, manías y forma de pensar; NO SHALL modificar los gustos
+    estables ni los favoritos del perfil canónico.
 
 ### Requirement 3: Generación contextual de la intervención
 **Objective:** Como participante, quiero que Airi entienda de qué está hablando el grupo

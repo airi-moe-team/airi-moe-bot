@@ -119,4 +119,22 @@ class PassiveBuffer:
         self._channels.clear()
 
 
+def apply_stable_profile(state, profile):
+    """Persiste el perfil canónico de gustos en `world["preferences"]`.
+
+    La persistencia es I/O del estado: vive en servicios, no en el dominio.
+    Devuelve True si el estado cambió; un perfil vacío/None no toca nada.
+    """
+    from airi.domain.spectator import _clean_profile
+
+    if not profile:
+        return False
+    cleaned = _clean_profile(profile) or {}
+    if not cleaned:
+        return False
+    state.world["preferences"] = cleaned
+    state.save_world()
+    return True
+
+
 __all__ = ["BufferEntry", "PassiveBuffer"]

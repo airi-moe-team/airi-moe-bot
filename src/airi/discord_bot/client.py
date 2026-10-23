@@ -21,10 +21,10 @@ import discord
 from airi.discord_bot import embeds, turn
 from airi.domain import spectator
 from airi.domain.constants import DATE_DELTA_MAX
-from airi.domain.spectator import load_policy
+from airi.domain.spectator import load_policy, load_stable_profile
 from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
-from airi.services.passive_buffer import PassiveBuffer
+from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
 from airi.services.spectator_policy import ActivitiesCooldown
 
 log = logging.getLogger(__name__)
@@ -431,7 +431,7 @@ def create_client(
             merged_text, airi_id, airi_name, reply_to_airi
         )
         topic_pattern = spectator.build_topic_matcher(
-            spectator.positive_taste_terms(ctx.state.self_model())
+            spectator.positive_taste_terms(ctx.state.world.get("preferences"))
         )
         topic = spectator.topic_eligible(topic_pattern, merged_text)
         affinity = spectator.affinity_eligible(
@@ -1021,6 +1021,13 @@ def run_bot(argv=None):
             state.decay_self(now=time.time())
     except Exception:
         log.exception("No se pudo aplicar la deriva de identidad al arrancar")
+
+    # Perfil canónico de gustos: AIRI_PROFILE (JSON) prevalece si es válida.
+    try:
+        if apply_stable_profile(state, load_stable_profile()):
+            log.info("Perfil canónico de gustos aplicado desde AIRI_PROFILE")
+    except Exception:
+        log.exception("No se pudo aplicar el perfil canónico de AIRI_PROFILE")
 
     reflection_inflight: set[str] = set()
 

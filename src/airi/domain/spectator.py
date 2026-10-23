@@ -14,6 +14,7 @@ modo que los tests puedan inyectarlos con valores deterministas.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import string
@@ -112,6 +113,76 @@ class ActivationDecision:
     guaranteed: bool = False
     probability: float = 0.0
     roll: float = 0.0
+
+
+# ============================================================
+# Perfil canónico de gustos (estable) configurable por entorno
+# ============================================================
+
+_PROFILE_KEYS = ("loves", "dislikes", "favorite_food", "favorite_flower")
+
+
+def _clean_profile(raw):
+    """Normaliza un perfil de gustos: listas limpias y strings acotados."""
+    if not isinstance(raw, dict):
+        return None
+    cleaned = {}
+    had_content = False
+    for key in _PROFILE_KEYS:
+        value = raw.get(key)
+        if isinstance(value, list):
+            items = []
+            for item in value:
+                if isinstance(item, (dict, list, tuple, set)):
+                    continue
+                text = _clean_term(item)
+                if text and not text.isdigit():
+                    items.append(text)
+            cleaned[key] = items
+        elif isinstance(value, str):
+            cleaned[key] = _clean_term(value)
+        else:
+            cleaned[key] = []
+        if cleaned[key]:
+            had_content = True
+    if not had_content:
+        return None
+    return cleaned
+
+
+def load_stable_profile(env=None):
+    """Lee el perfil canónico de gustos desde `AIRI_PROFILE` (JSON).
+
+    Devuelve None si la variable no está, está vacía, es JSON inválido o no
+    contiene datos utilizables (el llamador entonces hace fallback al perfil
+    persistido o a los defaults).
+    """
+    raw = (env or os.environ).get("AIRI_PROFILE")
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return _clean_profile(data)
+
+
+def apply_stable_profile(state, profile):
+    """Persiste el perfil canónico de gustos en `world["preferences"]`.
+
+    La persistencia es I/O del estado: vive en servicios, no en el dominio.
+    Devuelve True si el estado cambió; un perfil vacío/None no toca nada.
+    """
+    from airi.domain.spectator import _clean_profile
+
+    if not profile:
+        return False
+    cleaned = _clean_profile(profile) or {}
+    if not cleaned:
+        return False
+    state.world["preferences"] = cleaned
+    state.save_world()
+    return True
 
 
 # ============================================================
@@ -310,9 +381,11 @@ __all__ = [
     "AiriSpectatorPolicy",
     "ActivationDecision",
     "affinity_eligible",
+    "apply_stable_profile",
     "build_topic_matcher",
     "decide_activation",
     "load_policy",
+    "load_stable_profile",
     "mention_signals",
     "positive_taste_terms",
     "topic_eligible",
