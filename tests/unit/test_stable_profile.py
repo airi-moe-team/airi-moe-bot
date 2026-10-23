@@ -102,3 +102,45 @@ def test_self_update_de_personalidad_sigue_funcionando():
     )
     assert entry is not None
     assert int(model["traits"][key]) == before + 1
+
+
+def test_sync_preferences_from_self_queda_como_no_op():
+    """El fast-sync legacy NO puede pisar el perfil canónico de gustos."""
+    from airi.domain.self_model import sync_preferences_from_self
+
+    world = {
+        "self": {"tastes": {"loves": ["otra cosa"], "dislikes": [],
+                            "favorite_food": "otra", "favorite_flower": "x"}},
+        "preferences": {"loves": ["ramen"], "dislikes": [],
+                        "favorite_food": "dulces", "favorite_flower": "tulipanes"},
+    }
+    sync_preferences_from_self(world)
+    assert world["preferences"] == {
+        "loves": ["ramen"], "dislikes": [],
+        "favorite_food": "dulces", "favorite_flower": "tulipanes",
+    }
+
+
+def test_apply_turn_no_resincroniza_gustos_tras_personalidad():
+    """Un self_update de personalidad no altera world["preferences"]."""
+    from airi.domain.self_model import SELF_TRAITS_ALLOWLIST, apply_self_update
+
+    state = AppState()
+    canonical = {
+        "loves": ["ramen"],
+        "dislikes": ["grosero"],
+        "favorite_food": "dulces",
+        "favorite_flower": "tulipanes",
+    }
+    state.world["preferences"] = dict(canonical)
+    key = next(iter(SELF_TRAITS_ALLOWLIST))
+    entry = apply_self_update(
+        state.self_model(),
+        {"key": f"traits.{key}", "op": "inc", "value": "1",
+         "reason": "prueba", "evidence": "prueba"},
+        now=1_000_000.0,
+        user_id="42",
+        source="message",
+    )
+    assert entry is not None
+    assert state.world["preferences"] == dict(canonical)

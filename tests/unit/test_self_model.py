@@ -128,10 +128,12 @@ def test_render_section_includes_identity_without_history():
 
 
 def test_sync_preferences_from_self_keeps_legacy_world_in_sync():
+    """FB-006: el sync legacy es no-op; NO pisa el perfil canónico de gustos."""
     world = {"season": 1, "self": default_self()}
     world["self"]["tastes"]["favorite_food"] = "sushi"
+    world["preferences"] = {"favorite_food": "postres y dulces"}
     sync_preferences_from_self(world)
-    assert world["preferences"]["favorite_food"] == "sushi"
+    assert world["preferences"]["favorite_food"] == "postres y dulces"
 
 
 def test_decay_moves_traits_toward_base_after_the_interval():

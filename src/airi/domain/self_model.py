@@ -806,20 +806,11 @@ def render_self_history(model):
 
 
 def sync_preferences_from_self(world):
-    """Mantiene `world["preferences"]` alineado con los gustos del self.
+    """NO-OP (FB-006): los gustos son parte estable y no se resincronizan.
 
-    La identidad es la fuente de verdad de los gustos, pero el resto del bot
-    (regalos, prompt de preferencias) todavía lee `world["preferences"]`.
+    El perfil canónico vive en `world["preferences"]` (sembrado por
+    `AIRI_PROFILE` o migrado una vez). El modelo mutable solo cambia
+    personalidad/valores/manías, así que copiar `self.tastes` al vuelo
+    potente pisar el perfil canónico tras un cambio de personalidad.
     """
-    if not isinstance(world, dict):
-        return
-    model = normalize_self(world.get("self") or {})
-    prefs = world.get("preferences")
-    if not isinstance(prefs, dict):
-        prefs = default_preferences()
-        world["preferences"] = prefs
-    tastes = model.get("tastes") or {}
-    prefs["loves"] = list(tastes.get("loves") or [])
-    prefs["dislikes"] = list(tastes.get("dislikes") or [])
-    prefs["favorite_flower"] = str(tastes.get("favorite_flower") or "")
-    prefs["favorite_food"] = str(tastes.get("favorite_food") or "")
+    return None
