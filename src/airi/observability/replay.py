@@ -20,7 +20,10 @@ import os
 import sys
 from dataclasses import asdict, dataclass
 
+import aiohttp
+
 import airi.env_boot  # noqa: F401
+from airi.adapters.http_llm import build_llm
 from airi.domain.affinity import default_entry
 from airi.observability.trace import TurnEvent, load_turn_trace
 from airi.ports.llm import LLMMeta
@@ -116,14 +119,8 @@ def build_state_from_event(ev: TurnEvent) -> tuple[AppState, object]:
     return state, uid
 
 
-async def _run_event(ev: TurnEvent) -> ReplayResult:
-    """Núcleo del replay a partir de un evento ya cargado."""
-    if ev.raw_llm is None:
-        return ReplayResult(
-            reproducible=False,
-            matches_original=False,
-            checks={"raw_llm": "ausente (traza guardada sin respuesta cruda)"},
-        )
+def _mount_event(ev: TurnEvent):
+    """Prepara estado, usuario y mensajes de un evento (sin LLM ni servicio)."""
     state, uid = build_state_from_event(ev)
     user = FakeUser(uid, ev.user_name or str(uid))
     before = list(ev.history_in)
@@ -134,6 +131,18 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
     else:
         state.histories[0] = base_history
     messages = [(user, m.get("text", "")) for m in ev.messages_in]
+    return state, uid, user, messages
+
+
+async def _run_event(ev: TurnEvent) -> ReplayResult:
+    """Núcleo del replay a partir de un evento ya cargado."""
+    if ev.raw_llm is None:
+        return ReplayResult(
+            reproducible=False,
+            matches_original=False,
+            checks={"raw_llm": "ausente (traza guardada sin respuesta cruda)"},
+        )
+    state, uid, user, messages = _mount_event(ev)
     llm = ReplayLLM(ev.raw_llm, meta={
         "finish_reason": ev.llm_finish_reason,
         "usage": ev.llm_usage,
@@ -197,6 +206,35 @@ async def replay_trace(trace_path) -> ReplayResult:
     return await _run_event(ev)
 
 
+async def run_live_trace(trace_path, *, repeat=1):
+    """Reconstruye el turno de la traza y lo re-infiere con el LLM real.
+
+    A diferencia de `replay_trace`, aquí SÍ se consulta el backend configurado
+    (`LLM_BASE_URL`, por defecto llama-server local). El estado es efímero y
+    `notifier`/`gifs`/`search` son None: no se publica en Discord ni se
+    persiste nada fuera de memoria.
+    """
+    ev = load_turn_trace(trace_path)
+    results = []
+    async with aiohttp.ClientSession() as session:
+        for i in range(max(1, repeat)):
+            state, uid, user, messages = _mount_event(ev)
+            llm = build_llm(session)
+            svc = ConversationService(
+                llm=llm, state=state, search=None, gifs=None, notifier=None,
+                clock=lambda: ev.started_at or 0.0, traces=None,
+            )
+            result = await svc.run_turn(
+                user, messages,
+                TurnContext(
+                    channel_id=0, allow_web=False,
+                    correlation_id=f"{ev.correlation_id}-live{i + 1}",
+                ),
+            )
+            results.append(result)
+    return results
+
+
 def check_trace(trace):
     """Compatibilidad: envuelve el replay devolviendo (ok, informe)."""
     result = asyncio.run(_run_event(trace))
@@ -248,6 +286,11 @@ def main(argv=None):
     parser.add_argument("--emit-test", action="store_true",
                         help="genera un test de regresión en vez de reproducir")
     parser.add_argument("--out", default=None, help="ruta de salida para --emit-test")
+    parser.add_argument("--live", action="store_true",
+                        help="re-infiere el turno contra el LLM real (LLM_BASE_URL) "
+                             "en vez de reutilizar la respuesta guardada")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="número de inferencias con --live (default 1)")
     args = parser.parse_args(argv)
 
     try:
@@ -259,6 +302,21 @@ def main(argv=None):
     if args.emit_test:
         emit_test(args.trace, args.out)
         print(f"Test de regresión generado: {args.out or 'tests/integration/test_regression_<cid>.py'}")
+        return 0
+
+    if args.live:
+        try:
+            results = asyncio.run(run_live_trace(args.trace, repeat=args.repeat))
+        except Exception as exc:
+            print(f"ERROR: la inferencia live falló: {exc}", file=sys.stderr)
+            return 2
+        for i, result in enumerate(results, start=1):
+            print(json.dumps({
+                "sample": i,
+                "reply": result.reply,
+                "gif": result.gif,
+                "skipped": result.skipped,
+            }, ensure_ascii=False, indent=2))
         return 0
 
     result = asyncio.run(replay_trace(args.trace))

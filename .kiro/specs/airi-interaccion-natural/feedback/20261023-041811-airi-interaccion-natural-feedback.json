@@ -1,0 +1,95 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-23T04:18:25Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Acotar el primer incremento a escucha pasiva e intervención espontánea",
+      "severity": "major",
+      "impact": "Los requisitos actuales mezclan buffer y disparadores con retirada por hostilidad, mediación por DM y retorno, ampliando demasiado el primer incremento y no reflejando el flujo que el usuario quiere validar primero.",
+      "recommendation": "Limitar esta fase a modo espectador, buffer pasivo acotado y activación local por mención/reply, coincidencia con un interés de Airi O afinidad alta. Posponer hostilidad, mediación, DMs, retorno, inactividad y picos de actividad.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "Redefinir el alcance como un primer incremento de escucha activa e interacción espontánea.",
+          "Especificar que la retirada ante hostilidad, mediación/DM y retorno quedan fuera de este incremento.",
+          "Especificar que los disparadores por inactividad y pico de actividad también quedan fuera inicialmente."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    },
+    {
+      "id": "FB-002",
+      "title": "Tratar interés y afinidad como disparadores independientes",
+      "severity": "major",
+      "impact": "Exigir simultáneamente tema de interés y afinidad alta impediría que cualquiera de las señales acordadas despierte por sí sola a Airi.",
+      "recommendation": "Definir el disparador autónomo como coincidencia con un interés de Airi O afinidad del autor por encima del umbral configurado. La mención directa o respuesta a Airi sigue siendo una activación garantizada e independiente.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "Cuando el mensaje contiene una mención directa a Airi o responde a Airi, el bot despacha un turno sin depender de afinidad o interés.",
+          "Cuando el mensaje coincide con un interés positivo de Airi, el bot puede evaluar una intervención aunque el autor no tenga afinidad alta.",
+          "Cuando el autor alcanza el umbral configurable de afinidad, el bot puede evaluar una intervención aunque el tema no coincida con un interés.",
+          "Si no se cumple ningún disparador y no hay otro criterio acordado, el mensaje solo se conserva en el buffer pasivo."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    },
+    {
+      "id": "FB-003",
+      "title": "Usar el perfil de gustos existente como fuente canónica",
+      "severity": "major",
+      "impact": "Mantener un catálogo separado de temas de activación puede divergir de los gustos de Airi que ya conoce el prompt, haciendo que el trigger y su personalidad se contradigan.",
+      "recommendation": "Consultar el perfil de preferencias/self-model existente como única fuente para los temas de interés positivos; no crear una copia independiente. Definir posteriormente normalización y alias para coincidencias como ramen/ramen japonés.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "El detector local de temas consulta los gustos positivos del perfil existente de Airi.",
+          "El detector no mantiene una lista duplicada de intereses para activación.",
+          "Las coincidencias por alias/sinónimos se especifican como comportamiento a diseñar y probar; los gustos negativos no activan este disparador positivo salvo que se acuerde otra regla."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    },
+    {
+      "id": "FB-004",
+      "title": "Separar la causa local del despertar del contexto enviado al LLM",
+      "severity": "major",
+      "impact": "Pasar el umbral o la regla exacta que despertó a Airi al prompt puede producir respuestas mecánicas. A la vez, el modelo necesita el contexto reciente para contestar con sentido.",
+      "recommendation": "El evaluador local decide si despierta. Al generar, se suministra el contexto reciente del canal con atribución de autores y se mantiene el prompt habitual de personalidad/preferencias; no se inyecta una etiqueta del motivo o del umbral de activación. Evitar duplicar el mensaje que disparó el turno.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "Los mensajes pasivos se conservan en un buffer de canal con límite y TTL sin llamar al LLM.",
+          "Cuando se activa un turno, el modelo recibe los mensajes recientes necesarios para entender el tema y quién los dijo, sin duplicados.",
+          "La lógica de activación no expone al prompt su motivo interno, sus umbrales ni etiquetas de sistema visibles para usuarios.",
+          "La respuesta puede ser una reacción natural y no está obligada a terminar con una pregunta."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    },
+    {
+      "id": "FB-005",
+      "title": "Definir límites de frecuencia y pruebas deterministas",
+      "severity": "major",
+      "impact": "El disparador por afinidad podría hacer que Airi responda repetidamente a una persona cercana; sin cooldown, buffer acotado y tests de llamadas al LLM, el modo espectador no garantiza ahorro ni naturalidad.",
+      "recommendation": "Añadir cooldown configurable, límite/TTL del buffer y criterios verificables que cubran silencio, cada disparador por separado, mención directa y repetición dentro del cooldown. Inyectar reloj/azar solo si la política final introduce aleatoriedad.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "Mensajes sin disparador no producen llamada al LLM ni respuesta.",
+          "Una coincidencia de interés y un umbral de afinidad se prueban de forma independiente.",
+          "Un evento elegible produce como máximo un turno y respeta cooldown por canal/usuario; una mención directa conserva el comportamiento acordado de prioridad.",
+          "El buffer tiene un límite y un TTL comprobables mediante tests con reloj controlado."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements"]
+}

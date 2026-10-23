@@ -16,7 +16,8 @@ def test_system_prompt_does_not_make_romance_the_goal():
     lowered = SYSTEM_PROMPT.lower()
     assert "no" in lowered and "conseguir pareja" in lowered
     assert "amistad" in lowered
-    assert "curiosidad" in lowered
+    # La "curiosidad" dejó de nombrarse como regla del prompt (riesgo de
+    # encadenar preguntas en cada cierre); vive como rasgo del self model.
     assert "no estás buscando" in lowered or "no tienes como objetivo" in lowered
 
 

@@ -125,6 +125,7 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `CHANNEL_ID`: ID del canal autorizado
 - `LLM_PROVIDER`: perfil del proveedor (`llama`, `openai` u `openai-compatible`)
 - `LLM_BASE_URL`: URL base del proveedor (default: http://127.0.0.1:7000)
+- `LLM_THINKING_MODE`: modo de razonamiento (`auto` — solo se desactiva en turnos rápidos—, `on` —siempre activo— u `off` —siempre desactivado—; default: `auto`, solo aplicable con `LLM_PROVIDER=llama`)
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
@@ -193,6 +194,8 @@ histórico (`AIRI_TRACE_DIR` → `TRACE_DIR`).
 TRACE_DIR=./traces          # o AIRI_TRACE_DIR
 # Tamaño del ring en memoria (turnos inspeccionables con `!debug`)
 TRACE_KEEP_LAST=500         # o AIRI_TRACE_KEEP_LAST
+# Motivo que deja Airi al apagar el bot con Ctrl+C
+AIRI_SHUTDOWN_REASON="se fue a dormir"
 ```
 
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del

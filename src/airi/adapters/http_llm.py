@@ -30,6 +30,11 @@ DEFAULT_BASE_URL = "http://127.0.0.1:7000"
 DEFAULT_MODEL = "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
 #: Perfiles de compatibilidad soportados.
 LLM_PROVIDERS = ("llama", "openai", "openai-compatible")
+#: Modos de razonamiento de `LLM_THINKING_MODE`:
+#: - `auto`: se desactiva solo en los turnos rápidos (comportamiento histórico).
+#: - `on`: razonamiento siempre activo (ignora los pedidos de desactivarlo).
+#: - `off`: razonamiento siempre desactivado.
+LLM_THINKING_MODES = ("auto", "on", "off")
 
 _ERROR_DETAIL_LIMIT = 300
 
@@ -61,6 +66,21 @@ def resolve_provider(raw):
         ", ".join(LLM_PROVIDERS),
     )
     return "llama"
+
+
+def resolve_thinking_mode(raw):
+    """Normaliza `LLM_THINKING_MODE`; cualquier valor desconocido → `auto`."""
+    mode = (raw or "").strip().lower()
+    if not mode:
+        return "auto"
+    if mode in LLM_THINKING_MODES:
+        return mode
+    log.warning(
+        "LLM_THINKING_MODE=%r desconocido (aceptados: %s); se usa 'auto'",
+        raw,
+        ", ".join(LLM_THINKING_MODES),
+    )
+    return "auto"
 
 
 def default_max_tokens_field(provider):
@@ -108,6 +128,7 @@ class LlmConfig:
     skip_temperature: bool = False
     response_format: bool = True
     health_check: bool = True
+    thinking_mode: str = "auto"
 
     @classmethod
     def from_env(cls) -> "LlmConfig":
@@ -125,6 +146,9 @@ class LlmConfig:
             skip_temperature=_env_flag("LLM_SKIP_TEMPERATURE", False),
             response_format=_env_flag("LLM_RESPONSE_FORMAT", True),
             health_check=_env_flag("LLM_HEALTH_CHECK", True),
+            thinking_mode=resolve_thinking_mode(
+                os.environ.get("LLM_THINKING_MODE")
+            ),
         )
 
 
@@ -146,6 +170,7 @@ def build_llm(session, *, timeout=None, base_url=None) -> "HttpLlmClient":
         max_tokens_field=cfg.max_tokens_field,
         skip_temperature=cfg.skip_temperature,
         response_format=cfg.response_format,
+        thinking_mode=cfg.thinking_mode,
     )
 
 
@@ -245,6 +270,7 @@ class HttpLlmClient:
         max_tokens_field: str | None = None,
         skip_temperature: bool | None = None,
         response_format: bool | None = None,
+        thinking_mode: str | None = None,
     ):
         self.base_url = normalize_base_url(base_url)
         self.session = session
@@ -294,6 +320,11 @@ class HttpLlmClient:
             response_format
             if response_format is not None
             else _env_flag("LLM_RESPONSE_FORMAT", True)
+        )
+        self.thinking_mode = resolve_thinking_mode(
+            thinking_mode
+            if thinking_mode is not None
+            else os.environ.get("LLM_THINKING_MODE")
         )
 
     async def post(self, payload: dict) -> dict:
@@ -360,6 +391,12 @@ class HttpLlmClient:
                 payload["response_format"] = {"type": "json_object"}
         # Extensión propietaria de llama.cpp/vLLM: fuera del perfil `llama`
         # OpenAI y compatibles la rechazarían.
+        # `LLM_THINKING_MODE` pisa lo que pida el servicio: `on` nunca apaga el
+        # razonamiento y `off` lo apaga en todos los turnos.
+        if self.thinking_mode == "on":
+            disable_thinking = False
+        elif self.thinking_mode == "off":
+            disable_thinking = True
         if disable_thinking and self.provider == "llama":
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         data = await self.post(payload)

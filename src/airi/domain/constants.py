@@ -316,6 +316,10 @@ SELF_TRAITS_ALLOWLIST, SELF_BASE_TRAITS = _load_self_traits(
     SELF_TRAIT_MIN,
     SELF_TRAIT_MAX,
 )
+#: Instantánea de los valores fijados en el código (antes de leer el env).
+#: Referencia para migrar identidades antiguas: sus rasgos absolutos se
+#: interpretaron como "este baseline sin desviaciones aprendidas".
+LEGACY_SELF_BASE_TRAITS = dict(_DEFAULT_SELF_BASE_TRAITS)
 SELF_CONCEPT_MAX_CHARS = env_int("SELF_CONCEPT_MAX_CHARS", 400)
 SELF_MAX_VALUES = env_int("SELF_MAX_VALUES", 5)
 SELF_VALUE_MAX_CHARS = env_int("SELF_VALUE_MAX_CHARS", 40)

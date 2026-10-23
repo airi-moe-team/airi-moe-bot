@@ -138,6 +138,9 @@ def test_short_turn_uses_compact_contract_and_output_cap():
     assert llm.calls[-1]["strict_schema"] is True
     # El límite breve no deja sitio al razonamiento: debe desactivarse.
     assert llm.calls[-1]["disable_thinking"] is True
+    # El historial compartido conserva etiquetas, con su explicación breve.
+    assert "=== ETIQUETAS DE IDENTIDAD ===" in prompt
+    assert "No atribuyas a una persona" in prompt
 
 
 def test_long_turn_uses_full_contract():

@@ -179,13 +179,35 @@ def test_remote_health_failure_does_not_block_turn(monkeypatch):
     assert channel.sent
 
 
-def test_skipped_turn_answers_instead_of_silence(monkeypatch):
-    """Un turno sin contenido no debe dejar al usuario sin respuesta."""
+def test_skipped_turn_answers_with_generation_error_embed(monkeypatch):
+    """Un turno sin contenido avisa del fallo real en un embed."""
     ctx, service = _ctx(provider="llama")
     channel = _run_turn(monkeypatch, ctx)
     assert service.called is True
     assert channel.sent
-    assert "parecido" in channel.sent[0][0]
+    content, kwargs = channel.sent[0]
+    assert content is None
+    embed = kwargs["embed"]
+    assert embed.title == "⚠️ Generación fallida"
+    assert "No he podido generar una respuesta válida" in embed.description
+    assert "parecido" not in embed.description
+
+
+def test_skipped_turn_reports_length_cut(monkeypatch):
+    """Si el modelo agotó tokens, el aviso lo dice en vez de hablar de repetir."""
+
+    class _LengthService:
+        async def run_turn(self, author, messages, turn_context):
+            return SimpleNamespace(
+                trace=SimpleNamespace(llm_finish_reason="length"),
+                skipped=True,
+            )
+
+    ctx, _ = _ctx(provider="llama", service=_LengthService())
+    channel = _run_turn(monkeypatch, ctx)
+    content, kwargs = channel.sent[0]
+    assert content is None
+    assert "se cortó antes de terminar" in kwargs["embed"].description
 
 
 def test_health_check_disabled_makes_no_request(monkeypatch):

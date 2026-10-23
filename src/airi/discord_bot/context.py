@@ -90,9 +90,19 @@ class BotContext:
         self.state.traces._ring.append(trace)
 
     def last_trace_for(self, channel_id, user_id):
-        """Última traza de ese (canal, usuario) en el TraceStore compartido."""
+        """Traza más reciente por fecha/hora de ese (canal, usuario).
+
+        El ring guarda las trazas en orden de finalización, que puede diferir
+        del orden cronológico cuando hay turnos concurrentes. Se ordena por
+        `started_at`; a igualdad gana la insertada más tarde.
+        """
         cid, uid = str(channel_id), str(user_id)
+        latest = None
+        latest_started = None
         for ev in self.state.traces.all():
-            if str(ev.channel_id) == cid and str(ev.user_id) == uid:
-                return ev
-        return None
+            if str(ev.channel_id) != cid or str(ev.user_id) != uid:
+                continue
+            started = float(getattr(ev, "started_at", 0.0) or 0.0)
+            if latest_started is None or started >= latest_started:
+                latest, latest_started = ev, started
+        return latest

@@ -37,6 +37,10 @@ DEBUG_USAGE = (
 
 
 def _summarize(trace):
+    # Fuera de una cita, `date_decision` es un centinela del contrato JSON
+    # ("continue"); mostrarlo como decisión real confunde. Se etiqueta como
+    # ausencia de cita.
+    date_label = trace.date_decision if trace.in_date else "— (sin cita)"
     lines = [
         f"cid `{trace.correlation_id}` · v{trace.version} · {trace.kind}",
         f"reply: {(trace.reply or '(omitida)')[:300]}",
@@ -47,7 +51,7 @@ def _summarize(trace):
         f"gif: {trace.gif} · grounded: {trace.grounded} · "
         f"in_date: {trace.in_date} · skipped: {trace.skipped}",
         f"memoria: {trace.memory_saved} · diario: {trace.diary_saved} "
-        f"· decisión cita: {trace.date_decision}",
+        f"· decisión cita: {date_label}",
         f"web: {'sí' if trace.web_context else 'no'} · llm: {trace.llm_ms} ms "
         f"· turno: {trace.turn_ms} ms",
     ]

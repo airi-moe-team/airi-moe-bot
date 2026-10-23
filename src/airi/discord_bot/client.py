@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import signal
 import time
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -80,7 +81,14 @@ async def acknowledge_reconnect_context(ctx):
             )
 
 
-def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
+def create_client(
+    *,
+    build_ctx,
+    registry,
+    channel_id,
+    on_ready_extra=None,
+    manual_shutdown=None,
+):
     intents = discord.Intents.default()
     intents.message_content = True
     client = discord.Client(intents=intents)
@@ -187,6 +195,95 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
         ctx.request_shutdown = request_shutdown
         ctx.acknowledge_reconnect_context = lambda: acknowledge_reconnect_context(ctx)
 
+    def _persist_manual_shutdown(status):
+        """Guarda/actualiza la entrada de cierre manual en world."""
+        ms = manual_shutdown or {}
+        state = ms.get("state")
+        if state is None:
+            return
+        persistence = ms.get("persistence")
+
+        def build_entry():
+            return {
+                "kind": "self",
+                "reason": str(ms.get("reason") or "").strip()[:300],
+                "user_id": "",
+                "status": status,
+                "context_delivered": False,
+            }
+
+        if persistence is None:
+            try:
+                entry = state.world.get("last_shutdown")
+                if not isinstance(entry, dict):
+                    entry = build_entry()
+                else:
+                    entry["status"] = status
+                state.world["last_shutdown"] = entry
+                state.save_world()
+            except Exception:
+                log.exception("No se pudo registrar el cierre manual")
+            return
+        try:
+            with persistence.transaction():
+                entry = state.world.get("last_shutdown")
+                if not isinstance(entry, dict):
+                    entry = build_entry()
+                else:
+                    entry["status"] = status
+                state.world["last_shutdown"] = entry
+                state.save_world()
+        except Exception:
+            log.exception("No se pudo registrar el cierre manual")
+
+    async def manual_close():
+        """Ctrl+C: aviso en el canal con motivo, estado y cierre del cliente."""
+        ms = manual_shutdown or {}
+        reason = str(ms.get("reason") or "").strip()[:300]
+        _persist_manual_shutdown("closing")
+        channel = await _resolve_channel(channel_id)
+        if channel is not None:
+            try:
+                await channel.send(embed=embeds.disconnecting_embed(reason))
+            except Exception:
+                log.exception("No se pudo enviar el aviso de desconexión manual")
+        try:
+            await client.close()
+        except Exception:
+            log.exception("Discord no pudo cerrar la conexión")
+            shutdown["phase"] = "failed"
+            shutdown["started"] = False
+            _persist_manual_shutdown("failed")
+            return
+        shutdown["phase"] = "closed"
+        _persist_manual_shutdown("confirmed")
+
+    def install_manual_shutdown_hook():
+        """Sustituye el Ctrl+C de discord.py por un cierre con despedida."""
+        ms = manual_shutdown
+        if ms is None:
+            return
+        loop = asyncio.get_running_loop()
+
+        def trigger():
+            if shutdown["started"]:
+                log.info("Cierre ya en curso; se ignora Ctrl+C duplicado")
+                return
+            shutdown["started"] = True
+            shutdown["phase"] = "closing"
+            log.info("Cierre manual (Ctrl+C): %s", str(ms.get("reason") or ""))
+            asyncio.ensure_future(manual_close())
+
+        client.manual_shutdown_trigger = trigger
+        try:
+            loop.add_signal_handler(signal.SIGINT, trigger)
+        except (NotImplementedError, AttributeError):
+            # Windows/otro backend: no hay gestión fiable de señales en el loop.
+            log.warning(
+                "SIGINT no se puede interceptar en este backend: Ctrl+C "
+                "apagará sin aviso de despedida en el canal"
+            )
+
     def _reset_conversation(ctx, ch_id, author_id):
         debounce.reset(ch_id, author_id)
         ctx.state.histories.pop(ch_id, None)
@@ -202,6 +299,7 @@ def create_client(*, build_ctx, registry, channel_id, on_ready_extra=None):
                     await channel.send(embed=embeds.connected_embed())
                 except Exception:
                     log.exception("No se pudo enviar el aviso de conexión")
+            install_manual_shutdown_hook()
         if on_ready_extra is not None:
             try:
                 await on_ready_extra(client)
@@ -747,6 +845,10 @@ def run_bot(argv=None):
     DEBOUNCE_SECONDS = float(os.getenv("DEBOUNCE_SECONDS", "3"))
     OWNER_ID = int(os.getenv("OWNER_ID", "0"))
     CONFESS_THRESHOLD = int(os.getenv("CONFESS_THRESHOLD", "100"))
+    manual_shutdown_reason = (
+        os.getenv("AIRI_SHUTDOWN_REASON", "").strip()
+        or "se fue a dormir"
+    )[:300]
 
     # Datos globales
     commit_lock = asyncio.Lock()
@@ -1012,6 +1114,11 @@ def run_bot(argv=None):
         registry=registry,
         channel_id=CHANNEL_ID,
         on_ready_extra=resume_pending,
+        manual_shutdown={
+            "state": state,
+            "persistence": persistence,
+            "reason": manual_shutdown_reason,
+        },
     )
 
     def log_startup():

@@ -114,6 +114,28 @@ def test_debug_turno_shows_summary_embed():
     assert _kind == "embed"
     assert "ab12" in embed.description
     assert "10 → 12" in embed.description
+    # Sin cita activa no se muestra "continue" como si fuera una decisión.
+    assert "decisión cita: — (sin cita)" in embed.description
+
+
+def test_debug_turno_shows_date_decision_only_during_date():
+    ctx = make_ctx()
+    channel = FakeChannel()
+    trace = TurnTrace(
+        correlation_id="date01",
+        user_id="1",
+        channel_id="7",
+        final_reply="qué bien",
+        in_date=True,
+        date_decision="crisis",
+    )
+    ctx.remember_trace(trace)
+    msg = FakeMessage("!debug turno", FakeAuthor(1), channel)
+
+    run(debug.handle(ctx, msg))
+
+    _kind, embed = channel.files[0]
+    assert "decisión cita: crisis" in embed.description
 
 
 def test_debug_trace_sends_json_file(tmp_path):
@@ -144,6 +166,51 @@ def test_last_trace_is_per_user():
     assert ctx.last_trace_for(7, 1).correlation_id == "a"
     assert ctx.last_trace_for(7, 2).correlation_id == "b"
     assert ctx.last_trace_for(7, 9) is None
+
+
+def test_last_trace_uses_latest_started_at_not_insertion_order():
+    ctx = make_ctx()
+    # El turno más nuevo se inserta primero y el más antiguo termina después.
+    ctx.remember_trace(
+        TurnTrace(
+            correlation_id="nuevo",
+            user_id="1",
+            channel_id="7",
+            started_at=200.0,
+        )
+    )
+    ctx.remember_trace(
+        TurnTrace(
+            correlation_id="antiguo",
+            user_id="1",
+            channel_id="7",
+            started_at=100.0,
+        )
+    )
+
+    assert ctx.last_trace_for(7, 1).correlation_id == "nuevo"
+
+
+def test_last_trace_ties_prefer_most_recently_inserted():
+    ctx = make_ctx()
+    ctx.remember_trace(
+        TurnTrace(
+            correlation_id="primero",
+            user_id="1",
+            channel_id="7",
+            started_at=100.0,
+        )
+    )
+    ctx.remember_trace(
+        TurnTrace(
+            correlation_id="segundo",
+            user_id="1",
+            channel_id="7",
+            started_at=100.0,
+        )
+    )
+
+    assert ctx.last_trace_for(7, 1).correlation_id == "segundo"
 
 
 # ============================================================

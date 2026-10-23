@@ -35,6 +35,7 @@ ENV_KEYS = (
     "LLM_SKIP_TEMPERATURE",
     "LLM_RESPONSE_FORMAT",
     "LLM_HEALTH_CHECK",
+    "LLM_THINKING_MODE",
     "LLM_TIMEOUT",
     "LLM_MAX_TOKENS",
     "LLM_TEMPERATURE",
@@ -77,6 +78,29 @@ def test_config_openai_profile_default_field(monkeypatch):
     cfg = LlmConfig.from_env()
     assert cfg.provider == "openai"
     assert cfg.max_tokens_field == "max_completion_tokens"
+
+
+def test_config_thinking_mode_default_is_auto():
+    cfg = LlmConfig.from_env()
+    assert cfg.thinking_mode == "auto"
+
+
+def test_config_reads_thinking_mode(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    cfg = LlmConfig.from_env()
+    assert cfg.thinking_mode == "off"
+
+
+def test_config_invalid_thinking_mode_falls_back(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "siempre")
+    cfg = LlmConfig.from_env()
+    assert cfg.thinking_mode == "auto"
+
+
+def test_build_llm_propagates_thinking_mode(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "on")
+    client = build_llm(_make_session())
+    assert client.thinking_mode == "on"
 
 
 def test_config_openai_compatible_profile_default_field(monkeypatch):

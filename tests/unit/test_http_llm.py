@@ -31,6 +31,7 @@ def _clear_llm_env(monkeypatch):
         "LLM_SKIP_TEMPERATURE",
         "LLM_RESPONSE_FORMAT",
         "LLM_HEALTH_CHECK",
+        "LLM_THINKING_MODE",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -420,6 +421,89 @@ def test_profile_openai_compatible_omits_chat_template_kwargs(monkeypatch):
     client = HttpLlmClient(base_url="https://api.groq.com/openai/v1", session=session)
     _chat(client, disable_thinking=True)
     assert "chat_template_kwargs" not in session._captured
+
+
+# ---------------------------------------------------------------------------
+# Modo de razonamiento: LLM_THINKING_MODE (auto|on|off)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["auto", None])
+def test_thinking_mode_default_is_auto(monkeypatch, mode):
+    if mode is None:
+        monkeypatch.delenv("LLM_THINKING_MODE", raising=False)
+    else:
+        monkeypatch.setenv("LLM_THINKING_MODE", mode)
+    client = HttpLlmClient(base_url="http://localhost:8080", session=_make_session())
+    assert client.thinking_mode == "auto"
+
+
+@pytest.mark.parametrize("mode", ["on", "off", "AUTO", " On "])
+def test_reads_llm_thinking_mode_from_env(monkeypatch, mode):
+    monkeypatch.setenv("LLM_THINKING_MODE", mode)
+    client = HttpLlmClient(base_url="http://localhost:8080", session=_make_session())
+    assert client.thinking_mode == mode.strip().lower()
+
+
+@pytest.mark.parametrize("value", ["abc", "2"])
+def test_invalid_thinking_mode_fallback(monkeypatch, value, caplog):
+    monkeypatch.setenv("LLM_THINKING_MODE", value)
+    with caplog.at_level(logging.WARNING):
+        client = HttpLlmClient(
+            base_url="http://localhost:8080", session=_make_session()
+        )
+    assert client.thinking_mode == "auto"
+    assert any("LLM_THINKING_MODE" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_thinking_mode_is_auto_silently(monkeypatch, value):
+    """Un valor vacío equivale a no configurar (sin warning)."""
+    monkeypatch.setenv("LLM_THINKING_MODE", value)
+    client = HttpLlmClient(base_url="http://localhost:8080", session=_make_session())
+    assert client.thinking_mode == "auto"
+
+
+@pytest.mark.parametrize("requested", [True, False])
+def test_thinking_mode_on_forces_reasoning_even_for_quick_turns(monkeypatch, requested):
+    """`on`: nunca se envía chat_template_kwargs, pidan lo que pidan los servicios."""
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", "on")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, disable_thinking=requested)
+    assert "chat_template_kwargs" not in session._captured
+
+
+@pytest.mark.parametrize("requested", [True, False])
+def test_thinking_mode_off_disables_reasoning_in_all_turns(monkeypatch, requested):
+    """`off`: chat_template_kwargs siempre presente en el perfil `llama`."""
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, disable_thinking=requested)
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_thinking_mode_auto_keeps_requested_behavior(monkeypatch):
+    """`auto`: se respeta lo que pida el servicio (comportamiento histórico)."""
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", "auto")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, disable_thinking=False)
+    assert "chat_template_kwargs" not in session._captured
+
+
+def test_explicit_thinking_mode_overrides_env(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    client = HttpLlmClient(
+        base_url="http://localhost:8080",
+        session=_make_session(),
+        thinking_mode="on",
+    )
+    assert client.thinking_mode == "on"
 
 
 def test_profile_llama_uses_max_tokens_field(monkeypatch):

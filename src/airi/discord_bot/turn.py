@@ -189,18 +189,26 @@ async def run_user_turn(
 
             if result is None:
                 return
-            if result.skipped:
-                # Nunca dejar el mensaje sin respuesta: si el filtro descartó
-                # una repetición, se pide contexto en vez de quedarse callada.
-                await _reply(
-                    "Mmm... siento que ya te había dicho algo muy parecido. "
-                    "¿Me cuentas un poco más para no repetirme?"
+            if result.skipped or not result.reply:
+                # Nunca dejar el mensaje sin respuesta. Se avisa del fallo real
+                # de generación, sin atribuirlo a una repetición inexistente.
+                finish = getattr(
+                    getattr(result, "trace", None), "llm_finish_reason", None
                 )
-                return
-            if not result.reply:
-                await _reply(
-                    "Ehhh... no conseguí generar una respuesta final esta vez. "
-                    "¿Puedes intentarlo de nuevo?"
+                if finish == "length":
+                    text = (
+                        "La respuesta se cortó antes de terminar. "
+                        "¿Me lo repites o lo intentamos de nuevo?"
+                    )
+                else:
+                    text = (
+                        "No he podido generar una respuesta válida esta vez. "
+                        "¿Lo intentamos de nuevo?"
+                    )
+                await channel.send(
+                    embed=embeds.system_embed(
+                        text, title="⚠️ Generación fallida"
+                    )
                 )
                 return
 

@@ -22,14 +22,22 @@ def test_narrative_actions_are_not_one_per_sentence():
 
 
 def test_answers_are_proportionate_to_the_message():
-    assert "Responde de forma proporcionada al mensaje" in SYSTEM_PROMPT
-    assert "si te saludan, no escribas un monólogo" in SYSTEM_PROMPT
-    assert "no lo reduzcas a una broma" in SYSTEM_PROMPT
+    assert "Responde de forma proporcionada" in SYSTEM_PROMPT
+    assert "una o dos frases" in SYSTEM_PROMPT
+    assert "no añadas preocupación" in SYSTEM_PROMPT
+
+
+def test_no_loop_of_recent_narrative_tics():
+    assert "PROHIBICIÓN DE BUCLE" in SYSTEM_PROMPT
+    assert "Tienes prohibido repetir acciones narrativas" in SYSTEM_PROMPT
 
 
 def test_questions_are_not_the_default_ending():
-    assert "No termines todas tus respuestas con una pregunta" in SYSTEM_PROMPT
-    assert "pregunta solo cuando de verdad quieras saber algo" in SYSTEM_PROMPT
+    # La regla dura ("no termines todas tus respuestas con una pregunta")
+    # fue sustituida por el empujón dinámico de variedad: solo cuando el
+    # último turno de Airi cerró con pregunta se inyecta una nota pidiendo
+    # variar el cierre (contrato probado en tests/integration/test_question_variety.py).
+    assert "termines todas tus respuestas con una pregunta" not in SYSTEM_PROMPT
 
 
 def test_variety_of_openings_gestures_and_closings():

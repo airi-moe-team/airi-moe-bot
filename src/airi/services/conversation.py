@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import time
 import traceback
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -34,7 +37,7 @@ from airi.domain.constants import (
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.grounding import reply_seems_grounded
-from airi.domain.history_tags import AffinityInfo, build_inference_history
+from airi.domain.history_tags import AffinityInfo, build_inference_history, normalize_name
 from airi.domain.llm_output import (
     RESPONSE_SCHEMA,
     ModelOutput,
@@ -145,6 +148,113 @@ DISCONNECT_REPAIR_PROMPT = (
     "true con un motivo breve; si te quedas, \"leave\" debe ser false y no "
     "debes despedirte como si te fueras. No añadas texto fuera del JSON."
 )
+
+QUESTION_CLOSE_REPAIR_PROMPT = (
+    "Estás encadenando cierres con pregunta en una charla casual y suena a "
+    "asistente, no a persona. Devuelve de nuevo el objeto JSON completo (mismo "
+    "esquema, mismas reglas) reescribiendo SOLO el cierre de \"reply\": "
+    "elimina la pregunta del final —también las retóricas tipo \"¿no?\", "
+    "\"¿verdad?\"— y termina con una afirmación, tu opinión o una broma que "
+    "de a la otra persona la opción de responder o no. Si ya había una "
+    "pregunta a mitad del mensaje que aporte algo concreto, tampoco la "
+    "acumules: responde sin interrogar salvo que te falte un dato esencial "
+    "para continuar. No escribas texto fuera del JSON."
+)
+
+EMPTY_REPLY_REPAIR_PROMPT = (
+    "La respuesta llegó vacía o sin \"reply\" legible. Devuelve de nuevo el "
+    "objeto JSON completo con un \"reply\" breve, natural y NUEVO que reaccione "
+    "al último mensaje de la conversación; no sirve responder con \"none\", con "
+    "asteriscos solos ni con cadenas vacías. No escribas texto fuera del JSON."
+)
+
+REPEAT_REPAIR_PROMPT = (
+    "La respuesta repite casi literal un turno anterior del historial y eso "
+    "está prohibido. Devuelve de nuevo el objeto JSON completo con una "
+    "respuesta NUEVA: otra apertura, otro enfoque y otro cierre; reacciona a lo "
+    "que la persona dijo AHORA, no a los turnos viejos. Está prohibido "
+    "reutilizar frases tal cual de respuestas anteriores. No escribas texto "
+    "fuera del JSON."
+)
+
+#: Longitud mínima (normalizada) para considerar copia literal de un turno.
+REPEAT_PREFIX_MIN = 40
+
+
+def _normalized_reply(text) -> str:
+    """Normaliza una respuesta para compararla contra turnos previos."""
+    t = (text or "").lower()
+    # Las acciones narrativas y la puntuación no cuentan para el parecido.
+    t = re.sub(r"\*[^*]*\*", " ", t)
+    t = re.sub(r"[^\w\s¿?¡!~]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def reply_repeats_history(
+    text, history, *, min_prefix: int = REPEAT_PREFIX_MIN
+) -> bool:
+    """True si `text` copia el arranque de alguna respuesta anterior de Airi.
+
+    Comparación por prefijo normalizado: detecta el patrón observado en
+    producción (abrir con el mismo enunciado que un turno viejo y variar solo
+    el final). Respuestas muy cortas no se marcan: los saludos pequeños se
+    solapan por naturaleza.
+    """
+    norm = _normalized_reply(text)
+    if len(norm) < min_prefix:
+        return False
+    for msg in history or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        prev = content
+        if isinstance(content, str) and content.lstrip().startswith("{"):
+            try:
+                data = json.loads(content)
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                prev = data.get("reply")
+        prev_norm = _normalized_reply(prev if isinstance(prev, str) else "")
+        if len(prev_norm) < min_prefix:
+            continue
+        if (
+            norm.startswith(prev_norm[:min_prefix])
+            or prev_norm.startswith(norm[:min_prefix])
+        ):
+            return True
+    return False
+
+
+def strip_trailing_question(text: str) -> str:
+    """Recorta la oración interrogativa final.
+
+    Red de seguridad determinista contra el patrón «preguntón» (charla casual
+    que encadena cierres con pregunta): si tras la regeneración la respuesta
+    sigue terminando en `?`, se elimina esa oración final —span desde el último
+    `¿` de apertura— y el resto se devuelve limpio. Si la pregunta no lleva `¿`
+    o `¿` está al inicio, cae al recorte por delimitadores de oración
+    (., !, ¡, ~, * y salto de línea). Nunca devuelve vacío: si no queda texto
+    fuera de la pregunta, se devuelve la respuesta tal cual.
+    """
+    cleaned = (text or "").rstrip()
+    if not cleaned or not cleaned.endswith("?"):
+        return text
+
+    # 1) Delimitador natural: el último '¿' que abre la oración final.
+    open_idx = cleaned.rfind("¿")
+    if open_idx > 0:
+        remainder = cleaned[:open_idx].rstrip()
+        return remainder if remainder.strip() else text
+
+    # 2) Fallback sin '¿': última oración por delimitadores de cierre.
+    sentence_start = max(
+        cleaned.rfind(ch, 0, -1) for ch in (".", "!", "¡", "\n", "*", "~")
+    )
+    if sentence_start < 0:
+        return text
+    remainder = cleaned[:sentence_start + 1].rstrip()
+    return remainder if remainder.strip() else text
 
 
 def _read_only_memories(memories, user_id) -> list:
@@ -360,6 +470,9 @@ class ConversationService:
                 web_context=web_context,
                 kind=ctx.kind,
                 extra_note=ctx.extra_note,
+                history=history,
+                user=uid,
+                display_name=getattr(user, "display_name", None),
             )
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
@@ -712,7 +825,18 @@ class ConversationService:
 
     # ------------------------------------------------------------------
 
-    def _is_quick_turn(self, text, *, in_date, web_context, kind, extra_note):
+    def _is_quick_turn(
+        self,
+        text,
+        *,
+        in_date,
+        web_context,
+        kind,
+        extra_note,
+        history=None,
+        user=None,
+        display_name=None,
+    ):
         """True si el turno admite el contrato reducido y menos historial."""
         if in_date or web_context is not None or kind != "message" or extra_note:
             return False
@@ -720,7 +844,46 @@ class ConversationService:
         if not clean or len(clean) > QUICK_REPLY_MAX_CHARS:
             return False
         low = clean.casefold()
-        return not any(hint in low for hint in _QUICK_BLOCKED_HINTS)
+        if any(hint in low for hint in _QUICK_BLOCKED_HINTS):
+            return False
+        return not self._recent_context_is_mixed(history, user, display_name)
+
+    @staticmethod
+    def _recent_context_is_mixed(history, user, display_name):
+        """True si la ventana reciente de grupo hace insuficiente el turno rápido.
+
+        En un canal con varios interlocutores o respuestas de Airi dirigidas a
+        otra persona conviene el prompt completo: el camino rápido recorta el
+        historial justo cuando más hace falta distinguir a quién va dirigido
+        cada sentimiento.
+        """
+        recent = (history or [])[-QUICK_HISTORY_MESSAGES:]
+        if not recent:
+            return False
+        str_uid = str(user) if user is not None else None
+        current_name = normalize_name(display_name) if display_name else ""
+        other_authors = set()
+        mixed_reply_to = False
+        for msg in recent:
+            if not isinstance(msg, Mapping):
+                continue
+            role = msg.get("role")
+            if role == "user":
+                author_id = msg.get("author_id")
+                if author_id is not None:
+                    str_author = str(author_id)
+                    if str_uid is not None and str_author != str_uid:
+                        other_authors.add(str_author)
+                elif current_name:
+                    name = normalize_name(msg.get("author_name"))
+                    if name and name != current_name:
+                        other_authors.add(name)
+            else:
+                reply_name = msg.get("reply_to_user_name")
+                name = normalize_name(reply_name) if isinstance(reply_name, str) else ""
+                if name and (not current_name or name != current_name):
+                    mixed_reply_to = True
+        return bool(other_authors or mixed_reply_to)
 
     @staticmethod
     def _can_retry_without_strict(exc):
@@ -784,6 +947,7 @@ class ConversationService:
                 ),
                 domain_prompts.preferences_prompt_section(state.world),
                 domain_prompts.last_shutdown_prompt_section(state.world),
+                domain_prompts.identity_tags_prompt_section(compact=True),
                 self_section,
             ]
         else:
@@ -819,6 +983,9 @@ class ConversationService:
                 ),
                 domain_prompts.diary_prompt_section(state.diary, user.id, now),
             ]
+        # Nudge anti-encadenamiento: solo si el último turno de Airi cerró con
+        # pregunta. Fuera de ese patrón devuelve "" y no añade nada.
+        sections.append(domain_prompts.question_variety_nudge_section(history))
         if extra_note:
             sections.append(
                 f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
@@ -873,6 +1040,78 @@ class ConversationService:
             )
             meta = LLMMeta()
         output = parse_model_output(raw, delta_max=delta_max)
+        # Red de seguridad anti-interrogatorio: en charla casual, si Airi ya
+        # cerró con pregunta el turno anterior y vuelve a hacerlo, se pide UNA
+        # regeneración sin cierre interrogativo (las citas quedan fuera: ahí la
+        # conversación puede pedir respuestas).
+        if (
+            not isinstance(date_session, dict)
+            and domain_prompts.last_assistant_reply_ended_with_question(history)
+            and (output.reply or "").rstrip().endswith("?")
+        ):
+            close_repair_messages = [
+                *messages,
+                {"role": "user", "content": QUESTION_CLOSE_REPAIR_PROMPT},
+            ]
+            try:
+                if hasattr(self.llm, "chat_with_meta"):
+                    try:
+                        fixed_raw, fixed_meta = await self.llm.chat_with_meta(
+                            close_repair_messages,
+                            schema=RESPONSE_SCHEMA,
+                            strict_schema=True,
+                            max_tokens=request_tokens,
+                            disable_thinking=quick,
+                        )
+                    except Exception:
+                        fixed_raw, fixed_meta = await self.llm.chat_with_meta(
+                            close_repair_messages,
+                            schema=RESPONSE_SCHEMA,
+                            max_tokens=request_tokens,
+                            disable_thinking=quick,
+                        )
+                else:
+                    fixed_raw = await self.llm.chat(
+                        close_repair_messages,
+                        schema=RESPONSE_SCHEMA,
+                        max_tokens=request_tokens,
+                        disable_thinking=quick,
+                    )
+                    fixed_meta = LLMMeta()
+                fixed = parse_model_output(fixed_raw, delta_max=delta_max)
+                if (fixed.reply or "").strip():
+                    raw = fixed_raw
+                    meta = fixed_meta
+                    output = fixed
+                    # Última garantía determinista: si aun así cierra con
+                    # pregunta, se recorta la oración interrogativa final.
+                    if (output.reply or "").rstrip().endswith("?"):
+                        trimmed = strip_trailing_question(output.reply)
+                        if trimmed != output.reply:
+                            output.reply = trimmed
+            except Exception:
+                log.warning("No se pudo reparar el cierre interrogatorio")
+
+        # Reparaciones de calidad restantes (una regeneración cada una, si
+        # produce material mejor que lo actual):
+        # 1) Respuesta vacía: reintentar con aviso explícito antes de omitir.
+        if not output.reply:
+            repair = await self._repair_regenerate(
+                messages, EMPTY_REPLY_REPAIR_PROMPT,
+                delta_max=delta_max, max_tokens=request_tokens,
+                disable_thinking=quick,
+            )
+            if repair is not None:
+                raw, meta, output = repair
+        # 2) Copia casi literal de un turno anterior: regenerar.
+        elif reply_repeats_history(output.reply, history):
+            repair = await self._repair_regenerate(
+                messages, REPEAT_REPAIR_PROMPT,
+                delta_max=delta_max, max_tokens=request_tokens,
+                disable_thinking=quick,
+            )
+            if repair is not None:
+                raw, meta, output = repair
         problem = disconnect_claim_problem(
             output.reply or "", bool(output.disconnect)
         )
@@ -931,6 +1170,50 @@ class ConversationService:
                 ),
             )
         return system_prompt, raw if isinstance(raw, str) else None, meta, output
+
+    async def _repair_regenerate(
+        self, messages, note, *, delta_max, max_tokens, disable_thinking
+    ):
+        """Una regeneración de reparación. None si no produce reply utilizable.
+
+        Reusa el mensaje completo del turno y añade el aviso correctivo al
+        final. Mantiene el mismo esquema estricto de salida con retry json_object.
+        Devuelve `(raw, meta, ModelOutput)` para que quien llama pueda actualizar
+        también lo que se registra en la traza.
+        """
+        repair_messages = [*messages, {"role": "user", "content": note}]
+        try:
+            if hasattr(self.llm, "chat_with_meta"):
+                try:
+                    raw, meta = await self.llm.chat_with_meta(
+                        repair_messages,
+                        schema=RESPONSE_SCHEMA,
+                        strict_schema=True,
+                        max_tokens=max_tokens,
+                        disable_thinking=disable_thinking,
+                    )
+                except Exception:
+                    raw, meta = await self.llm.chat_with_meta(
+                        repair_messages,
+                        schema=RESPONSE_SCHEMA,
+                        max_tokens=max_tokens,
+                        disable_thinking=disable_thinking,
+                    )
+            else:
+                raw = await self.llm.chat(
+                    repair_messages,
+                    schema=RESPONSE_SCHEMA,
+                    max_tokens=max_tokens,
+                    disable_thinking=disable_thinking,
+                )
+                meta = LLMMeta()
+            fixed = parse_model_output(raw, delta_max=delta_max)
+        except Exception:
+            log.warning("La regeneración de reparación falló", exc_info=True)
+            return None
+        if fixed.reply and fixed.reply.strip():
+            return raw, meta, fixed
+        return None
 
     def _inference_resolver(self, recipient_id=None):
         """Resolver de afinidad para la vista de inferencia.

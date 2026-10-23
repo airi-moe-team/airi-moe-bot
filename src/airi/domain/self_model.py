@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from airi.domain.affinity import default_preferences
 from airi.domain.constants import (
+    LEGACY_SELF_BASE_TRAITS,
     SELF_BASE_TRAITS,
     SELF_CONCEPT_MAX_CHARS,
     SELF_DECAY_DAYS,
@@ -163,6 +164,13 @@ def default_self(preferences=None):
         "version": 1,
         "self_concept": "",
         "traits": {name: int(SELF_BASE_TRAITS[name]) for name in SELF_TRAITS_ALLOWLIST},
+        # Aprendizaje como DESVIACIÓN respecto de la base del env: Airi evoluciona
+        # sobre `SELF_BASE_TRAITS` y el decaimiento la lleva de vuelta a él.
+        "traits_learned": {},
+        # Instantánea del baseline con el que se creó/actualizó la identidad:
+        # si el env cambia, `normalize_self` puede distinguir "cambió la base"
+        # de "Airi aprendió algo" y migrar sin perder el personaje.
+        "traits_base": dict(SELF_BASE_TRAITS),
         "values": [],
         "quirks": [],
         "tastes": _default_tastes(preferences),
@@ -187,6 +195,91 @@ def migrate_from_world(world):
     return default_self(preferences)
 
 
+def _normalize_learned(name, learned, base):
+    """Acota la desviación aprendida para que base+learned siga en rango."""
+    low = SELF_TRAIT_MIN - base
+    high = SELF_TRAIT_MAX - base
+    return max(low, min(high, _as_int(learned, 0)))
+
+
+def _sum_history_delta(entries, name):
+    """Suma `to - from` de las entradas auditables de un rasgo (puro)."""
+    key = f"{SELF_TRAIT_PREFIX}{name}"
+    delta = 0
+    for entry in entries:
+        if entry.get("key") != key:
+            continue
+        try:
+            frm = int(entry["from"])
+            to = int(entry["to"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        delta += to - frm
+    return delta
+
+
+def _has_trait_history(history):
+    key_prefix = SELF_TRAIT_PREFIX
+    for entry in history:
+        key = entry.get("key")
+        if isinstance(key, str) and key.startswith(key_prefix):
+            return True
+    return False
+
+
+def _migrate_traits(model, raw_traits, stored_base):
+    """Anota la desviación aprendida y la base efectiva en el modelo.
+
+    Estrategia de migración (obedece al env y preserva lo aprendido):
+
+    - Estado nuevo (`raw_traits` vacío) o identidad legado idéntica al
+      baseline del código sin historial de rasgos: desviaciones 0 → los
+      rasgos efectivos SON los de `SELF_BASE_TRAITS` (el env manda ya).
+    - Con evidencia de aprendizaje en el historial auditable (entradas con
+      `key="traits.<nombre>"`): se reconstruye la desviación sumando
+      `to - from` por rasgo.
+    - Legado con valores ajenos al baseline del código y sin historial: se
+      asume edición manual y se recalcula la desviación (`valor - base
+      nueva`) para que el valor efectivo NO cambie al reiniciar; el
+      decaimiento posterior la lleva lentamente al nuevo baseline.
+
+    Devuelve `(learned, fresh_seed)`; `fresh_seed=True` marca identidades
+    recién sembradas cuya armonización con `raw` debe omitirse para que el
+    baseline del env efectivice de una vez.
+    """
+    learned = {}
+    if not raw_traits:
+        return learned, True
+    reference = dict(
+        stored_base
+        if isinstance(stored_base, dict)
+        else LEGACY_SELF_BASE_TRAITS
+    )
+    history = [e for e in (model.get("history") or []) if isinstance(e, dict)]
+    if _has_trait_history(history):
+        for name in SELF_TRAITS_ALLOWLIST:
+            base = int(SELF_BASE_TRAITS.get(name, 0))
+            learned[name] = _normalize_learned(
+                name, _sum_history_delta(history, name), base
+            )
+        return learned, False
+    fresh_seed = not any(
+        _as_int(raw_traits.get(name, reference.get(name, 0)), 0)
+        != int(reference.get(name, 0))
+        for name in raw_traits
+        if isinstance(name, str) and name in SELF_TRAITS_ALLOWLIST
+    )
+    if fresh_seed:
+        # Identidad recién sembrada con el baseline del código (sin ninguna
+        # desviación aprendida): el env actual define el punto de partida.
+        return learned, True
+    for name in SELF_TRAITS_ALLOWLIST:
+        base = int(SELF_BASE_TRAITS.get(name, 0))
+        old = _as_int(raw_traits.get(name, reference.get(name, base)), base)
+        learned[name] = _normalize_learned(name, old - base, base)
+    return learned, False
+
+
 def normalize_self(model):
     """Sanea `model` en el sitio y garantiza la forma canónica. Devuelve `model`."""
     if not isinstance(model, dict):
@@ -194,12 +287,49 @@ def normalize_self(model):
 
     model["version"] = int(_as_int(model.get("version"), 1) or 1)
 
-    # Rasgos: solo la allowlist, siempre presentes y acotados.
+    # Rasgos: solo la allowlist, siempre presentes y acotados. El valor
+    # efectivo derive de la base del env + Aprendizaje (traits_learned); los
+    # números absolutos antiguos se migran una vez (ver `_migrate_traits`).
     raw_traits = model.get("traits")
     if not isinstance(raw_traits, dict):
         raw_traits = {}
+    stored_base = model.get("traits_base")
+    baseline_changed = not isinstance(stored_base, dict) or dict(
+        stored_base
+    ) != dict(SELF_BASE_TRAITS)
+    learned_raw = model.get("traits_learned")
+    fresh_seed = False
+    if isinstance(learned_raw, dict) and not baseline_changed:
+        learned = {
+            name: _normalize_learned(name, learned_raw.get(name, 0),
+                                     int(SELF_BASE_TRAITS[name]))
+            for name in SELF_TRAITS_ALLOWLIST
+        }
+    else:
+        learned, fresh_seed = _migrate_traits(
+            model, raw_traits, stored_base
+        )
+
+    # Armonización: un valor absoluto escrito por fuera (edit manual del
+    # estado, test o versión previa) manda sobre la derivación; se re-anota
+    # como aprendizaje para no perderlo en el próximo normalize. Se omite en
+    # semillas recién migradas: el env debe efectivizar su baseline.
+    if not fresh_seed:
+        for name in SELF_TRAITS_ALLOWLIST:
+            base = int(SELF_BASE_TRAITS[name])
+            if name in raw_traits:
+                raw_value = _as_int(raw_traits[name], base)
+                if raw_value != clamp_trait(base + learned.get(name, 0)):
+                    learned[name] = _normalize_learned(
+                        name, raw_value - base, base
+                    )
+
+    model["traits_learned"] = learned
+    model["traits_base"] = dict(SELF_BASE_TRAITS)
     model["traits"] = {
-        name: clamp_trait(raw_traits.get(name, SELF_BASE_TRAITS[name]))
+        name: clamp_trait(
+            int(SELF_BASE_TRAITS[name]) + learned.get(name, 0)
+        )
         for name in SELF_TRAITS_ALLOWLIST
     }
 
@@ -386,6 +516,10 @@ def _set_value(model, key, value):
         name = key[len(SELF_TRAIT_PREFIX):]
         if name in SELF_TRAITS_ALLOWLIST:
             model["traits"][name] = value
+            base = int(SELF_BASE_TRAITS[name])
+            learned = model.setdefault("traits_learned", {})
+            learned[name] = _normalize_learned(name, _as_int(value, base) - base,
+                                               base)
     elif key in ("values", "quirks"):
         model[key] = value
     elif key in ("tastes.loves", "tastes.dislikes"):
@@ -534,7 +668,12 @@ def should_reflect(
 
 
 def apply_decay(model, now, *, days=SELF_DECAY_DAYS, step=SELF_DECAY_STEP):
-    """Acerca poco a poco los rasgos a la base. Devuelve si cambió algo."""
+    """Acerca poco a poco los rasgos aprendidos a la base del env.
+
+    El aprendizaje vive en `traits_learned` (desviaciones respecto de
+    `SELF_BASE_TRAITS`); el decaimiento reduce esas desviaciones hacia 0, así
+    que los rasgos efectivos regresan al baseline configurado.
+    """
     normalize_self(model)
     now = float(now)
     last = float(model.get("last_decay_at", 0.0) or 0.0)
@@ -546,17 +685,19 @@ def apply_decay(model, now, *, days=SELF_DECAY_DAYS, step=SELF_DECAY_STEP):
         return False
     steps = max(1, (elapsed_days // days) * max(1, step))
     changed = False
-    for name, base in SELF_BASE_TRAITS.items():
-        current = model["traits"].get(name, base)
-        if current > base:
-            new = max(base, current - steps)
-        elif current < base:
-            new = min(base, current + steps)
-        else:
+    learned = model["traits_learned"]
+    for name in SELF_TRAITS_ALLOWLIST:
+        offset = _as_int(learned.get(name, 0), 0)
+        if offset == 0:
             continue
-        if new != current:
-            model["traits"][name] = new
-            changed = True
+        new = offset - steps if offset > 0 else offset + steps
+        # Nunca se pasa de 0: la base siempre es el destino final.
+        if (offset > 0 and new < 0) or (offset < 0 and new > 0):
+            new = 0
+        learned[name] = new
+        base = int(SELF_BASE_TRAITS[name])
+        model["traits"][name] = clamp_trait(base + new)
+        changed = True
     model["last_decay_at"] = now
     return changed
 
