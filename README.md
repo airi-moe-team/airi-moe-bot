@@ -213,12 +213,17 @@ AIRI_SPECTATOR_AFFINITY_POINTS=20  # umbral de afinidad por autor
 AIRI_SPECTATOR_PROB_TOPIC=0.55     # probabilidad cuando hay tema
 AIRI_SPECTATOR_PROB_AFFINITY=0.35  # probabilidad cuando hay afinidad
 AIRI_SPECTATOR_COOLDOWN_SECONDS=300
-"AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
+AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
+AIRI_SPECTATOR_HANDOFF_SECONDS=180 # ventana para contestar a la pregunta de Airi
 # Perfil estable de gustos (JSON). Si está definida y es válida, prevalece
 # sobre lo persistido y sobre cualquier cambio posterior de identidad.
-# AIRI_PROFILE='{"loves":["videojuegos","ramen"],"dislikes":[],"favorite_food":"postres y dulces","favorite_flower":"las rosas'"'"'"
-
+AIRI_PROFILE='{"loves":["videojuegos","ramen"],"dislikes":["grosero"],"favorite_food":"postres y dulces","favorite_flower":"las rosas"}'
 ```
+
+El **handoff**: tras una intervención espontánea (que pudo dejar una pregunta),
+el interlocutor tiene una ventana (`HANDOFF_SECONDS`) para responder una vez
+sin cooldown; después vuelve el cooldown normal. El mensaje disparador y el
+snapshot se consumen del buffer al publicar, así el tema no queda latente.
 
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del
   ring (def. 1, máx. 20) — incluye comandos, regalos y citas.

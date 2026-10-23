@@ -122,7 +122,6 @@ def test_sync_preferences_from_self_queda_como_no_op():
 
 
 def test_apply_turn_no_resincroniza_gustos_tras_personalidad():
-    """Un self_update de personalidad no altera world["preferences"]."""
     from airi.domain.self_model import SELF_TRAITS_ALLOWLIST, apply_self_update
 
     state = AppState()
@@ -144,3 +143,61 @@ def test_apply_turn_no_resincroniza_gustos_tras_personalidad():
     )
     assert entry is not None
     assert state.world["preferences"] == dict(canonical)
+
+
+def test_load_policy_lee_handoff_seconds(monkeypatch):
+    from airi.domain.spectator import load_policy
+
+    monkeypatch.setenv("AIRI_SPECTATOR_HANDOFF_SECONDS", "99")
+    policy = load_policy()
+    assert policy.handoff_seconds == 99
+
+
+def test_decide_activation_handoff_es_garantizado():
+    from airi.domain import spectator
+    from tests.unit.test_spectator import _policy
+
+    decision = spectator.decide_activation(
+        mention=False, handoff=True, topic=False, affinity=False,
+        roll=0.99, policy=_policy(),
+    )
+    assert decision.proceed
+    assert decision.guaranteed and decision.reason == "handoff"
+
+
+def test_decide_activation_sin_handoff_intacta():
+    from airi.domain import spectator
+    from tests.unit.test_spectator import _policy
+
+    decision = spectator.decide_activation(
+        mention=False, handoff=False, topic=True, affinity=False,
+        roll=0.1, policy=_policy(),
+    )
+    assert decision.proceed and decision.reason == "topic"
+
+
+def test_evaluate_event_handoff_bypassa_cooldown():
+    from airi.services.spectator_policy import ActivitiesCooldown, evaluate_event
+    from tests.unit.test_spectator import _policy
+
+    gate = ActivitiesCooldown(cooldown_seconds=300, clock=lambda: 1000.0)
+    gate.arm("7", "99", now=1000.0)
+    decision = evaluate_event(
+        policy=_policy(), gate=gate, channel_id="7", author_id="99",
+        mention=False, handoff=True, topic=False, affinity=False,
+    )
+    assert decision.proceed and decision.reason == "handoff"
+
+
+def test_gate_handoff_expira_clear_y_una_sola_vez():
+    from airi.services.spectator_policy import ActivitiesCooldown
+
+    gate = ActivitiesCooldown(cooldown_seconds=300, clock=lambda: 1000.0)
+    assert not gate.has_pending_handoff("7", "99", now=1000.0)
+    gate.arm_handoff("7", "99", now=1000.0)
+    assert gate.has_pending_handoff("7", "99", now=999.0)
+    # Fuera de la ventana expira solo.
+    assert not gate.has_pending_handoff("7", "99", now=1000.0 + 240)
+    gate.arm_handoff("7", "99", now=1000.0)
+    gate.clear_handoff("7", "99")
+    assert not gate.has_pending_handoff("7", "99", now=1001.0)

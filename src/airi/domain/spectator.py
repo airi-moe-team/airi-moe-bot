@@ -24,6 +24,7 @@ from airi.domain.constants import (
     AIRI_SPECTATOR_AFFINITY_POINTS,
     AIRI_SPECTATOR_BUFFER_MAX,
     AIRI_SPECTATOR_COOLDOWN_SECONDS,
+    AIRI_SPECTATOR_HANDOFF_SECONDS,
     AIRI_SPECTATOR_PROB_AFFINITY,
     AIRI_SPECTATOR_PROB_TOPIC,
     AIRI_SPECTATOR_SNAPSHOT_MAX,
@@ -33,6 +34,7 @@ from airi.domain.constants import (
 _RAZON_MENCION = "mention"
 _RAZON_TEMA = "topic"
 _RAZON_AFINIDAD = "affinity"
+_RAZON_HANDOFF = "handoff"
 
 _MIN_LONGITUD_TERMINO = 3
 _TEXTO_VACIO = ("", "none", "ninguno", "null", "n/a")
@@ -55,6 +57,7 @@ class AiriSpectatorPolicy:
     snapshot_max_messages: int = AIRI_SPECTATOR_SNAPSHOT_MAX
     buffer_max: int = AIRI_SPECTATOR_BUFFER_MAX
     ttl_seconds: int = AIRI_SPECTATOR_TTL_SECONDS
+    handoff_seconds: int = AIRI_SPECTATOR_HANDOFF_SECONDS
 
 
 def load_policy(env=None):
@@ -101,6 +104,7 @@ def load_policy(env=None):
         snapshot_max_messages=_int("AIRI_SPECTATOR_SNAPSHOT_MAX", AIRI_SPECTATOR_SNAPSHOT_MAX),
         buffer_max=_int("AIRI_SPECTATOR_BUFFER_MAX", AIRI_SPECTATOR_BUFFER_MAX),
         ttl_seconds=_int("AIRI_SPECTATOR_TTL_SECONDS", AIRI_SPECTATOR_TTL_SECONDS),
+        handoff_seconds=_int("AIRI_SPECTATOR_HANDOFF_SECONDS", AIRI_SPECTATOR_HANDOFF_SECONDS),
     )
 
 
@@ -345,17 +349,22 @@ def _combination_probability(topic, affinity, policy):
     return max(probabilities)
 
 
-def decide_activation(*, mention, topic, affinity, roll, policy):
+def decide_activation(*, mention, topic, affinity, roll, policy, handoff=False):
     """Compone señales y tirada local en una decisión pura.
 
-    Orden garantizado: la mención es incondicional; el resto depende de la
-    tirada, que el llamador recoge ANTES de llamar al LLM.
+    Orden garantizado: (1) mención explícita, (2) handoff —respuesta del
+    interlocutor a quien Airi acaba de preguntar—, (3) tema/afinidad con
+    tirada local previa al LLM.
     """
     if not policy.enabled:
         return ActivationDecision(proceed=False, reason=None, guaranteed=False, roll=float(roll))
     if mention:
         return ActivationDecision(
             proceed=True, reason=_RAZON_MENCION, guaranteed=True, roll=float(roll)
+        )
+    if handoff:
+        return ActivationDecision(
+            proceed=True, reason=_RAZON_HANDOFF, guaranteed=True, roll=float(roll)
         )
     probability = _combination_probability(topic, affinity, policy)
     if probability is None:

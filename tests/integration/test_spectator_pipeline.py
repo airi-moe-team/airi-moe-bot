@@ -251,9 +251,31 @@ def test_modo_activado_tema_despierta_un_solo_turno(monkeypatch, service_llm):
     asyncio.run(scenario())
     assert len(llm.calls) == 1
     assert channel.sent, "la respuesta espontánea se publicó"
-    # El snapshot consumió el contexto; el mensaje del turno sigue en el buffer.
+    # Trigger y snapshot se consumen por completo: el tema no queda latente.
     remaining = buffer.snapshot(FakeChannel.id, now=1000.0)
-    assert [e.content for e in remaining] == ["¿jugamos videojuegos luego?"]
+    assert remaining == []
+
+
+def test_handoff_permite_contestar_a_la_pregunta_de_airi(monkeypatch, service_llm):
+    monkeypatch.setenv("AIRI_SPECTATOR_ENABLED", "1")
+    monkeypatch.setenv("AIRI_SPECTATOR_HANDOFF_SECONDS", "300")
+    client, channel, state, buffer, gate = _setup(monkeypatch, service_llm, enabled=True)
+    state.world["preferences"] = {
+        "loves": ["videojuegos"],
+        "dislikes": [],
+        "favorite_food": "dulces",
+        "favorite_flower": "tulipanes",
+    }
+    msg1 = _send_message(channel, mid=20, content="¿videojuegos esta noche?")
+    msg2 = _send_message(channel, mid=21, content="sí, me apunto con gusto")
+    msg3 = _send_message(channel, mid=22, content="otra cosa cualquiera")
+
+    async def scenario():
+        await _drive_many(client, channel, [msg1, msg2, msg3])
+
+    asyncio.run(scenario())
+    assert len(service_llm.calls) == 2, "turno espontáneo + respuesta handoff"
+    assert not gate.can_fire(FakeChannel.id, "99", now=1000.0)
 
 
 def test_cooldown_persiste_entre_mensajes(monkeypatch, service_llm):
@@ -265,12 +287,15 @@ def test_cooldown_persiste_entre_mensajes(monkeypatch, service_llm):
         "favorite_food": "dulces",
         "favorite_flower": "tulipanes",
     }
-    msg1 = _send_message(channel, mid=10, content="¿videojuegos esta noche?")
-    msg2 = _send_message(channel, mid=11, content="otra vez videojuegos, ¿sí?")
+    msg1 = _send_message(channel, mid=10, content="¿videojuegos esta noche?")       # tema
+    msg2 = _send_message(channel, mid=11, content="vengo del paseo")                 # handoff
+    msg3 = _send_message(channel, mid=12, content="nada más, gracias por el ánimo")  # ya sin handoff
+    msg4 = _send_message(channel, mid=13, content="otra vez ¿videojuegos?")          # cooldown
 
     async def scenario():
-        await _drive_many(client, channel, [msg1, msg2])
+        await _drive_many(client, channel, [msg1, msg2, msg3, msg4])
 
     asyncio.run(scenario())
-    assert len(service_llm.calls) == 1, "el cooldown bloquea el reintento"
+    assert len(service_llm.calls) == 2, "tema inicial + handoff; cooldown bloquea msg4"
+    # La instancia del gate persiste: sigue armada al cierre del escenario.
     assert not gate.can_fire(FakeChannel.id, "99", now=1000.0)

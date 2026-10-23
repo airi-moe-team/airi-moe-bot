@@ -24,6 +24,7 @@ def _policy(**overrides):
         "snapshot_max_messages": 12,
         "buffer_max": 20,
         "ttl_seconds": 1800,
+        "handoff_seconds": 180,
     }
     base.update(overrides)
     return AiriSpectatorPolicy(**base)
@@ -208,7 +209,7 @@ def test_senales_combinadas_usan_la_probabilidad_mayor():
 def test_modo_desactivado_no_procede():
     off = _policy(enabled=False)
     decision = decide_activation(
-        mention=True, topic=True, affinity=True, roll=0.0, policy=off
+        mention=True, handoff=False, topic=True, affinity=True, roll=0.0, policy=off
     )
     assert not decision.proceed
     assert decision.reason is None
@@ -216,10 +217,21 @@ def test_modo_desactivado_no_procede():
 
 def test_sin_senal_no_procede():
     decision = decide_activation(
-        mention=False, topic=False, affinity=False, roll=0.0, policy=_policy()
+        mention=False, handoff=False, topic=False, affinity=False, roll=0.0,
+        policy=_policy(),
     )
     assert not decision.proceed
     assert decision.reason is None
+
+
+def test_handoff_garantizado_antes_de_otras_senales():
+    decision = decide_activation(
+        mention=False, handoff=True, topic=True, affinity=True, roll=0.99,
+        policy=_policy(),
+    )
+    assert decision.proceed
+    assert decision.reason == "handoff"
+    assert decision.guaranteed
 
 
 # ------------------------------------------------------------------

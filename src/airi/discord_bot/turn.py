@@ -60,18 +60,25 @@ def _finalize_spectator_turn(
     spectator_reason,
     spectator_snapshot,
     spectator_guaranteed,
+    *,
+    handoff=False,
+    trigger_ids=(),
 ):
     """Cierra el ciclo del modo espectador tras publicar con éxito.
 
-    Solo los mensajes incluidos en la captura efímera se consumen del buffer;
-    el cooldown armar es para las señales espontáneas (la mención directa no
-    queda penalizada) y se cumple AUNQUE el snapshot viniera vacío.
+    - Se consumen del buffer el snapshot y los mensajes del turno (trigger);
+      el tema no queda latente tras la intervención.
+    - El cooldown se arma para señales espontáneas Y handoff; la mención
+      directa no lo penaliza.
+    - La intervención de Airi puede haber dejado una pregunta: habilita UN
+      handoff para ese interlocutor dentro de la ventana; tras el handoff la
+      cadena termina y solo vuelven los disparadores normales.
     """
     if kind != "spectator":
         return
     buffer = getattr(ctx, "passive_buffer", None)
     gate = getattr(ctx, "spectator_gate", None)
-    if buffer is not None and spectator_snapshot:
+    if buffer is not None:
         consumed = []
         for entry in spectator_snapshot:
             entry_id = ""
@@ -81,14 +88,21 @@ def _finalize_spectator_turn(
                 entry_id = str(getattr(entry, "message_id", "") or "")
             if entry_id:
                 consumed.append(entry_id)
+        consumed.extend(str(item) for item in trigger_ids if str(item))
         if consumed:
             buffer.mark_consumed(channel.id, consumed)
     if (
         gate is not None
         and not spectator_guaranteed
-        and spectator_reason in ("topic", "affinity")
+        and spectator_reason in ("topic", "affinity", "handoff")
     ):
         gate.arm(channel.id, author.id)
+    if gate is None:
+        return
+    if handoff:
+        gate.clear_handoff(channel.id, author.id)
+    else:
+        gate.arm_handoff(channel.id, author.id)
 
 
 async def send_long_message(channel, content, *, reference=None):
@@ -156,6 +170,8 @@ async def run_user_turn(
     spectator_reason="",
     spectator_snapshot=(),
     spectator_guaranteed=False,
+    spectator_handoff=False,
+    spectator_trigger_ids=(),
 ):
     """Procesa un turno (texto libre o botón de cita) y lo traduce a Discord."""
     channel_id = channel.id
@@ -269,6 +285,8 @@ async def run_user_turn(
                 spectator_reason,
                 spectator_snapshot,
                 spectator_guaranteed,
+                handoff=spectator_handoff,
+                trigger_ids=spectator_trigger_ids,
             )
 
             # El motivo del cierre anterior es de un solo uso: solo se marca

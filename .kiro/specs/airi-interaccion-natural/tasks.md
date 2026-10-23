@@ -92,3 +92,14 @@
     - Actualizar el texto de reglas del prompt y los tests de self_model afectados
     - Verificar que un self_update de gustos ya no aplica y el historial queda íntegro
     - _Requirements: 2.12_
+
+- [x] 7. Handoff y consumo del trigger (FB-007)
+  - [x] 7.1 Continuación natural tras una intervención de Airi
+    - El interlocutor puede responder UNA vez dentro de la ventana de handoff sin cooldown
+    - El cooldown se re-arma después del handoff; la cadena no crece sola
+    - La decisión y la traza registran razón "handoff"
+    - _Requirements: 4.3, 4.6_
+  - [x] 7.2 Consumir el mensaje disparador del buffer
+    - Seguir los ids de los mensajes unidos por debounce y consumirlos con el snapshot
+    - El tema no queda latente en el buffer tras publicar la respuesta
+    - _Requirements: 3.3, 3.4_

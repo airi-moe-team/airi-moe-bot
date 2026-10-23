@@ -31,11 +31,12 @@ log = logging.getLogger(__name__)
 
 
 class _Debouncer:
-    """Une mensajes rápidos del MISMO (canal, autor)."""
+    """Une mensajes rápidos del MISMO (canal, autor) con sus ids."""
 
     def __init__(self):
         self.pending = {}
         self.seq = {}
+        self.ids = {}
 
     def next_seq(self, key):
         value = self.seq.get(key, 0) + 1
@@ -45,17 +46,21 @@ class _Debouncer:
     def current_seq(self, key):
         return self.seq.get(key)
 
-    def add(self, key, item):
+    def add(self, key, item, *, message_id=None):
         self.pending.setdefault(key, []).append(item)
+        if message_id is not None and str(message_id):
+            self.ids.setdefault(key, []).append(str(message_id))
 
     def pop(self, key):
         self.seq.pop(key, None)
-        return self.pending.pop(key, [])
+        ids = tuple(self.ids.pop(key, []))
+        return self.pending.pop(key, []), ids
 
     def reset(self, channel_id, author_id):
         key = (channel_id, author_id)
         self.pending.pop(key, None)
         self.seq.pop(key, None)
+        self.ids.pop(key, None)
 
 
 async def acknowledge_reconnect_context(ctx):
@@ -363,11 +368,13 @@ def create_client(
 
         key = (message.channel.id, message.author.id)
         seq = debounce.next_seq(key)
-        debounce.add(key, (message.author, content))
+        debounce.add(
+            key, (message.author, content), message_id=str(getattr(message, "id", ""))
+        )
         await asyncio.sleep(ctx.debounce_seconds)
         if debounce.current_seq(key) != seq:
             return
-        merged = debounce.pop(key)
+        merged, merged_ids = debounce.pop(key)
         if not merged:
             return
 
@@ -385,9 +392,9 @@ def create_client(
         if not decision.proceed:
             # Escucha silenciosa: el mensaje quedó en el buffer, sin LLM.
             return
-        snapshot_ids = {str(getattr(message, "id", ""))}
+        snapshot_ids = {"", *merged_ids}
         entries = passive_buffer.snapshot(
-            message.channel.id, exclude_ids={"", *snapshot_ids}
+            message.channel.id, exclude_ids=snapshot_ids
         )
         entry_dicts = [
             {
@@ -399,6 +406,7 @@ def create_client(
             }
             for e in entries
         ]
+        handoff = decision.reason == "handoff"
         await dispatcher.submit(
             message.channel.id,
             lambda: turn.run_user_turn(
@@ -411,6 +419,8 @@ def create_client(
                 spectator_reason=decision.reason,
                 spectator_snapshot=tuple(entry_dicts),
                 spectator_guaranteed=decision.guaranteed,
+                spectator_handoff=handoff,
+                spectator_trigger_ids=merged_ids,
             ),
             message_ids=[getattr(message, "id", None)],
         )
@@ -452,6 +462,11 @@ def create_client(
             "Modo espectador señales: mention=%s topic=%s affinity=%s",
             *affine_signals,
         )
+        pending_handoff = (
+            gate.has_pending_handoff(message.channel.id, message.author.id)
+            if gate is not None
+            else False
+        )
         return spectator_policy_module.evaluate_event(
             policy=policy,
             gate=gate,
@@ -460,6 +475,7 @@ def create_client(
             mention=mention,
             topic=topic,
             affinity=affinity,
+            handoff=pending_handoff,
         )
 
     async def _is_reply_to_airi(message):
