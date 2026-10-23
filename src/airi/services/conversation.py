@@ -276,6 +276,10 @@ class TurnContext:
     suppress_affinity: bool = False  # el turno NO mueve la afinidad
     # Clave estable reclamada por el diario de turnos (referencia de evidencia).
     turn_key: str | None = None
+    # Modo espectador: captura efímera del buffer pasivo del canal.
+    spectator_reason: str = ""
+    spectator_snapshot: tuple = ()  # entradas del buffer pasivo (dicts).
+    spectator_roll: float = 0.0
 
 
 @dataclass
@@ -439,6 +443,34 @@ class ConversationService:
                 })
             ev.history_in = list(history)
 
+            # Modo espectador: la captura efímera del buffer pasivo se inyecta
+            # EN el prompt (y solo en la traza), nunca en el historial
+            # persistido; los mensajes pasivos mueren con su TTL.
+            prompt_history = history
+            if ctx.kind == "spectator" and ctx.spectator_snapshot:
+                ephemeral = []
+                for entry in ctx.spectator_snapshot:
+                    if isinstance(entry, dict):
+                        author_name = entry.get("author_name") or ""
+                        content = entry.get("content") or ""
+                    else:
+                        author_name = getattr(entry, "author_name", "")
+                        content = getattr(entry, "content", "")
+                    ephemeral.append({
+                        "role": "user",
+                        "content": content,
+                        "author_id": str(getattr(entry, "author_id", "") or ""),
+                        "author_name": author_name,
+                        "spectator": True,
+                    })
+                ev.spectator_reason = ctx.spectator_reason
+                ev.spectator_snapshot = [
+                    entry if isinstance(entry, dict) else vars(entry)
+                    for entry in ctx.spectator_snapshot
+                ]
+                ev.spectator_probability_roll = ctx.spectator_roll
+                prompt_history = [*history, *ephemeral]
+
             log.info("turno user=%s in_date=%s", uid, in_date)
 
             web_context = None
@@ -476,7 +508,7 @@ class ConversationService:
             )
             t0 = _time.perf_counter()
             system_prompt, raw_llm, meta, output = await self._generate(
-                history, web_context, user, date_session, delta_max,
+                prompt_history, web_context, user, date_session, delta_max,
                 extra_note=ctx.extra_note,
                 relationship_view=relationship_view,
                 now=now,

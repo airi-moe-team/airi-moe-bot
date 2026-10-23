@@ -283,6 +283,19 @@ DIARY_PROMPT_MAX_USER = env_int("DIARY_PROMPT_MAX_USER", 6)
 DIARY_PROMPT_MAX_CHARS = env_int("DIARY_PROMPT_MAX_CHARS", 900)
 KNOWN_USERS_PROMPT_MAX = env_int("KNOWN_USERS_PROMPT_MAX", 10)
 MAX_HISTORY_MESSAGES = env_int("MAX_HISTORY_MESSAGES", 12)
+
+# ============================================================
+# ESCUCHA PASIVA (modo espectador): buffer, disparadores locales
+# y política de intervención espontánea.
+# ============================================================
+AIRI_SPECTATOR_ENABLED = env_flag("AIRI_SPECTATOR_ENABLED", False)
+AIRI_SPECTATOR_BUFFER_MAX = env_int("AIRI_SPECTATOR_BUFFER_MAX", 20)
+AIRI_SPECTATOR_TTL_SECONDS = env_int("AIRI_SPECTATOR_TTL_SECONDS", 1800)
+AIRI_SPECTATOR_AFFINITY_POINTS = env_int("AIRI_SPECTATOR_AFFINITY_POINTS", 20)
+AIRI_SPECTATOR_PROB_TOPIC = env_float("AIRI_SPECTATOR_PROB_TOPIC", 0.55)
+AIRI_SPECTATOR_PROB_AFFINITY = env_float("AIRI_SPECTATOR_PROB_AFFINITY", 0.35)
+AIRI_SPECTATOR_COOLDOWN_SECONDS = env_int("AIRI_SPECTATOR_COOLDOWN_SECONDS", 300)
+AIRI_SPECTATOR_SNAPSHOT_MAX = env_int("AIRI_SPECTATOR_SNAPSHOT_MAX", 12)
 # Turno rápido: mensajes cortos sin web ni cita usan un contrato de salida
 # reducido, menos historial y un tope de salida bajo para responder antes.
 QUICK_REPLY_MAX_CHARS = env_int("QUICK_REPLY_MAX_CHARS", 60)

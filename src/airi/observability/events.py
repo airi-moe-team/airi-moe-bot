@@ -122,6 +122,11 @@ class TurnEvent:
     level_after: str = ""
     leveled_up: bool = False
 
+    # Modo espectador (aditivo, v1 forward-compat vía from_dict)
+    spectator_reason: str = ""
+    spectator_snapshot: list = field(default_factory=list)
+    spectator_probability_roll: float = 0.0
+
     # Cita
     date_decision: str = "continue"
     date_event: str | None = None

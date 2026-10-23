@@ -19,8 +19,13 @@ from types import SimpleNamespace
 import discord
 
 from airi.discord_bot import embeds, turn
+from airi.domain import spectator
 from airi.domain.constants import DATE_DELTA_MAX
+from airi.domain.spectator import load_policy
+from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
+from airi.services.passive_buffer import PassiveBuffer
+from airi.services.spectator_policy import ActivitiesCooldown
 
 log = logging.getLogger(__name__)
 
@@ -287,6 +292,9 @@ def create_client(
     def _reset_conversation(ctx, ch_id, author_id):
         debounce.reset(ch_id, author_id)
         ctx.state.histories.pop(ch_id, None)
+        buffer = getattr(ctx, "passive_buffer", None)
+        if buffer is not None:
+            buffer.clear(ch_id)
 
     @client.event
     async def on_ready():
@@ -333,6 +341,21 @@ def create_client(
             await handler(ctx, message)
             return
 
+        spectator_policy = getattr(ctx, "spectator_policy", None)
+        passive_buffer = getattr(ctx, "passive_buffer", None)
+        if (
+            spectator_policy is not None
+            and spectator_policy.enabled
+            and passive_buffer is not None
+        ):
+            passive_buffer.append(
+                message.channel.id,
+                str(message.author.id),
+                getattr(message.author, "display_name", ""),
+                content,
+                message_id=str(getattr(message, "id", "")),
+            )
+
         owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
         if owner_id is not None:
             await ctx.notify_busy(message.channel, message.author)
@@ -347,13 +370,102 @@ def create_client(
         merged = debounce.pop(key)
         if not merged:
             return
+
+        if spectator_policy is None or not spectator_policy.enabled:
+            await dispatcher.submit(
+                message.channel.id,
+                lambda: turn.run_user_turn(
+                    ctx, message.channel, message.author, merged, reply_target=message
+                ),
+                message_ids=[getattr(message, "id", None)],
+            )
+            return
+
+        decision = await _evaluate_spectator_event(ctx, message, merged)
+        if not decision.proceed:
+            # Escucha silenciosa: el mensaje quedó en el buffer, sin LLM.
+            return
+        snapshot_ids = {str(getattr(message, "id", ""))}
+        entries = passive_buffer.snapshot(
+            message.channel.id, now=time.time(), exclude_ids={"", *snapshot_ids}
+        )
+        entry_dicts = [
+            {
+                "author_id": e.author_id,
+                "author_name": e.author_name,
+                "content": e.content,
+                "message_id": e.message_id,
+                "ts": e.ts,
+            }
+            for e in entries
+        ]
         await dispatcher.submit(
             message.channel.id,
             lambda: turn.run_user_turn(
-                ctx, message.channel, message.author, merged, reply_target=message
+                ctx,
+                message.channel,
+                message.author,
+                merged,
+                reply_target=message,
+                kind="spectator",
+                spectator_reason=decision.reason,
+                spectator_snapshot=tuple(entry_dicts),
+                spectator_guaranteed=decision.guaranteed,
             ),
             message_ids=[getattr(message, "id", None)],
         )
+
+    async def _evaluate_spectator_event(ctx, message, merged):
+        """Señales locales del modo espectador para el mensaje actual."""
+        policy = ctx.spectator_policy
+        gate = getattr(ctx, "spectator_gate", None)
+
+        merged_text = "\n".join(part for _, part in merged)
+        airi_user = getattr(client, "user", None)
+        airi_id = str(getattr(airi_user, "id", "") or "")
+        airi_name = str(
+            getattr(airi_user, "name", "") or getattr(airi_user, "display_name", "")
+        )
+        reply_to_airi = await _is_reply_to_airi(message)
+        mention = spectator.mention_signals(
+            merged_text, airi_id, airi_name, reply_to_airi
+        )
+        topic_pattern = spectator.build_topic_matcher(
+            spectator.positive_taste_terms(ctx.state.self_model())
+        )
+        topic = spectator.topic_eligible(topic_pattern, merged_text)
+        affinity = spectator.affinity_eligible(
+            ctx.state.entry_points(message.author.id),
+            policy.affinity_threshold,
+        )
+        affine_signals = (mention, topic, affinity)
+        log.debug(
+            "Modo espectador señales: mention=%s topic=%s affinity=%s",
+            *affine_signals,
+        )
+        return spectator_policy_module.evaluate_event(
+            policy=policy,
+            gate=gate,
+            channel_id=message.channel.id,
+            author_id=message.author.id,
+            mention=mention,
+            topic=topic,
+            affinity=affinity,
+        )
+
+    async def _is_reply_to_airi(message):
+        """True si el mensaje responde a un mensaje de Airi (best-effort)."""
+        reference = getattr(message, "reference", None)
+        if reference is None:
+            return False
+        cached = getattr(reference, "cached_message", None)
+        if cached is not None:
+            author = getattr(cached, "author", None)
+            airi = getattr(client, "user", None)
+            return bool(airi is not None and getattr(author, "id", None) == airi.id)
+        # Sin caché del mensaje citado no se puede confirmar el autor; el modo
+        # espectador no adivina: se evalúan las otras señales.
+        return False
 
     return client
 
@@ -991,6 +1103,13 @@ def run_bot(argv=None):
         }
 
     def build_ctx(channel):
+        # Política efectiva del modo espectador, recalculada del entorno.
+        spectator_policy = load_policy()
+        spectator_ctx = PassiveBuffer(
+            buffer_max=spectator_policy.buffer_max,
+            ttl_seconds=spectator_policy.ttl_seconds,
+            clock=time.time,
+        )
         ctx = BotContext(
             channel_id=channel.id,
             state=build_app_state(),
@@ -1026,6 +1145,12 @@ def run_bot(argv=None):
                 user.id, user.display_name
             ),
             log_diary_event=state.log_diary_event,
+        )
+        ctx.passive_buffer = spectator_ctx
+        ctx.spectator_policy = spectator_policy
+        ctx.spectator_gate = ActivitiesCooldown(
+            cooldown_seconds=spectator_policy.cooldown_seconds,
+            clock=time.time,
         )
         ctx.handle_scene_choice = (
             lambda interaction, payload: discord_turn.handle_scene_choice(

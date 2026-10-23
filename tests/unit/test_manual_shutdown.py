@@ -66,6 +66,9 @@ def _setup(monkeypatch, *, manual_shutdown):
     channel = FakeChannel()
 
     def build_ctx(_ch):
+        from airi.discord_bot.context import BotContext
+        from airi.services.state import AppState
+
         return BotContext(channel_id=7, state=AppState())
 
     client = client_module.create_client(

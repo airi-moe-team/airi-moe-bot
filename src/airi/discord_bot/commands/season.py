@@ -32,6 +32,10 @@ async def _perform(ctx, message):
     archiver = getattr(ctx, "season_archiver", None)
     retention = getattr(ctx, "retention", None)
     season = int(state.world.get("season", 1) or 1)
+    # El modo espectador olvida lo leído como espectadora al cerrar temporada.
+    buffer = getattr(ctx, "passive_buffer", None)
+    if buffer is not None:
+        buffer.clear_all()
 
     try:
         archive_path = ""

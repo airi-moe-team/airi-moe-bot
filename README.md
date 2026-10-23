@@ -198,6 +198,24 @@ TRACE_KEEP_LAST=500         # o AIRI_TRACE_KEEP_LAST
 AIRI_SHUTDOWN_REASON="se fue a dormir"
 ```
 
+### Modo espectador (escucha pasiva)
+
+Con estas variables Airi lee el canal sin responder a todo: solo despierta ante
+mención/respuesta/nombre, un mensaje que toca un gusto de su perfil, o un autor
+con afinidad suficiente. Interés y afinidad son señales independientes; la
+tirada fallida NO consume el cooldown (ese se arma solo al publicar con éxito).
+
+```bash
+AIRI_SPECTATOR_ENABLED=0           # apagado por defecto; 1 = activar
+AIRI_SPECTATOR_BUFFER_MAX=20       # entradas máximas por canal
+AIRI_SPECTATOR_TTL_SECONDS=1800    # caducidad de lo leído como espectadora
+AIRI_SPECTATOR_AFFINITY_POINTS=20  # umbral de afinidad por autor
+AIRI_SPECTATOR_PROB_TOPIC=0.55     # probabilidad cuando hay tema
+AIRI_SPECTATOR_PROB_AFFINITY=0.35  # probabilidad cuando hay afinidad
+AIRI_SPECTATOR_COOLDOWN_SECONDS=300
+AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
+```
+
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del
   ring (def. 1, máx. 20) — incluye comandos, regalos y citas.
 - `!debug id <cid>` (solo dueño): envía el JSON del evento con ese

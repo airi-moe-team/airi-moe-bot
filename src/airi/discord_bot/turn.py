@@ -52,6 +52,45 @@ from airi.services.turn_coordinator import StaleTurnError, TurnCoordinator
 log = logging.getLogger(__name__)
 
 
+def _finalize_spectator_turn(
+    ctx,
+    channel,
+    author,
+    kind,
+    spectator_reason,
+    spectator_snapshot,
+    spectator_guaranteed,
+):
+    """Cierra el ciclo del modo espectador tras publicar con éxito.
+
+    Solo los mensajes incluidos en la captura efímera se consumen del buffer;
+    el cooldown armar es para las señales espontáneas (la mención directa no
+    queda penalizada).
+    """
+    if kind != "spectator" or not spectator_snapshot:
+        return
+    buffer = getattr(ctx, "passive_buffer", None)
+    gate = getattr(ctx, "spectator_gate", None)
+    if buffer is not None:
+        consumed = []
+        for entry in spectator_snapshot:
+            entry_id = ""
+            if isinstance(entry, dict):
+                entry_id = str(entry.get("message_id", "") or "")
+            else:
+                entry_id = str(getattr(entry, "message_id", "") or "")
+            if entry_id:
+                consumed.append(entry_id)
+        if consumed:
+            buffer.mark_consumed(channel.id, consumed)
+    if (
+        gate is not None
+        and not spectator_guaranteed
+        and spectator_reason in ("topic", "affinity")
+    ):
+        gate.arm(channel.id, author.id)
+
+
 async def send_long_message(channel, content, *, reference=None):
     """Envía un texto largo; el primer bloque responde al mensaje origen."""
     content = clean_reply(content) or (
@@ -114,6 +153,9 @@ async def run_user_turn(
     kind="message",
     extra_note=None,
     suppress_affinity=False,
+    spectator_reason="",
+    spectator_snapshot=(),
+    spectator_guaranteed=False,
 ):
     """Procesa un turno (texto libre o botón de cita) y lo traduce a Discord."""
     channel_id = channel.id
@@ -151,6 +193,8 @@ async def run_user_turn(
                     kind=kind,
                     extra_note=extra_note,
                     suppress_affinity=suppress_affinity,
+                    spectator_reason=spectator_reason,
+                    spectator_snapshot=tuple(spectator_snapshot),
                 )
                 journal = getattr(ctx, "turn_journal", None)
                 persistence = getattr(ctx, "persistence", None)
@@ -216,6 +260,16 @@ async def run_user_turn(
                 await _publish_result(
                     ctx, channel, author, result, reply_target=reply_target
                 )
+
+            _finalize_spectator_turn(
+                ctx,
+                channel,
+                author,
+                kind,
+                spectator_reason,
+                spectator_snapshot,
+                spectator_guaranteed,
+            )
 
             # El motivo del cierre anterior es de un solo uso: solo se marca
             # entregado cuando la respuesta ya se publicó correctamente.
