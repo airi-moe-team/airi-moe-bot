@@ -387,7 +387,7 @@ def create_client(
             return
         snapshot_ids = {str(getattr(message, "id", ""))}
         entries = passive_buffer.snapshot(
-            message.channel.id, now=time.time(), exclude_ids={"", *snapshot_ids}
+            message.channel.id, exclude_ids={"", *snapshot_ids}
         )
         entry_dicts = [
             {
@@ -433,7 +433,16 @@ def create_client(
         topic_pattern = spectator.build_topic_matcher(
             spectator.positive_taste_terms(ctx.state.world.get("preferences"))
         )
-        topic = spectator.topic_eligible(topic_pattern, merged_text)
+        buffer = getattr(ctx, "passive_buffer", None)
+        recent_texts = [merged_text]
+        if buffer is not None:
+            recent_entries = buffer.snapshot(message.channel.id)
+            recent_texts.extend(entry.content for entry in recent_entries)
+        topic = any(
+            spectator.topic_eligible(topic_pattern, text)
+            for text in dict.fromkeys(recent_texts)
+            if text
+        )
         affinity = spectator.affinity_eligible(
             ctx.state.entry_points(message.author.id),
             policy.affinity_threshold,
@@ -1069,6 +1078,19 @@ def run_bot(argv=None):
         backup_limit=settings.backup_retention,
     )
 
+    # Estado social del modo espectador compartido entre mensajes:
+    # la escucha y el cooldown deben sobrevivir al ciclo on_message.
+    spectator_effective = load_policy()
+    shared_spectator_buffer = PassiveBuffer(
+        buffer_max=spectator_effective.buffer_max,
+        ttl_seconds=spectator_effective.ttl_seconds,
+        clock=time.time,
+    )
+    shared_spectator_gate = ActivitiesCooldown(
+        cooldown_seconds=spectator_effective.cooldown_seconds,
+        clock=time.time,
+    )
+
     # Pegamentos Discord↔dominio (citas, regalos, diario). Ver `build_date_glue`.
     glue = build_date_glue(
         state,
@@ -1111,12 +1133,9 @@ def run_bot(argv=None):
 
     def build_ctx(channel):
         # Política efectiva del modo espectador, recalculada del entorno.
+        # El buffer y el cooldown SON COMPARTIDOS entre mensajes (vida social
+        # continua); solo la política se recalcula por mensaje.
         spectator_policy = load_policy()
-        spectator_ctx = PassiveBuffer(
-            buffer_max=spectator_policy.buffer_max,
-            ttl_seconds=spectator_policy.ttl_seconds,
-            clock=time.time,
-        )
         ctx = BotContext(
             channel_id=channel.id,
             state=build_app_state(),
@@ -1153,12 +1172,9 @@ def run_bot(argv=None):
             ),
             log_diary_event=state.log_diary_event,
         )
-        ctx.passive_buffer = spectator_ctx
+        ctx.passive_buffer = shared_spectator_buffer
         ctx.spectator_policy = spectator_policy
-        ctx.spectator_gate = ActivitiesCooldown(
-            cooldown_seconds=spectator_policy.cooldown_seconds,
-            clock=time.time,
-        )
+        ctx.spectator_gate = shared_spectator_gate
         ctx.handle_scene_choice = (
             lambda interaction, payload: discord_turn.handle_scene_choice(
                 ctx, interaction, payload

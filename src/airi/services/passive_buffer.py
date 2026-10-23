@@ -88,11 +88,12 @@ class PassiveBuffer:
         self,
         channel_id,
         *,
-        now,
+        now=None,
         exclude_ids=frozenset(),
     ):
         """Ventana vigente en orden cronológico, sin las entradas excluidas."""
-        text = [entry for entry in self._prune(str(channel_id), now)]
+        at = float(now) if now is not None else self._now()
+        text = [entry for entry in self._prune(str(channel_id), at)]
         if exclude_ids:
             excluded = {str(item) for item in exclude_ids}
             text = [entry for entry in text if entry.message_id not in excluded]

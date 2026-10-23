@@ -45,3 +45,4 @@ class FakeUser:
     def __init__(self, user_id, display_name):
         self.id = user_id
         self.display_name = display_name
+        self.display_avatar = type("Avatar", (), {"url": ""})()

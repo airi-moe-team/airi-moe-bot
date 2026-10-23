@@ -115,6 +115,26 @@ def _setup(monkeypatch, llm, *, enabled):
             search=FakeSearch(),
             clock=lambda: 1000.0,
         )
+    policy = load_policy()
+    if enabled:
+        policy = type(policy)(
+            enabled=True,
+            affinity_threshold=policy.affinity_threshold,
+            probability_topic=1.0,
+            probability_affinity=1.0,
+            cooldown_seconds=policy.cooldown_seconds,
+            snapshot_max_messages=policy.snapshot_max_messages,
+            buffer_max=policy.buffer_max,
+            ttl_seconds=policy.ttl_seconds,
+        )
+    buffer = PassiveBuffer(
+        buffer_max=policy.buffer_max,
+        ttl_seconds=policy.ttl_seconds,
+        clock=lambda: 1000.0,
+    )
+    gate = ActivitiesCooldown(
+        cooldown_seconds=policy.cooldown_seconds, clock=lambda: 1000.0
+    )
 
     def build_ctx(ch):
         policy = load_policy()
@@ -143,17 +163,9 @@ def _setup(monkeypatch, llm, *, enabled):
             build_service=build_service,
             busy_date_owner=lambda exclude_id=None: (None, None),
         )
-        buffer = PassiveBuffer(
-            buffer_max=policy.buffer_max,
-            ttl_seconds=policy.ttl_seconds,
-            clock=lambda: 1000.0,
-        )
-        gate = ActivitiesCooldown(
-            cooldown_seconds=policy.cooldown_seconds, clock=lambda: 1000.0
-        )
-        ctx.passive_buffer = buffer
+        ctx.passive_buffer = buffer  # MISMA instancia en cada mensaje
         ctx.spectator_policy = policy
-        ctx.spectator_gate = gate
+        ctx.spectator_gate = gate  # MISMA instancia en cada mensaje
         return ctx
 
     client = client_module.create_client(
@@ -164,7 +176,7 @@ def _setup(monkeypatch, llm, *, enabled):
     )
     client.user = type("U", (), {"id": AIRI_ID, "name": "Airi"})()
     client._channel = channel
-    return client, channel, state
+    return client, channel, state, buffer, gate
 
 
 def _send_message(channel, *, mid, content, author_type="user"):
@@ -184,37 +196,81 @@ async def _drive(client, message, channel, *, debug=False):
     await asyncio.sleep(0.2)
 
 
+async def _drive_many(client, channel, messages):
+    for message in messages:
+        await client.events["on_message"](message)
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+
+
 def test_modo_desactivado_responde_como_antes(monkeypatch, service_llm):
-    client, channel, state = _setup(monkeypatch, service_llm, enabled=False)
+    client, channel, state, buffer, gate = _setup(monkeypatch, service_llm, enabled=False)
     msg = _send_message(channel, mid=1, content="palestra común")
-    asyncio.run(_drive(client, msg, channel))
+
+    async def scenario():
+        await _drive(client, msg, channel)
+
+    asyncio.run(scenario())
     assert len(service_llm.calls) == 1
-    # El buffer pasivo NO se creó/llena (el modo está desactivado).
-    assert client.events["on_message"] is not None
+    # El buffer pasivo NO se llenó (el modo está desactivado).
+    assert buffer.snapshot(FakeChannel.id, now=1000.0) == []
 
 
 def test_modo_activado_sin_senal_guarda_buffer_y_no_llama_llm(monkeypatch, service_llm):
     monkeypatch.setenv("AIRI_SPECTATOR_ENABLED", "1")
-    client, channel, state = _setup(monkeypatch, service_llm, enabled=True)
+    client, channel, state, buffer, gate = _setup(monkeypatch, service_llm, enabled=True)
     msg = _send_message(channel, mid=2, content="cómo está todo")
-    asyncio.run(_drive(client, msg, channel))
+
+    async def scenario():
+        await _drive(client, msg, channel)
+
+    asyncio.run(scenario())
     assert len(service_llm.calls) == 0
     assert channel.sent == []
+    # La escucha persiste: el MISMO buffer guarda el mensaje para el próximo turno.
+    snapshot = buffer.snapshot(FakeChannel.id, now=1000.0)
+    assert [e.content for e in snapshot] == ["cómo está todo"]
 
 
 def test_modo_activado_tema_despierta_un_solo_turno(monkeypatch, service_llm):
     monkeypatch.setenv("AIRI_SPECTATOR_ENABLED", "1")
-    monkeypatch.setattr("airi.discord_bot.turn.log", logging.getLogger("t-turn"))
-    client, channel, state = _setup(monkeypatch, service_llm, enabled=True)
+    client, channel, state, buffer, gate = _setup(monkeypatch, service_llm, enabled=True)
     llm = service_llm
-    # Los gustos negativos del perfil persistido no despiertan a Airi.
     state.world["preferences"] = {
         "loves": ["videojuegos"],
         "dislikes": ["grosero"],
         "favorite_food": "postres y dulces",
         "favorite_flower": "rosas",
     }
-    msg = _send_message(channel, mid=3, content="¿funcionamos bien, y los videojuegos? luego")
-    asyncio.run(_drive(client, msg, channel, debug=True))
+    msg_casual = _send_message(channel, mid=4, content="estoy aquí de paseo")
+    msg_tema = _send_message(channel, mid=3, content="¿jugamos videojuegos luego?")
+
+    async def scenario():
+        await _drive_many(client, channel, [msg_casual, msg_tema])
+
+    asyncio.run(scenario())
     assert len(llm.calls) == 1
     assert channel.sent, "la respuesta espontánea se publicó"
+    # El snapshot consumió el contexto; el mensaje del turno sigue en el buffer.
+    remaining = buffer.snapshot(FakeChannel.id, now=1000.0)
+    assert [e.content for e in remaining] == ["¿jugamos videojuegos luego?"]
+
+
+def test_cooldown_persiste_entre_mensajes(monkeypatch, service_llm):
+    monkeypatch.setenv("AIRI_SPECTATOR_ENABLED", "1")
+    client, channel, state, buffer, gate = _setup(monkeypatch, service_llm, enabled=True)
+    state.world["preferences"] = {
+        "loves": ["videojuegos"],
+        "dislikes": [],
+        "favorite_food": "dulces",
+        "favorite_flower": "tulipanes",
+    }
+    msg1 = _send_message(channel, mid=10, content="¿videojuegos esta noche?")
+    msg2 = _send_message(channel, mid=11, content="otra vez videojuegos, ¿sí?")
+
+    async def scenario():
+        await _drive_many(client, channel, [msg1, msg2])
+
+    asyncio.run(scenario())
+    assert len(service_llm.calls) == 1, "el cooldown bloquea el reintento"
+    assert not gate.can_fire(FakeChannel.id, "99", now=1000.0)

@@ -65,13 +65,13 @@ def _finalize_spectator_turn(
 
     Solo los mensajes incluidos en la captura efímera se consumen del buffer;
     el cooldown armar es para las señales espontáneas (la mención directa no
-    queda penalizada).
+    queda penalizada) y se cumple AUNQUE el snapshot viniera vacío.
     """
-    if kind != "spectator" or not spectator_snapshot:
+    if kind != "spectator":
         return
     buffer = getattr(ctx, "passive_buffer", None)
     gate = getattr(ctx, "spectator_gate", None)
-    if buffer is not None:
+    if buffer is not None and spectator_snapshot:
         consumed = []
         for entry in spectator_snapshot:
             entry_id = ""

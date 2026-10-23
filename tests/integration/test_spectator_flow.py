@@ -173,6 +173,25 @@ def test_gate_y_tirada_fallida_no_consume_cooldown():
     assert gate.can_fire("0", "42", now=NOW)  # solo se arma al publicar
 
 
+def test_snapshot_vacio_igual_arma_cooldown():
+    from airi.discord_bot.turn import _finalize_spectator_turn
+
+    class Channel:
+        id = 0
+
+    class Author:
+        id = 42
+
+    class Ctx:
+        pass
+
+    gate = ActivitiesCooldown(cooldown_seconds=300, clock=lambda: NOW)
+    ctx = Ctx()
+    ctx.spectator_gate = gate
+    _finalize_spectator_turn(ctx, Channel(), Author(), "spectator", "topic", (), False)
+    assert not gate.can_fire("0", "42", now=NOW)
+
+
 def test_cooldown_por_clave_independiente():
     gate = ActivitiesCooldown(cooldown_seconds=300, clock=lambda: NOW)
     gate.arm("canal-a", "42", now=NOW)
