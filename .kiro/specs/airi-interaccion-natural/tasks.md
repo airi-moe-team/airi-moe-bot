@@ -1,0 +1,81 @@
+# Implementation Plan — airi-interaccion-natural (fase 1: modo espectador)
+
+- [x] 1. Establecer la base del modo espectador: configuración y detección local
+  - [x] 1.1 Añadir las variables de configuración del modo espectador
+    - Definir interruptor global para activar/desactivar la escucha pasiva
+    - Definir límite de tamaño del buffer por canal y su TTL
+    - Definir umbral de afinidad, probabilidades por señál y cooldown
+    - Ejecutar TDD: test rojo de lectura de configuración → valores por defecto
+    - _Requirements: 1.3, 2.3, 4.5, 4.7, 5._
+  - [x] 1.2 Implementar el matcher de temas sobre el perfil de gustos
+    - Extraer gustos positivos del modelo de identidad y preferencias vigentes
+    - Normalizar texto y generar patrón con límites de palabra sin duplicar lista
+    - Refrescar el patrón si cambia el perfil; alias solo si están declarados
+    - Test rojo→verde: sin perfil no hay patrón; con perfil detecta "ramen"-like
+    - _Requirements: 2.2, 2.6, 2.7, 2.8, 2.9_
+  - [x] 1.3 Implementar la evaluación de señales de activación
+    - Detectar mención directa, respuesta a Airi y nombre explícito
+    - Evaluar coincidencia de tema y umbral de afinidad como señales independientes
+    - Resolver la activación: mención garantizada; tema/afinidad mediante tirada
+    - Reutilizar generador de azar y reloj inyectables para reproducibilidad
+    - _Requirements: 2.1, 2.3, 2.4, 2.5, 4.4_
+
+- [x] 2. Construir la memoria del observador: buffer y snapshot efímero
+  - [x] 2.1 Crear el buffer pasivo por canal en memoria
+    - Registrar mensajes válidos sin invocar al LLM ni publicar nada
+    - Aplicar límite FIFO y descarte por TTL con reloj inyectable
+    - Excluir bots, comandos, otros canales y contenido vacío
+    - Vaciar el buffer al reiniciar conversación o temporada
+    - _Requirements: 1.1, 1.2, 1.3, 1.4_
+  - [x] 2.2 Generar el snapshot efímero de la intervención
+    - Tomar el mensaje activador una sola vez y ventana reciente con autores
+    - Recortar el snapshot a un máximo configurable y sin duplicados del turno
+    - Evitar mezclar el buffer con el historial persistido por canal
+    - _Requirements: 3.1, 3.2, 3.5_
+  - [x] 2.3 Gestionar consumo y retención del snapshot
+    - Al publicar con éxito, marcar consumidos solo los mensajes del snapshot
+    - Si la generación/publicación falla, retener mensajes hasta su TTL
+    - Garantizar que ningún mensaje aparezca dos veces en turnos consecutivos
+    - _Requirements: 3.1, 3.3, 3.4, 4.6, 5.7_
+
+- [x] 3. Integrar la intervención espontánea en el flujo de turnos
+  - [x] 3.1 Conectar la activación al pipeline de mensajes
+    - Evaluar señales tras el debounce y antes del dispatcher por canal
+    - Emitir a lo sumo un turno por evento elegible; señales combinadas → un turno
+    - Mantener la garantía de respuesta cuando la activación es por mención
+    - _Requirements: 2.1, 2.4, 4.2, 4.3_
+  - [x] 3.2 Adaptar la generación de respuesta al turno espontáneo
+    - Inyectar el snapshot como contexto efímero etiquetado de forma interna
+    - Conservar el prompt habitual (personalidad, gustos, afinidad) sin revelar
+      reglas, umbrales ni el motivo del despertar
+    - Permitir que la respuesta sea una reacción natural sin obligación de pregunta
+    - _Requirements: 3.1, 3.2, 3.6_
+  - [x] 3.3 Implementar la política de frecuencia y concurrencia
+    - Aplicar cooldown por canal y autor tras publicar una intervención espontánea
+    - Ejecutar la tirada local antes de cualquier llamada al LLM
+    - Si la tirada falla: silencio, sin LLM y sin iniciar el cooldown
+    - Respetar turnos en curso y debounce antes de despachar
+    - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6, 4.7_
+
+- [x] 4. Observabilidad, desactivación y compatibilidad
+  - [x] 4.1 Registrar los eventos del modo espectador en las trazas
+    - Añadir campos aditivos al evento de turno: motivo, snapshot y tirada
+    - Mantener la reproducibilidad de `airi-replay` y el límite de tamaño de traza
+    - _Requirements: 3.1, 3.2, 3.3_
+  - [x] 4.2 Asegurar el comportamiento con el modo desactivado
+    - Sin modo espectador: flujo actual intacto, salvo menciones/respuestas a Airi
+    - Ejecutar la suite completa: sin regresiones y con los fakes existentes
+    - Añadir pruebas de integración del pipeline con relay/LLM falsos y relojos
+    - _Requirements: 1.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8_
+
+- [x] 5. Cierre del incremento: validación extremo a extremo
+  - [x] 5.1 Probar el escenario del ejemplo de usuario
+    - Simular canal activo sin menciones y mensaje sobre un gusto de Airi
+    - Verificar activación por tema con tirada ok y respuesta contextual coherente
+    - Verificar inactividad de Airi cuando la señal o la tirada no lo permiten
+    - _Requirements: 1-5 según corresponda._
+  - [x] 5.2 Correr la suite completa y documentar el estado de la feature
+    - Suite de pytest en verde con y sin el modo espectador activado
+    - Confirmar ausencia de llamadas LLM cuando no hay intervención
+    - Preparar el flag de configuración para activar en producción
+    - _Requirements: 5.8_

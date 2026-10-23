@@ -58,23 +58,37 @@ ella o cuando detecta algo relevante, para que su participación se sienta espon
 6. WHEN el bot detecta un tema de interés, THEN SHALL consultar los gustos positivos del
    perfil/self-model existente de Airi como fuente canónica y no SHALL mantener una lista
    duplicada de temas de activación.
+7. WHILE se evalúa la coincidencia de tema, THE bot SHALL hacerlo SIN usar el LLM,
+   mediante un matcher local de palabras clave y expresiones regulares precompiladas a
+   partir del perfil positivo de Airi, con normalización de texto y límites de palabra.
+8. IF el perfil de gustos de Airi cambia, THEN el bot SHALL refrescar el matcher
+   precompilado para reflejar el perfil vigente.
+9. IF un sinónimo o variante debe activar el disparador, THEN el bot SHALL exigir que el
+   alias esté definido explícitamente en la configuración del matcher.
 
 ### Requirement 3: Generación contextual de la intervención
 **Objective:** Como participante, quiero que Airi entienda de qué está hablando el grupo
 cuando interviene, para que su respuesta encaje en la conversación.
 
 #### Acceptance Criteria
-1. WHEN un disparador habilita un turno, THEN el bot SHALL enviar al LLM los mensajes
-   recientes necesarios del buffer con la atribución de sus autores y el mensaje actual
-   exactamente una vez.
-2. WHEN se prepara el turno, THEN el bot SHALL conservar el prompt habitual de
+1. WHEN un disparador habilita un turno, THEN el bot SHALL enviar al LLM el mensaje que
+   activó el turno más una captura efímera de los mensajes recientes del buffer, con la
+   atribución de sus autores, y cada mensaje SHALL aparecer exactamente una vez.
+2. IF se construye esa captura efímera, THEN el bot SHALL separarla del historial
+   conversacional persistente y NO SHALL volcar los mensajes pasivos a
+   `state.histories[channel_id]` ni a la memoria de largo plazo.
+3. WHEN la respuesta espontánea se publica con éxito, THEN el bot SHALL marcar como
+   consumidos únicamente los mensajes incluidos en la captura efímera generada.
+4. IF la generación falla o el turno no se publica, THEN el bot SHALL conservar en el
+   buffer los mensajes no consumidos hasta que expire su TTL.
+5. WHEN se prepara el turno, THEN el bot SHALL conservar el prompt habitual de
    personalidad, gustos y afinidad de Airi, pero no SHALL añadir instrucciones que
    revelen el umbral o la regla interna que causó la activación.
-3. IF Airi interviene espontáneamente, THEN su respuesta SHALL reaccionar al tema con
+6. IF Airi interviene espontáneamente, THEN su respuesta SHALL reaccionar al tema con
    naturalidad y NO SHALL estar obligada a terminar con una pregunta.
-4. IF un disparador no activa un turno, THEN el bot SHALL no invocar al LLM para ese
+7. IF un disparador no activa un turno, THEN el bot SHALL no invocar al LLM para ese
    mensaje.
-5. IF se usa el buffer para generar una respuesta, THEN el bot SHALL evitar duplicar
+8. IF se usa el buffer para generar una respuesta, THEN el bot SHALL evitar duplicar
    mensajes ya presentes en el historial conversacional existente.
 
 ### Requirement 4: Frecuencia, concurrencia y configuración
@@ -88,10 +102,16 @@ para que sus intervenciones espontáneas sigan siendo ocasionales.
    esperar a que el turno termine antes de despachar otra intervención.
 3. IF una mención directa o respuesta a Airi ocurre durante el cooldown espontáneo, THEN
    el bot SHALL conservar la prioridad de ese disparador explícito sin duplicar turnos.
-4. WHEN una señal espontánea resulta elegible, THEN el bot SHALL poder aplicar una
-   probabilidad configurable para limitar la frecuencia; los valores de reloj y azar
-   SHALL poder inyectarse en tests para que el resultado sea reproducible.
-5. THE bot SHALL permitir configurar el modo espectador, el límite/TTL del buffer, el
+4. WHEN una señal espontánea es elegible y no hay cooldown activo, THEN el bot SHALL
+   aplicar una probabilidad configurable mediante una tirada local previa a cualquier
+   llamada al LLM; los valores de reloj y azar SHALL poder inyectarse en tests para que
+   el resultado sea reproducible.
+5. IF la tirada de probabilidad falla, THEN el bot SHALL guardar silencio, NO SHALL
+   invocar al LLM y NO SHALL iniciar el cooldown, de modo que el siguiente mensaje pueda
+   volver a intentar la intervención.
+6. WHEN la intervención se publica con éxito, THEN el bot SHALL iniciar el cooldown; si
+   el turno no se publica, el cooldown SHALL no consumirse.
+7. THE bot SHALL permitir configurar el modo espectador, el límite/TTL del buffer, el
    umbral de afinidad, las probabilidades de intervención y los cooldowns siguiendo el
    patrón de configuración existente.
 
@@ -110,5 +130,11 @@ innecesarias y que los nuevos disparadores no rompen el flujo actual.
    que activa un turno sin depender de las señales espontáneas.
 5. WHEN se activa un cooldown, THEN una prueba SHALL verificar que mensajes elegibles
    repetidos no producen intervenciones espontáneas adicionales hasta que expire.
-6. WHILE se ejecuta la suite de tests, THE implementación SHALL mantener los tests
+6. WHEN una tirada de probabilidad falla, THEN una prueba SHALL verificar que no se
+   invoca al LLM y que el cooldown no se activa, permitiendo reintentar con el siguiente
+   mensaje.
+7. WHEN la intervención se publica con éxito, THEN una prueba SHALL verificar que solo
+   los mensajes de la captura efímera se consumen y que el historial persistente no
+   recibe los pasivos no incluidos.
+8. WHILE se ejecuta la suite de tests, THE implementación SHALL mantener los tests
    existentes, usar los fakes de `airi/testing` y no requerir red ni Discord real.
