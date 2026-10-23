@@ -14,6 +14,11 @@ from typing import Callable
 
 import aiohttp
 
+from airi.observability import jsonl_events as jl
+from airi.observability.interaction_tracker import current_tracker
+from airi.observability.trace import TurnEvent
+from airi.observability.trace_store import TraceStore
+
 from airi.domain import memories as domain_memories
 from airi.domain import prompts as domain_prompts
 from airi.domain import users as domain_users
@@ -375,6 +380,47 @@ class ConversationService:
         self.traces = traces if traces is not None else getattr(state, "traces", None)
         # Estado romántico por usuario (etapas, evidencia y propuestas).
         self.relationships = RelationshipService(state)
+        self._logger = None
+        self._interaction_id = None
+
+    def _active_tracker(self):
+        tracker = current_tracker()
+        if tracker is not None:
+            return tracker
+        return self._logger
+
+    def _start_logging(self, correlation_id: str) -> None:
+        if self._logger is not None:
+            return
+        tracked = current_tracker()
+        if tracked is not None:
+            self._logger = tracked
+            return
+        self._logger = jl.JsonlInteractionLogger(
+            correlation_id, catalog=jl.DEFAULT_CATALOG
+        )
+        self._logger.start()
+
+    def _finish_interaction(self) -> None:
+        tracked = current_tracker()
+        if self._logger is not None and self._logger is tracked:
+            # El ciclo de vida lo gestiona el contexto tracked_interaction.
+            self._logger = None
+            return
+        if self._logger is None:
+            return
+        try:
+            self._logger.summary()
+        except Exception:
+            log.exception(
+                "No se pudo emitir el resumen de la interacción de conversación"
+            )
+        self._logger = None
+
+    def _log_module(self, module: str, status: str, **state) -> None:
+        tracker = self._active_tracker()
+        if tracker is not None:
+            tracker.module_result(module, status, **state)
 
     async def generate_turn(self, user, messages, ctx: TurnContext) -> TurnDraft:
         """Genera una respuesta sin mutar el estado de dominio."""
@@ -382,6 +428,8 @@ class ConversationService:
 
         cid = ctx.correlation_id or uuid.uuid4().hex[:12]
         token = set_correlation_id(cid)
+        self._start_logging(cid)
+        self._log_module("conversation", "activated")
         merged_text = "\n".join(part for _, part in messages)
         ev = TurnEvent(
             kind=ctx.kind,
@@ -481,13 +529,24 @@ class ConversationService:
                         "Un momentito, estoy buscando información en la web..."
                     )
                 t0 = _time.perf_counter()
-                search_query = await self._build_search_query(merged_text)
-                log.info(
-                    "Consulta original: %r -> reformulada: %r",
-                    merged_text, search_query,
+                self._log_module("web_search", "activated")
+                try:
+                    search_query = await self._build_search_query(merged_text)
+                    if self.search is not None:
+                        web_context = await self.search.search(search_query)
+                except Exception as exc:
+                    self._log_module(
+                        "web_search",
+                        "failed",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                    raise
+                self._log_module(
+                    "web_search",
+                    "activated",
+                    duration_ms=int((_time.perf_counter() - t0) * 1000),
                 )
-                if self.search is not None:
-                    web_context = await self.search.search(search_query)
                 if web_context is None:
                     log.warning("La búsqueda web no devolvió resultados")
                     web_context = SEARCH_FAILED_CONTEXT
@@ -507,12 +566,27 @@ class ConversationService:
                 display_name=getattr(user, "display_name", None),
             )
             t0 = _time.perf_counter()
-            system_prompt, raw_llm, meta, output = await self._generate(
-                prompt_history, web_context, user, date_session, delta_max,
-                extra_note=ctx.extra_note,
-                relationship_view=relationship_view,
-                now=now,
-                quick=quick,
+            self._log_module("llm_call", "activated")
+            try:
+                system_prompt, raw_llm, meta, output = await self._generate(
+                    prompt_history, web_context, user, date_session, delta_max,
+                    extra_note=ctx.extra_note,
+                    relationship_view=relationship_view,
+                    now=now,
+                    quick=quick,
+                )
+            except Exception as exc:
+                self._log_module(
+                    "llm_call",
+                    "failed",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                raise
+            self._log_module(
+                "llm_call",
+                "activated",
+                duration_ms=int((_time.perf_counter() - t0) * 1000),
             )
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.prompt_system = system_prompt
@@ -577,6 +651,7 @@ class ConversationService:
                 )
                 grounded = False
             ev.grounded = grounded
+            self._log_module("grounding", "activated", grounded=grounded)
             ev.final_reply = answer
             # Cada turno lleva GIF: si el modelo devolvió "none" (o un tipo
             # inválido), se sustituye por una emoción coherente con la afinidad.
@@ -683,10 +758,14 @@ class ConversationService:
         diary_saved = False
         if leveled_up and output.diary.lower() != "none":
             diary_saved = self._add_diary_reflection(uid, output.diary, draft.now)
-
+        if diary_saved:
+            self._log_module("diary", "activated", diary_saved=True)
+        else:
+            self._log_module("diary", "skipped", reason_code="not_requested")
         memory_saved = domain_memories.process_memory_action(
             self.state.memories, uid, output.memory, now=draft.now
         )
+        self._log_module("memory", "activated", memory_saved=memory_saved)
         notices = []
         if memory_saved:
             self.state.save_memories()
@@ -728,6 +807,7 @@ class ConversationService:
             display_name=getattr(draft.user, "display_name", None) or "",
             current_turn_text="\n".join(part for _, part in draft.messages),
         )
+        self._log_module("relationships", "activated")
         partner_confirmed = relationship_outcome.partner_confirmed or is_winner(
             self.state.world, uid
         )
@@ -837,6 +917,7 @@ class ConversationService:
         except Exception:
             await self._save_trace(draft.trace)
             self._emit_trace(ctx, draft.trace)
+            self._finish_interaction()
             raise
         await self.finish_trace(ctx, result.trace)
         for notice in result.notices:
@@ -845,6 +926,7 @@ class ConversationService:
                     await self.notifier.send(notice)
                 except Exception:
                     log.warning("No se pudo enviar el aviso post-turno")
+        self._finish_interaction()
         return result
 
     async def _save_trace(self, trace: TurnEvent) -> None:
@@ -1072,6 +1154,7 @@ class ConversationService:
             )
             meta = LLMMeta()
         output = parse_model_output(raw, delta_max=delta_max)
+        self._log_module("parsing", "activated", parse_ok=output.reply is not None)
         # Red de seguridad anti-interrogatorio: en charla casual, si Airi ya
         # cerró con pregunta el turno anterior y vuelve a hacerlo, se pide UNA
         # regeneración sin cierre interrogativo (las citas quedan fuera: ahí la

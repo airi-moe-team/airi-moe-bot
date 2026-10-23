@@ -1,0 +1,62 @@
+# Plan de implementación
+
+- [x] 1. Definir y validar el contrato de eventos JSONL
+- [x] 1.1 Establecer el esquema versionado y sus estados
+  - Definir campos obligatorios y opcionales de eventos de interacción, módulos, errores y resumen.
+  - Establecer estados terminales y códigos de motivo estables para módulos ejecutados, omitidos, deshabilitados, no aplicables y fallidos.
+  - Asegurar que cada línea emitida sea JSON válido y que timestamps se normalicen a UTC.
+  - _Requirements: 3.1, 3.2, 4.1, 4.2_
+- [x] 1.2 Probar serialización y protección de datos
+  - Cubrir eventos de inicio, resultado de módulo, error y resumen con pruebas unitarias.
+  - Verificar JSONL de una línea por evento y campos requeridos del esquema.
+  - Comprobar que credenciales, prompts y contenido íntegro no aparezcan en la salida.
+  - _Requirements: 3.1, 3.2, 4.1, 4.2_
+
+- [x] 2. Gestionar el ciclo de vida y catálogo de módulos por interacción
+- [x] 2.1 Construir el seguimiento correlacionado de una interacción
+  - Crear y conservar un identificador de interacción correlacionable con el `correlation_id` existente.
+  - Registrar inicio, resultados terminales de módulos y finalización con duración total.
+  - Garantizar que todas las categorías del catálogo tengan estado en el resumen, incluso ante salida temprana.
+  - Hacer que un fallo de logging no interrumpa el procesamiento de Airi.
+  - _Requirements: 1.1, 1.2, 2.1, 2.5, 3.3_
+- [x] 2.2 Verificar estados y resumen completo
+  - Probar que el tracker distingue activación, omisión, deshabilitación, no aplicabilidad y fallo.
+  - Probar motivos de omisión por ruta y que no se confundan con errores.
+  - Probar que cada módulo aparece una vez en el resumen final por interacción.
+  - _Requirements: 2.2, 2.3, 2.4, 3.3_
+
+- [x] 3. Instrumentar entrada y enrutamiento de Discord
+- [x] 3.1 Registrar filtros y decisiones tempranas
+  - Registrar el inicio de interacciones de mensajes en canales de texto.
+  - Registrar mensajes filtrados, comandos reconocidos, debounce/reemplazo, cola y decisiones del modo espectador con sus motivos.
+  - Marcar módulos posteriores como omitidos cuando una ruta corta el flujo conversacional.
+  - Evitar incluir texto de mensaje o identificadores sensibles no necesarios.
+  - _Requirements: 1.1, 1.3, 2.1, 2.3, 2.4, 4.1, 4.2_
+- [x] 3.2 Probar las rutas de entrada y salida temprana
+  - Cubrir mensaje normal, comando, mensaje filtrado, debounce reemplazado y spectator que no procede.
+  - Verificar que cada ruta emita estados explícitos y un resumen correlacionado.
+  - _Requirements: 1.3, 2.4, 3.3_
+
+- [x] 4. Instrumentar los módulos del turno y sus resultados
+- [x] 4.1 Registrar decisiones de servicios y módulos condicionales
+  - Instrumentar conversación, búsqueda web, LLM, parseo/reparación/grounding, relaciones/afinidad, memoria/diario/reflexión, citas/regalos y GIF según la ruta ejecutada.
+  - Registrar publicación, persistencia y journal con resultado y duración cuando estén disponibles.
+  - Informar `not_applicable`, `disabled` o `skipped` con un código de motivo para cada etapa no ejecutada.
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+- [x] 4.2 Estructurar fallos y proteger el flujo
+  - Registrar errores con módulo, tipo y mensaje saneado.
+  - Verificar que una falla de logging no altere el turno ni duplique eventos.
+  - Cubrir fallos de LLM, búsqueda y publicación mediante pruebas de integración.
+  - _Requirements: 2.2, 3.4, 4.2_
+
+- [x] 5. Integrar salida INFO y validar el diagnóstico de extremo a extremo
+- [x] 5.1 Conectar los eventos al logger de consola de ejecución
+  - Emitir JSONL en INFO al ejecutar `airi run` sin habilitar DEBUG.
+  - Mantener una línea por evento y usar los campos estables del contrato.
+  - Evitar logs genéricos de módulos que no describan decisiones o resultados de interacción.
+  - _Requirements: 3.1, 3.2, 5.1, 5.2, 5.3_
+- [x] 5.2 Validar escenarios completos y legibilidad diagnóstica
+  - Probar conversaciones normales, comandos, módulos condicionales omitidos y errores.
+  - Verificar que todas las líneas de una interacción compartan el identificador y que el resumen enumere el catálogo completo.
+  - Revisar que el conjunto de logs permita reconstruir rápidamente la ruta sin datos sensibles.
+  - _Requirements: 1.1, 1.2, 2.5, 3.3, 4.1, 4.2, 5.1, 5.2_

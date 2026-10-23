@@ -45,6 +45,7 @@ from airi.domain.texts import (
     date_question_result_note,
 )
 from airi.observability.instrumentation import turn_event
+from airi.observability.interaction_tracker import current_tracker
 from airi.services.conversation import TurnContext
 from airi.services.persistence import PersistenceError
 from airi.services.turn_coordinator import StaleTurnError, TurnCoordinator
@@ -130,6 +131,9 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data):
     if gif_type == "none" or gif_type not in ALLOWED_GIF_TYPES:
         return
     log.info("El modelo ha seleccionado el GIF: %s", gif_type)
+    _gif_tracker = current_tracker()
+    if _gif_tracker is not None:
+        _gif_tracker.module_result("gif", "activated")
     try:
         embed = discord.Embed(
             title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
@@ -215,6 +219,14 @@ async def run_user_turn(
                 journal = getattr(ctx, "turn_journal", None)
                 persistence = getattr(ctx, "persistence", None)
                 message_id = getattr(reply_target, "id", None)
+                _turn_tracker = current_tracker()
+                if (
+                    _turn_tracker is not None
+                    and journal is not None
+                    and persistence is not None
+                    and message_id is not None
+                ):
+                    _turn_tracker.module_result("persistence", "activated")
                 if journal is not None and persistence is not None and message_id is not None:
                     async def publisher(committed):
                         await _publish_result(
@@ -246,6 +258,9 @@ async def run_user_turn(
 
                 if result is not None:
                     ctx.remember_trace(result.trace)
+                    _trace_tracker = current_tracker()
+                    if _trace_tracker is not None:
+                        _trace_tracker.module_result("traces", "activated")
 
             if result is None:
                 return
@@ -276,6 +291,9 @@ async def run_user_turn(
                 await _publish_result(
                     ctx, channel, author, result, reply_target=reply_target
                 )
+            _pub_tracker = current_tracker()
+            if _pub_tracker is not None:
+                _pub_tracker.module_result("publication", "activated")
 
             _finalize_spectator_turn(
                 ctx,

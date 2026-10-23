@@ -26,6 +26,7 @@ from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
 from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
 from airi.services.spectator_policy import ActivitiesCooldown
+from airi.observability.interaction_tracker import tracked_interaction
 
 log = logging.getLogger(__name__)
 
@@ -321,109 +322,140 @@ def create_client(
 
     @client.event
     async def on_message(message):
-        if shutdown["started"]:
-            return
-        if message.author.bot or message.channel.id != channel_id:
-            return
-        content = message.content.strip()
-        if not content:
-            return
+        with tracked_interaction() as log:
+            if shutdown["started"]:
+                return
 
-        ctx = build_ctx(message.channel)
-        _wire_shutdown(ctx)
-        ctx.reset_conversation = (
-            lambda ch_id, author_id: _reset_conversation(ctx, ch_id, author_id)
-        )
+            if message.author.bot or message.channel.id != channel_id:
+                log.module_result(
+                    "discord_input", "skipped", reason_code="message_filtered"
+                )
+                return
 
-        if ctx.expire_stale_dates():
-            await message.channel.send(
-                "🌙 «Vaya, se me ha ido el tiempo... la cita termina aquí. "
-                "*se despide con la mano*»"
+            content = message.content.strip()
+            if not content:
+                log.module_result(
+                    "discord_input", "skipped", reason_code="message_filtered"
+                )
+                return
+
+            log.module_result("discord_input", "activated")
+
+            ctx = build_ctx(message.channel)
+            _wire_shutdown(ctx)
+            ctx.reset_conversation = (
+                lambda ch_id, author_id: _reset_conversation(ctx, ch_id, author_id)
             )
 
-        handler = registry.match(content)
-        if handler is not None:
-            await handler(ctx, message)
-            return
+            if ctx.expire_stale_dates():
+                await message.channel.send(
+                    "🌙 «Vaya, se me ha ido el tiempo... la cita termina aquí. "
+                    "*se despide con la mano*»"
+                )
 
-        spectator_policy = getattr(ctx, "spectator_policy", None)
-        passive_buffer = getattr(ctx, "passive_buffer", None)
-        if (
-            spectator_policy is not None
-            and spectator_policy.enabled
-            and passive_buffer is not None
-        ):
-            passive_buffer.append(
-                message.channel.id,
-                str(message.author.id),
-                getattr(message.author, "display_name", ""),
-                content,
-                message_id=str(getattr(message, "id", "")),
+            handler = registry.match(content)
+            if handler is not None:
+                log.module_result(
+                    "commands", "activated", reason_code="command_matched"
+                )
+                await handler(ctx, message)
+                log.module_result(
+                    "commands", "activated", reason_code="command_handled"
+                )
+                return
+
+            spectator_policy = getattr(ctx, "spectator_policy", None)
+            passive_buffer = getattr(ctx, "passive_buffer", None)
+            if (
+                spectator_policy is not None
+                and spectator_policy.enabled
+                and passive_buffer is not None
+            ):
+                passive_buffer.append(
+                    message.channel.id,
+                    str(message.author.id),
+                    getattr(message.author, "display_name", ""),
+                    content,
+                    message_id=str(getattr(message, "id", "")),
+                )
+
+            owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
+            if owner_id is not None:
+                log.module_result(
+                    "commands", "activated", reason_code="owner_busy"
+                )
+                await ctx.notify_busy(message.channel, message.author)
+                return
+
+            key = (message.channel.id, message.author.id)
+            seq = debounce.next_seq(key)
+            debounce.add(
+                key, (message.author, content), message_id=str(getattr(message, "id", ""))
             )
+            await asyncio.sleep(ctx.debounce_seconds)
+            if debounce.current_seq(key) != seq:
+                log.module_result(
+                    "debounce", "activated", reason_code="debounce_replaced"
+                )
+                return
+            merged, merged_ids = debounce.pop(key)
+            if not merged:
+                log.module_result(
+                    "debounce", "activated", reason_code="debounce_replaced"
+                )
+                return
 
-        owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
-        if owner_id is not None:
-            await ctx.notify_busy(message.channel, message.author)
-            return
+            if spectator_policy is None or not spectator_policy.enabled:
+                await dispatcher.submit(
+                    message.channel.id,
+                    lambda: turn.run_user_turn(
+                        ctx, message.channel, message.author, merged, reply_target=message
+                    ),
+                    message_ids=[getattr(message, "id", None)],
+                )
+                log.module_result("queue", "activated", reason_code="normal_turn")
+                return
 
-        key = (message.channel.id, message.author.id)
-        seq = debounce.next_seq(key)
-        debounce.add(
-            key, (message.author, content), message_id=str(getattr(message, "id", ""))
-        )
-        await asyncio.sleep(ctx.debounce_seconds)
-        if debounce.current_seq(key) != seq:
-            return
-        merged, merged_ids = debounce.pop(key)
-        if not merged:
-            return
+            decision = await _evaluate_spectator_event(ctx, message, merged)
+            if not decision.proceed:
+                log.module_result(
+                    "spectator", "skipped", reason_code="spectator_not_proceeding"
+                )
+                return
 
-        if spectator_policy is None or not spectator_policy.enabled:
+            snapshot_ids = {"", *merged_ids}
+            entries = passive_buffer.snapshot(
+                message.channel.id, exclude_ids=snapshot_ids
+            )
+            entry_dicts = [
+                {
+                    "author_id": e.author_id,
+                    "author_name": e.author_name,
+                    "content": e.content,
+                    "message_id": e.message_id,
+                    "ts": e.ts,
+                }
+                for e in entries
+            ]
+            handoff = decision.reason == "handoff"
             await dispatcher.submit(
                 message.channel.id,
                 lambda: turn.run_user_turn(
-                    ctx, message.channel, message.author, merged, reply_target=message
+                    ctx,
+                    message.channel,
+                    message.author,
+                    merged,
+                    reply_target=message,
+                    kind="spectator",
+                    spectator_reason=decision.reason,
+                    spectator_snapshot=tuple(entry_dicts),
+                    spectator_guaranteed=decision.guaranteed,
+                    spectator_handoff=handoff,
+                    spectator_trigger_ids=merged_ids,
                 ),
                 message_ids=[getattr(message, "id", None)],
             )
-            return
-
-        decision = await _evaluate_spectator_event(ctx, message, merged)
-        if not decision.proceed:
-            # Escucha silenciosa: el mensaje quedó en el buffer, sin LLM.
-            return
-        snapshot_ids = {"", *merged_ids}
-        entries = passive_buffer.snapshot(
-            message.channel.id, exclude_ids=snapshot_ids
-        )
-        entry_dicts = [
-            {
-                "author_id": e.author_id,
-                "author_name": e.author_name,
-                "content": e.content,
-                "message_id": e.message_id,
-                "ts": e.ts,
-            }
-            for e in entries
-        ]
-        handoff = decision.reason == "handoff"
-        await dispatcher.submit(
-            message.channel.id,
-            lambda: turn.run_user_turn(
-                ctx,
-                message.channel,
-                message.author,
-                merged,
-                reply_target=message,
-                kind="spectator",
-                spectator_reason=decision.reason,
-                spectator_snapshot=tuple(entry_dicts),
-                spectator_guaranteed=decision.guaranteed,
-                spectator_handoff=handoff,
-                spectator_trigger_ids=merged_ids,
-            ),
-            message_ids=[getattr(message, "id", None)],
-        )
+            log.module_result("queue", "activated", reason_code="spectator_turn")
 
     async def _evaluate_spectator_event(ctx, message, merged):
         """Señales locales del modo espectador para el mensaje actual."""
@@ -953,6 +985,7 @@ def run_bot(argv=None):
     )
     from airi.domain.state_schema import CURRENT_SCHEMA_VERSION
     from airi.logging_setup import install_correlation_format
+    from airi.observability.jsonl_events import install_jsonl_logging
     from airi.observability.trace_store import TraceStore
     from airi.services.bootstrap import BootstrapError, bootstrap_state
     from airi.services.conversation import ConversationService
@@ -994,6 +1027,7 @@ def run_bot(argv=None):
     settings = Settings.from_env()
     trace_store = TraceStore(settings.trace_dir, settings.trace_keep_last)
     install_correlation_format()
+    install_jsonl_logging()
 
     run_lock = InstanceLock(settings.lock_path)
     try:
