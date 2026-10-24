@@ -75,7 +75,7 @@ def _finalize_spectator_turn(
       handoff para ese interlocutor dentro de la ventana; tras el handoff la
       cadena termina y solo vuelven los disparadores normales.
     """
-    if kind != "spectator":
+    if kind not in ("spectator", "proactive"):
         return
     buffer = getattr(ctx, "passive_buffer", None)
     gate = getattr(ctx, "spectator_gate", None)
@@ -140,9 +140,10 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data):
             color=embeds.GIF_EMBED_COLOR,
         )
         if user is not None:
+            avatar = getattr(user, "display_avatar", None)
             embed.set_footer(
                 text=ctx.affinity_footer(user),
-                icon_url=user.display_avatar.url,
+                icon_url=avatar.url if avatar is not None else None,
             )
         if data:
             filename = f"airi_{gif_type}.gif"
@@ -188,6 +189,14 @@ async def run_user_turn(
         await channel.send(text, reference=reply_target, mention_author=False)
 
     state = ctx.state
+    registry = getattr(ctx, "spectator_session", None)
+    if registry is not None and kind in ("spectator", "proactive"):
+        try:
+            gen = registry.session(channel.id).generation
+            registry.begin_waking(channel.id, gen)
+        except Exception:
+            log.exception("No se pudo abrir el despertar")
+
     timeout = aiohttp.ClientTimeout(total=ctx.request_timeout)
 
     try:
@@ -211,6 +220,10 @@ async def run_user_turn(
                     allow_web=allow_web,
                     correlation_id=cid,
                     kind=kind,
+                    conversation_mode=(
+                        kind if kind in ("spectator", "active", "proactive") else "normal"
+                    ),
+                    conversation_reason=spectator_reason,
                     extra_note=extra_note,
                     suppress_affinity=suppress_affinity,
                     spectator_reason=spectator_reason,
@@ -264,7 +277,10 @@ async def run_user_turn(
 
             if result is None:
                 return
-            if result.skipped or not result.reply:
+            session_mode = kind in ("spectator", "active", "proactive")
+            silent = session_mode and result.reply == ""
+
+            if result.skipped or (not result.reply and not silent):
                 # Nunca dejar el mensaje sin respuesta. Se avisa del fallo real
                 # de generación, sin atribuirlo a una repetición inexistente.
                 finish = getattr(
@@ -285,27 +301,66 @@ async def run_user_turn(
                         text, title="⚠️ Generación fallida"
                     )
                 )
+                if registry is not None and kind in ("spectator", "proactive"):
+                    try:
+                        registry.finish_waking(
+                            channel.id, published=False, stay_active=False
+                        )
+                    except Exception:
+                        pass
                 return
 
-            if not published:
+            if not published and not silent:
                 await _publish_result(
-                    ctx, channel, author, result, reply_target=reply_target
+                    ctx, channel, author, result, reply_target=reply_target,
+                    suppress_affinity=suppress_affinity,
                 )
             _pub_tracker = current_tracker()
             if _pub_tracker is not None:
                 _pub_tracker.module_result("publication", "activated")
 
-            _finalize_spectator_turn(
-                ctx,
-                channel,
-                author,
-                kind,
-                spectator_reason,
-                spectator_snapshot,
-                spectator_guaranteed,
-                handoff=spectator_handoff,
-                trigger_ids=spectator_trigger_ids,
-            )
+            if kind in ("spectator", "proactive"):
+                if silent:
+                    # Consumir captura + armar cooldown + abortar sesión.
+                    _finalize_spectator_turn(
+                        ctx, channel, author, kind, spectator_reason,
+                        spectator_snapshot, spectator_guaranteed,
+                        handoff=spectator_handoff, trigger_ids=spectator_trigger_ids,
+                    )
+                    gate = getattr(ctx, "spectator_gate", None)
+                    if gate is not None:
+                        gate.arm(channel.id, author.id)
+                    if registry is not None:
+                        try:
+                            registry.finish_waking(
+                                channel.id, published=False, stay_active=False
+                            )
+                        except Exception:
+                            pass
+                else:
+                    _finalize_spectator_turn(
+                        ctx, channel, author, kind, spectator_reason,
+                        spectator_snapshot, spectator_guaranteed,
+                        handoff=spectator_handoff, trigger_ids=spectator_trigger_ids,
+                    )
+                    if registry is not None:
+                        try:
+                            registry.finish_waking(
+                                channel.id, published=True,
+                                stay_active=getattr(result, "stay_active", True),
+                            )
+                        except Exception:
+                            pass
+            elif kind == "active" and registry is not None:
+                try:
+                    registry.finish_active_turn(
+                        channel.id,
+                        stay_active=getattr(result, "stay_active", True),
+                        published=bool(result.reply and str(result.reply).strip()),
+                        silent=silent,
+                    )
+                except Exception:
+                    pass
 
             # El motivo del cierre anterior es de un solo uso: solo se marca
             # entregado cuando la respuesta ya se publicó correctamente.
@@ -445,7 +500,7 @@ async def run_user_turn(
         await _reply("¡Ay! Ha ocurrido un error inesperado al responder.")
 
 
-async def _publish_result(ctx, channel, author, result, *, reply_target=None):
+async def _publish_result(ctx, channel, author, result, *, reply_target=None, suppress_affinity=False):
     """Publica una respuesta ya confirmada y sus avisos post-commit."""
     now = time.time()
     uid = author.id
@@ -473,7 +528,11 @@ async def _publish_result(ctx, channel, author, result, *, reply_target=None):
             )
     else:
         await send_long_message(channel, result.reply, reference=reply_target)
-    await send_gif_bytes(ctx, channel, author, result.gif, result.gif_bytes)
+    await send_gif_bytes(
+        ctx, channel,
+        None if suppress_affinity else author,
+        result.gif, result.gif_bytes,
+    )
     for notice in result.notices:
         try:
             await channel.send(embed=embeds.notice_embed(notice))

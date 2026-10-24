@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -321,7 +322,7 @@ def parse_disconnect(raw_disconnect):
     return {"leave": True, "reason": reason}
 
 
-def parse_model_output(raw_output, delta_max=None):
+def parse_model_output(raw_output, delta_max=None, *, allow_empty_reply=False):
     if not isinstance(raw_output, str) or not raw_output.strip():
         return _model_output()
 
@@ -351,7 +352,10 @@ def parse_model_output(raw_output, delta_max=None):
     memory_action = parsed.get("memory", "none")
     diary_action = parsed.get("diary", "none")
     delta_raw = parsed.get("affinity_delta", 0)
-    if not isinstance(reply, str) or not reply.strip():
+    if not isinstance(reply, str):
+        log.warning("El JSON no contiene una respuesta válida")
+        return _model_output()
+    if not allow_empty_reply and not reply.strip():
         log.warning("El JSON no contiene una respuesta válida")
         return _model_output()
     if not isinstance(gif_type, str):
@@ -418,7 +422,7 @@ def parse_model_output(raw_output, delta_max=None):
         log.warning("Salida incoherente sobre la marcha: %s", claim_problem)
         disconnect = None
     reply = clean_reply(reply)
-    if not reply:
+    if not allow_empty_reply and not reply:
         log.warning("La respuesta quedó vacía después de limpiarla")
         return _model_output()
     return ModelOutput(
@@ -428,7 +432,44 @@ def parse_model_output(raw_output, delta_max=None):
         relationship_action,
     )
 
-# Esquema JSON que la respuesta del modelo debe cumplir.
+# Esquema dedicado para turnos de sesión (espectador/activa/proactiva).
+# Derivado del esquema normal sin mutarlo: añade `stay_active` y conserva
+# tipos únicos (sin uniones String | Null) por compatibilidad con las
+# gramáticas de generación guiada de los servidores locales.
+
+def parse_session_output(raw_output, delta_max=None):
+    """Parsea la salida de un turno de sesión.
+
+    Devuelve `(output, stay_active, valid)`:
+      - `output`: `ModelOutput` normalizado (reply puede ser "" si silencio).
+      - `stay_active`: decisión del modelo (True por defecto solo si válido).
+      - `valid`: False si falta `stay_active`, tipos inválidos o JSON no parseable.
+
+    El silencio deliberado (reply == "") es válido y NO se trata como fallo.
+    """
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        return _model_output(), False, False
+
+    parsed = extract_json_object(raw_output)
+    if not isinstance(parsed, dict):
+        return _model_output(), False, False
+
+    if "stay_active" not in parsed:
+        return _model_output(), False, False
+    stay_active_raw = parsed.get("stay_active")
+    if not isinstance(stay_active_raw, bool):
+        return _model_output(), False, False
+
+    output = parse_model_output(
+        raw_output, delta_max=delta_max, allow_empty_reply=True
+    )
+    # parse_model_output devuelve reply=None cuando no hubo reply string.
+    if not isinstance(output.reply, str) and output.reply is not None:
+        return _model_output(), False, False
+    if output.reply is None:
+        # Sin reply string válido: fallo de contrato, no silencio.
+        return _model_output(), False, False
+    return output, bool(stay_active_raw), True
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -545,3 +586,8 @@ RESPONSE_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+# Esquema dedicado para turnos de sesión (espectador/activa/proactiva).
+SESSION_RESPONSE_SCHEMA = copy.deepcopy(RESPONSE_SCHEMA)
+SESSION_RESPONSE_SCHEMA["properties"]["stay_active"] = {"type": "boolean"}
+SESSION_RESPONSE_SCHEMA["required"] = list(RESPONSE_SCHEMA["required"]) + ["stay_active"]
+SESSION_RESPONSE_SCHEMA["properties"]["reply"] = {"type": "string"}

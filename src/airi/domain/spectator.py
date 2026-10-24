@@ -29,6 +29,8 @@ from airi.domain.constants import (
     AIRI_SPECTATOR_PROB_TOPIC,
     AIRI_SPECTATOR_SNAPSHOT_MAX,
     AIRI_SPECTATOR_TTL_SECONDS,
+    AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS,
+    AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS,
 )
 
 _RAZON_MENCION = "mention"
@@ -58,6 +60,8 @@ class AiriSpectatorPolicy:
     buffer_max: int = AIRI_SPECTATOR_BUFFER_MAX
     ttl_seconds: int = AIRI_SPECTATOR_TTL_SECONDS
     handoff_seconds: int = AIRI_SPECTATOR_HANDOFF_SECONDS
+    active_idle_seconds: int = AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS
+    proactive_idle_seconds: int = AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS
 
 
 def load_policy(env=None):
@@ -105,6 +109,8 @@ def load_policy(env=None):
         buffer_max=_int("AIRI_SPECTATOR_BUFFER_MAX", AIRI_SPECTATOR_BUFFER_MAX),
         ttl_seconds=_int("AIRI_SPECTATOR_TTL_SECONDS", AIRI_SPECTATOR_TTL_SECONDS),
         handoff_seconds=_int("AIRI_SPECTATOR_HANDOFF_SECONDS", AIRI_SPECTATOR_HANDOFF_SECONDS),
+        active_idle_seconds=_int("AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS", AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS),
+        proactive_idle_seconds=_int("AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS", AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS),
     )
 
 

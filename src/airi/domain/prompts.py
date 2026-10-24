@@ -1050,3 +1050,71 @@ def known_users_prompt_section(users, diary, world, *, user_id, display_name):
         "niegues conocer a alguien de la lista.\n"
     )
 
+
+
+PROACTIVE_TRIGGER_TEXT = (
+    "(Mensaje interno del sistema: nadie ha escrito en el canal en mucho "
+    "tiempo. No es una consulta de ningún usuario: inicia la conversación "
+    "TÚ como indica la sección INICIATIVA PROACTIVA del sistema.)"
+)
+def conversation_mode_section(mode, reason=""):
+    """Instrucción de estado conversacional para el modo de sesión.
+
+    Devuelve una sección de sistema (o cadena vacía para el modo normal).
+    El estado se inyecta como instrucción de sistema, nunca como texto de
+    usuario no confiable. El silencio deliberado se representa con reply="".
+    """
+    mode = (mode or "normal").strip().lower()
+    reason = (reason or "").strip()
+    if mode == "spectator":
+        detail = f" Motivo de activación: {reason}." if reason else ""
+        return (
+            "\n\n=== MODO ESPECTADOR (DESPERTAR) ===\n"
+            "Has decidido intervenir en una conversación que venías observando."
+            f"{detail}\n"
+            "El contexto pasivo (snapshot) es efímero y no forma parte del "
+            "historial persistente: úsalo para ponerte al día, no lo cites como "
+            "si lo hubieras vivido.\n"
+            "Responde con un mensaje propio o con reply=\"\" si decides guardar "
+            "silencio. Si guardas silencio, la sesión NO se abre.\n"
+            "Incluye stay_active=true solo si quieres seguir en la conversación "
+            "tras esta respuesta; stay_active=false te retira tras responder.\n"
+        )
+    if mode == "active":
+        return (
+            "\n\n=== CONVERSACIÓN ACTIVA ===\n"
+            "Ya formas parte del grupo: no tienes que justificar tu intervención "
+            "ni volver a activar el modo espectador en cada turno.\n"
+            "Evalúa el hilo completo y decide si respondes o guardas silencio.\n"
+            " reply=\"\" es la única forma válida de callarte; no inventes texto "
+            "vacío ni marcadores.\n"
+            "stay_active=true si quieres seguir en la conversación; "
+            "stay_active=false si te retiras tras responder (o sin responder).\n"
+        )
+    if mode == "proactive":
+        return (
+            "\n\n=== INICIATIVA PROACTIVA ===\n"
+            "La conversación está muerta desde hace un rato: eres tú quien decide "
+            "reanimarla.\n"
+            "NO retomes el último tema del historial: lleva demasiado tiempo "
+            "muerto y reabrirlo suena a eco. Propón algo NUEVO en su lugar.\n"
+            "Usa formas abiertas e impersonales: \"¿alguien sigue ahí?\", "
+            "\"¿alguien estaba despierto?\", \"se me ocurre que...\", \"acabo de "
+            "pensar en...\".\n"
+            "Trae un tema fresco (algo que te haya pasado, una curiosidad, una "
+            "opinión espontánea); nada de preguntas centradas en un usuario "
+            "concreto y nada del típico \"¿cómo estás?\".\n"
+            "Cuida a quién te diriges: no hay nadie activo, así que habla en "
+            "voz alta como reflexión compartida (\"me pregunto si...\", \"a mí me "
+            "ha pasado...\").\n"
+            "NO remates con preguntas directas en segunda persona singular "
+            "(\"¿y tú?\", \"¿qué tal lo llevas?\"): acaban sonando a que le "
+            "preguntas a alguien que no está. Si quieres invitar a participar, "
+            "hazlo una sola vez y de forma abierta al canal (\"¿alguien por ahí "
+            "se apunta?\" está bien).\n"
+            "No finjas que alguien te preguntó ni inventes datos que no estén en "
+            "tu memoria.\n"
+            "reply=\"\" es la única forma válida de callarte; stay_active=true "
+            "si quieres seguir, stay_active=false si te retiras.\n"
+        )
+    return ""

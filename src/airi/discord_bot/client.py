@@ -26,7 +26,14 @@ from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
 from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
 from airi.services.spectator_policy import ActivitiesCooldown
-from airi.observability.interaction_tracker import tracked_interaction
+from airi.services.spectator_session import (
+    ConversationState,
+    SpectatorSessionRegistry,
+)
+from airi.observability.interaction_tracker import (
+    current_tracker,
+    tracked_interaction,
+)
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +112,7 @@ def create_client(
     client = discord.Client(intents=intents)
     debounce = _Debouncer()
     dispatcher = ChannelDispatcher()
+    timers = {}
     shutdown = {"started": False, "phase": "running"}
 
     async def _resolve_channel(target_id=None):
@@ -180,6 +188,9 @@ def create_client(
                         )
                     except Exception:
                         log.exception("No se pudo enviar el aviso de desconexión")
+                for task in list(timers.values()):
+                    task.cancel()
+                timers.clear()
                 try:
                     await discord.Client.close(client)
                 except Exception:
@@ -258,6 +269,9 @@ def create_client(
                 await channel.send(embed=embeds.disconnecting_embed(reason))
             except Exception:
                 log.exception("No se pudo enviar el aviso de desconexión manual")
+        for task in list(timers.values()):
+            task.cancel()
+        timers.clear()
         try:
             await client.close()
         except Exception:
@@ -322,24 +336,24 @@ def create_client(
 
     @client.event
     async def on_message(message):
-        with tracked_interaction() as log:
+        with tracked_interaction() as tracker:
             if shutdown["started"]:
                 return
 
             if message.author.bot or message.channel.id != channel_id:
-                log.module_result(
+                tracker.module_result(
                     "discord_input", "skipped", reason_code="message_filtered"
                 )
                 return
 
             content = message.content.strip()
             if not content:
-                log.module_result(
+                tracker.module_result(
                     "discord_input", "skipped", reason_code="message_filtered"
                 )
                 return
 
-            log.module_result("discord_input", "activated")
+            tracker.module_result("discord_input", "activated")
 
             ctx = build_ctx(message.channel)
             _wire_shutdown(ctx)
@@ -355,21 +369,29 @@ def create_client(
 
             handler = registry.match(content)
             if handler is not None:
-                log.module_result(
+                tracker.module_result(
                     "commands", "activated", reason_code="command_matched"
                 )
                 await handler(ctx, message)
-                log.module_result(
+                tracker.module_result(
                     "commands", "activated", reason_code="command_handled"
                 )
                 return
 
             spectator_policy = getattr(ctx, "spectator_policy", None)
             passive_buffer = getattr(ctx, "passive_buffer", None)
+            spectator_session = getattr(ctx, "spectator_session", None)
+            session_state = (
+                spectator_session.state(message.channel.id)
+                if spectator_session is not None
+                else None
+            )
+            session_state_name = getattr(session_state, "name", str(session_state))
             if (
                 spectator_policy is not None
                 and spectator_policy.enabled
                 and passive_buffer is not None
+                and session_state_name == "SPECTATING"
             ):
                 passive_buffer.append(
                     message.channel.id,
@@ -381,11 +403,90 @@ def create_client(
 
             owner_id, _owner_session = ctx.busy_date_owner(exclude_id=message.author.id)
             if owner_id is not None:
-                log.module_result(
+                tracker.module_result(
                     "commands", "activated", reason_code="owner_busy"
                 )
                 await ctx.notify_busy(message.channel, message.author)
                 return
+
+            if spectator_session is not None and spectator_policy is not None and spectator_policy.enabled:
+                generation = spectator_session.record_human_activity(message.channel.id)
+                st_name = spectator_session.state(message.channel.id).name
+                if st_name == "ACTIVE":
+                    key = (str(message.channel.id), "active")
+                    old = timers.pop(key, None)
+                    if old is not None:
+                        old.cancel()
+                    timeout = getattr(spectator_session, "active_idle_seconds", 300.0)
+                    gen = generation
+
+                    async def _active_timer():
+                        try:
+                            await asyncio.sleep(float(timeout))
+                        except asyncio.CancelledError:
+                            return
+                        async def _job():
+                            reg = spectator_session
+                            if reg.retire_if_idle(
+                                message.channel.id, gen, time.time(), timeout
+                            ):
+                                log.info(
+                                    "Retirada por inactividad en canal %s",
+                                    message.channel.id,
+                                )
+
+                        try:
+                            await dispatcher.submit(message.channel.id, _job)
+                        except Exception:
+                            log.exception("No se pudo procesar el retiro por inactividad")
+
+                    timers[key] = asyncio.create_task(_active_timer())
+                elif st_name == "SPECTATING":
+                    key = (str(message.channel.id), "proactive")
+                    old = timers.pop(key, None)
+                    if old is not None:
+                        old.cancel()
+                    timeout = getattr(
+                        spectator_session, "proactive_idle_seconds", 21600.0
+                    )
+                    gen = generation
+
+                    async def _proactive_timer():
+                        try:
+                            await asyncio.sleep(float(timeout))
+                        except asyncio.CancelledError:
+                            return
+                        now = time.time()
+
+                        async def _job():
+                            reg = spectator_session
+                            if not reg.should_fire_proactive(message.channel.id, now):
+                                return
+                            channel = await _resolve_channel(message.channel.id)
+                            if channel is None:
+                                return
+                            synthetic = type(
+                                "SyntheticUser", (), {"id": 0, "display_name": "Airi", "bot": False}
+                            )()
+                            try:
+                                await turn.run_user_turn(
+                                    ctx,
+                                    channel,
+                                    synthetic,
+                                    [(synthetic, "")],
+                                    reply_target=None,
+                                    kind="proactive",
+                                    suppress_affinity=True,
+                                )
+                            except Exception:
+                                log.exception("Fallo el turno proactivo")
+
+                        try:
+                            await dispatcher.submit(message.channel.id, _job)
+                        except Exception:
+                            log.exception("No se pudo procesar el despertar proactivo")
+
+                    timers[key] = asyncio.create_task(_proactive_timer())
 
             key = (message.channel.id, message.author.id)
             seq = debounce.next_seq(key)
@@ -394,18 +495,18 @@ def create_client(
             )
             await asyncio.sleep(ctx.debounce_seconds)
             if debounce.current_seq(key) != seq:
-                log.module_result(
+                tracker.module_result(
                     "debounce", "activated", reason_code="debounce_replaced"
                 )
                 return
             merged, merged_ids = debounce.pop(key)
             if not merged:
-                log.module_result(
+                tracker.module_result(
                     "debounce", "activated", reason_code="debounce_replaced"
                 )
                 return
 
-            if spectator_policy is None or not spectator_policy.enabled:
+            if spectator_policy is None or not spectator_policy.enabled or spectator_session is None:
                 await dispatcher.submit(
                     message.channel.id,
                     lambda: turn.run_user_turn(
@@ -413,12 +514,83 @@ def create_client(
                     ),
                     message_ids=[getattr(message, "id", None)],
                 )
-                log.module_result("queue", "activated", reason_code="normal_turn")
+                tracker.module_result("queue", "activated", reason_code="normal_turn")
+                return
+
+            st_name = spectator_session.state(message.channel.id).name
+            if st_name in ("ACTIVE", "WAKING"):
+                async def _guarded_active_job():
+                    current = spectator_session.state(message.channel.id).name
+                    if current in ("ACTIVE", "WAKING"):
+                        await turn.run_user_turn(
+                            ctx,
+                            message.channel,
+                            message.author,
+                            merged,
+                            reply_target=message,
+                            kind="active",
+                        )
+                        return
+                    if current == "SPECTATING":
+                        decision = await _evaluate_spectator_event(ctx, message, merged)
+                        if not decision.proceed:
+                            _t = current_tracker()
+                            if _t is not None:
+                                _t.module_result(
+                                    "spectator", "skipped",
+                                    reason_code="spectator_not_proceeding",
+                                )
+                            if passive_buffer is not None:
+                                passive_buffer.append(
+                                    message.channel.id,
+                                    str(message.author.id),
+                                    getattr(message.author, "display_name", ""),
+                                    "\n".join(part for _, part in merged),
+                                    message_id=(
+                                        str(merged_ids[-1]) if merged_ids else ""
+                                    ),
+                                )
+                            return
+                        snapshot_ids = {"", *merged_ids}
+                        entries = passive_buffer.snapshot(
+                            message.channel.id, exclude_ids=snapshot_ids
+                        ) if passive_buffer is not None else []
+                        entry_dicts = [
+                            {
+                                "author_id": e.author_id,
+                                "author_name": e.author_name,
+                                "content": e.content,
+                                "message_id": e.message_id,
+                                "ts": e.ts,
+                            }
+                            for e in entries
+                        ]
+                        handoff = decision.reason == "handoff"
+                        await turn.run_user_turn(
+                            ctx,
+                            message.channel,
+                            message.author,
+                            merged,
+                            reply_target=message,
+                            kind="spectator",
+                            spectator_reason=decision.reason,
+                            spectator_snapshot=tuple(entry_dicts),
+                            spectator_guaranteed=decision.guaranteed,
+                            spectator_handoff=handoff,
+                            spectator_trigger_ids=merged_ids,
+                        )
+
+                await dispatcher.submit(
+                    message.channel.id,
+                    _guarded_active_job,
+                    message_ids=[getattr(message, "id", None)],
+                )
+                tracker.module_result("queue", "activated", reason_code="active_turn")
                 return
 
             decision = await _evaluate_spectator_event(ctx, message, merged)
             if not decision.proceed:
-                log.module_result(
+                tracker.module_result(
                     "spectator", "skipped", reason_code="spectator_not_proceeding"
                 )
                 return
@@ -426,7 +598,7 @@ def create_client(
             snapshot_ids = {"", *merged_ids}
             entries = passive_buffer.snapshot(
                 message.channel.id, exclude_ids=snapshot_ids
-            )
+            ) if passive_buffer is not None else []
             entry_dicts = [
                 {
                     "author_id": e.author_id,
@@ -455,7 +627,7 @@ def create_client(
                 ),
                 message_ids=[getattr(message, "id", None)],
             )
-            log.module_result("queue", "activated", reason_code="spectator_turn")
+            tracker.module_result("queue", "activated", reason_code="spectator_turn")
 
     async def _evaluate_spectator_event(ctx, message, merged):
         """Señales locales del modo espectador para el mensaje actual."""
@@ -1140,6 +1312,11 @@ def run_bot(argv=None):
         cooldown_seconds=spectator_effective.cooldown_seconds,
         clock=time.time,
     )
+    shared_spectator_session = SpectatorSessionRegistry(
+        clock=time.time,
+        active_idle_seconds=spectator_effective.active_idle_seconds,
+        proactive_idle_seconds=spectator_effective.proactive_idle_seconds,
+    )
 
     # Pegamentos Discord↔dominio (citas, regalos, diario). Ver `build_date_glue`.
     glue = build_date_glue(
@@ -1225,6 +1402,7 @@ def run_bot(argv=None):
         ctx.passive_buffer = shared_spectator_buffer
         ctx.spectator_policy = spectator_policy
         ctx.spectator_gate = shared_spectator_gate
+        ctx.spectator_session = shared_spectator_session
         ctx.handle_scene_choice = (
             lambda interaction, payload: discord_turn.handle_scene_choice(
                 ctx, interaction, payload

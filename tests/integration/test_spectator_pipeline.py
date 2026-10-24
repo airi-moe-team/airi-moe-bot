@@ -82,7 +82,7 @@ class FakeClient:
 
 
 def _writer_reply():
-    return llm_json("Ramens siempre, cuenta conmigo", affinity_delta=0)
+    return llm_json("Ramens siempre, cuenta conmigo", affinity_delta=0, stay_active=False)
 
 
 @pytest.fixture
@@ -96,6 +96,7 @@ def _setup(monkeypatch, llm, *, enabled):
     from airi.domain.spectator import load_policy
     from airi.services.passive_buffer import PassiveBuffer
     from airi.services.spectator_policy import ActivitiesCooldown
+    from airi.services.spectator_session import SpectatorSessionRegistry
 
     monkeypatch.setattr(client_module.discord, "Client", FakeClient)
     FakeClient.instances.clear()
@@ -135,6 +136,11 @@ def _setup(monkeypatch, llm, *, enabled):
     gate = ActivitiesCooldown(
         cooldown_seconds=policy.cooldown_seconds, clock=lambda: 1000.0
     )
+    session = SpectatorSessionRegistry(
+        clock=lambda: 1000.0,
+        active_idle_seconds=policy.cooldown_seconds,
+        proactive_idle_seconds=policy.cooldown_seconds,
+    )
 
     def build_ctx(ch):
         policy = load_policy()
@@ -166,6 +172,7 @@ def _setup(monkeypatch, llm, *, enabled):
         ctx.passive_buffer = buffer  # MISMA instancia en cada mensaje
         ctx.spectator_policy = policy
         ctx.spectator_gate = gate  # MISMA instancia en cada mensaje
+        ctx.spectator_session = session  # MISMA instancia en cada mensaje
         return ctx
 
     client = client_module.create_client(

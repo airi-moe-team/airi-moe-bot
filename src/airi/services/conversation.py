@@ -45,9 +45,11 @@ from airi.domain.grounding import reply_seems_grounded
 from airi.domain.history_tags import AffinityInfo, build_inference_history, normalize_name
 from airi.domain.llm_output import (
     RESPONSE_SCHEMA,
+    SESSION_RESPONSE_SCHEMA,
     ModelOutput,
     assistant_history_content,
     parse_model_output,
+    parse_session_output,
 )
 from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.prompts import SEARCH_QUERY_PROMPT
@@ -285,6 +287,10 @@ class TurnContext:
     spectator_reason: str = ""
     spectator_snapshot: tuple = ()  # entradas del buffer pasivo (dicts).
     spectator_roll: float = 0.0
+    # Modo de conversación de sesión (normal | spectator | active | proactive).
+    conversation_mode: str = "normal"
+    conversation_reason: str = ""
+    spectator_roll: float = 0.0
 
 
 @dataclass
@@ -320,6 +326,7 @@ class TurnResult:
     proposal_pending: bool = False
     relationship_claims_repaired: bool = False
     disconnect_reason: str | None = None
+    stay_active: bool = True
     history: list = field(default_factory=list)
     notices: list = field(default_factory=list)
     skipped: bool = False
@@ -346,6 +353,7 @@ class TurnDraft:
     trace: TurnEvent
     relationship_fingerprint: RelationshipFingerprint | None = None
     skipped: bool = False
+    stay_active: bool = True
 
 
 class ConversationService:
@@ -483,6 +491,8 @@ class ConversationService:
             else:
                 history = list(self.state.histories.get(ctx.channel_id, []))
             for who, part in messages:
+                if getattr(ctx, "conversation_mode", "") == "proactive" and not (part or "").strip():
+                    continue
                 history.append({
                     "role": "user",
                     "content": part,
@@ -568,12 +578,14 @@ class ConversationService:
             t0 = _time.perf_counter()
             self._log_module("llm_call", "activated")
             try:
-                system_prompt, raw_llm, meta, output = await self._generate(
+                system_prompt, raw_llm, meta, output, stay_active = await self._generate(
                     prompt_history, web_context, user, date_session, delta_max,
                     extra_note=ctx.extra_note,
                     relationship_view=relationship_view,
                     now=now,
                     quick=quick,
+                    conversation_mode=getattr(ctx, "conversation_mode", "normal"),
+                    conversation_reason=getattr(ctx, "conversation_reason", ""),
                 )
             except Exception as exc:
                 self._log_module(
@@ -680,6 +692,7 @@ class ConversationService:
                 now=now,
                 output=output,
                 answer=answer,
+                stay_active=stay_active,
                 gif_bytes=gif_bytes,
                 web_context=web_context,
                 grounded=grounded,
@@ -721,6 +734,7 @@ class ConversationService:
             self._register_user(who, draft.now)
 
         uid = draft.user.id
+        proactive = getattr(draft.context, "kind", "") == "proactive"
         date_session = self.state.dates.get(str(uid))
         in_date = draft.date_fingerprint is not None and isinstance(date_session, dict)
         entry = self.state.affinity_entry(uid)
@@ -756,15 +770,17 @@ class ConversationService:
         )
 
         diary_saved = False
-        if leveled_up and output.diary.lower() != "none":
+        if (not proactive) and leveled_up and output.diary.lower() != "none":
             diary_saved = self._add_diary_reflection(uid, output.diary, draft.now)
         if diary_saved:
             self._log_module("diary", "activated", diary_saved=True)
         else:
             self._log_module("diary", "skipped", reason_code="not_requested")
-        memory_saved = domain_memories.process_memory_action(
-            self.state.memories, uid, output.memory, now=draft.now
-        )
+        memory_saved = False
+        if not proactive:
+            memory_saved = domain_memories.process_memory_action(
+                self.state.memories, uid, output.memory, now=draft.now
+            )
         self._log_module("memory", "activated", memory_saved=memory_saved)
         notices = []
         if memory_saved:
@@ -777,7 +793,7 @@ class ConversationService:
 
         self_changed = False
         self_entry = None
-        if output.self_update:
+        if (not proactive) and output.self_update:
             source = "gift" if draft.context.kind == "gift" else (
                 "date" if in_date else "message"
             )
@@ -796,18 +812,25 @@ class ConversationService:
 
         # Relación afectiva: el modelo propone y el dominio decide dentro del
         # mismo commit que la afinidad y el resto de efectos del turno.
-        relationship_outcome = self.relationships.apply(
-            uid,
-            update=output.romantic_update,
-            action=output.relationship_action,
-            turn_key=draft.context.turn_key,
-            channel_id=draft.context.channel_id,
-            now=draft.now,
-            season=draft.season,
-            display_name=getattr(draft.user, "display_name", None) or "",
-            current_turn_text="\n".join(part for _, part in draft.messages),
-        )
-        self._log_module("relationships", "activated")
+        relationship_outcome = None
+        if not proactive:
+            relationship_outcome = self.relationships.apply(
+                uid,
+                update=output.romantic_update,
+                action=output.relationship_action,
+                turn_key=draft.context.turn_key,
+                channel_id=draft.context.channel_id,
+                now=draft.now,
+                season=draft.season,
+                display_name=getattr(draft.user, "display_name", None) or "",
+                current_turn_text="\n".join(part for _, part in draft.messages),
+            )
+            self._log_module("relationships", "activated")
+        else:
+            from airi.services.relationships import RelationshipOutcome
+
+            relationship_outcome = RelationshipOutcome()
+            self._log_module("relationships", "skipped", reason_code="proactive_turn")
         partner_confirmed = relationship_outcome.partner_confirmed or is_winner(
             self.state.world, uid
         )
@@ -833,12 +856,23 @@ class ConversationService:
             )
 
         history = list(draft.history)
-        history.append({
-            "role": "assistant",
-            "content": assistant_history_content(answer, output),
-            "reply_to_user_id": str(uid),
-            "reply_to_user_name": getattr(draft.user, "display_name", None),
-        })
+        if proactive:
+            history.append({
+                "role": "assistant",
+                "content": assistant_history_content(answer, output),
+                "author_id": "",
+                "author_name": "",
+                "reply_to_user_id": "",
+                "reply_to_user_name": None,
+                "system_generated": True,
+            })
+        else:
+            history.append({
+                "role": "assistant",
+                "content": assistant_history_content(answer, output),
+                "reply_to_user_id": str(uid),
+                "reply_to_user_name": getattr(draft.user, "display_name", None),
+            })
         if in_date and isinstance(date_session, dict):
             date_session["history"] = history[-DATE_HISTORY_MAX:]
             self.state.save_dates()
@@ -904,6 +938,7 @@ class ConversationService:
             proposal_pending=relationship_outcome.pending_proposal is not None,
             relationship_claims_repaired=claims_repaired,
             disconnect_reason=disconnect_reason,
+            stay_active=getattr(draft, "stay_active", True),
             history=history,
             notices=notices,
             trace=ev,
@@ -1024,8 +1059,12 @@ class ConversationService:
         relationship_view=None,
         now=None,
         quick=False,
+        conversation_mode="normal",
+        conversation_reason="",
     ):
         now = self.clock() if now is None else now
+        session_mode = conversation_mode in ("spectator", "active", "proactive")
+        schema = SESSION_RESPONSE_SCHEMA if session_mode else RESPONSE_SCHEMA
         state = self.state
         points = state.entry_points(user.id)
         affinity_section = domain_prompts.affinity_prompt_section(
@@ -1100,6 +1139,11 @@ class ConversationService:
         # Nudge anti-encadenamiento: solo si el último turno de Airi cerró con
         # pregunta. Fuera de ese patrón devuelve "" y no añade nada.
         sections.append(domain_prompts.question_variety_nudge_section(history))
+        mode_section = domain_prompts.conversation_mode_section(
+            conversation_mode, conversation_reason
+        )
+        if mode_section:
+            sections.append(mode_section)
         if extra_note:
             sections.append(
                 f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
@@ -1119,6 +1163,13 @@ class ConversationService:
             users=state.users,
         )
         messages = [{"role": "system", "content": system_prompt}, *view]
+        if conversation_mode == "proactive":
+            messages.append(
+                {
+                    "role": "user",
+                    "content": domain_prompts.PROACTIVE_TRIGGER_TEXT,
+                }
+            )
         request_tokens = LLM_SHORT_MAX_TOKENS if quick else None
         if hasattr(self.llm, "chat_with_meta"):
             try:
@@ -1126,7 +1177,7 @@ class ConversationService:
                 # aunque el modelo quiera responder en texto plano.
                 raw, meta = await self.llm.chat_with_meta(
                     messages,
-                    schema=RESPONSE_SCHEMA,
+                    schema=schema,
                     strict_schema=True,
                     max_tokens=request_tokens,
                     disable_thinking=quick,
@@ -1141,26 +1192,31 @@ class ConversationService:
                 )
                 raw, meta = await self.llm.chat_with_meta(
                     messages,
-                    schema=RESPONSE_SCHEMA,
+                    schema=schema,
                     max_tokens=request_tokens,
                     disable_thinking=quick,
                 )
         else:
             raw = await self.llm.chat(
                 messages,
-                schema=RESPONSE_SCHEMA,
+                schema=schema,
                 max_tokens=request_tokens,
                 disable_thinking=quick,
             )
             meta = LLMMeta()
-        output = parse_model_output(raw, delta_max=delta_max)
+        stay_active = True
+        if session_mode:
+            output, stay_active, _valid = parse_session_output(raw, delta_max=delta_max)
+        else:
+            output = parse_model_output(raw, delta_max=delta_max)
         self._log_module("parsing", "activated", parse_ok=output.reply is not None)
         # Red de seguridad anti-interrogatorio: en charla casual, si Airi ya
         # cerró con pregunta el turno anterior y vuelve a hacerlo, se pide UNA
         # regeneración sin cierre interrogativo (las citas quedan fuera: ahí la
         # conversación puede pedir respuestas).
         if (
-            not isinstance(date_session, dict)
+            (not session_mode)
+            and not isinstance(date_session, dict)
             and domain_prompts.last_assistant_reply_ended_with_question(history)
             and (output.reply or "").rstrip().endswith("?")
         ):
@@ -1173,7 +1229,7 @@ class ConversationService:
                     try:
                         fixed_raw, fixed_meta = await self.llm.chat_with_meta(
                             close_repair_messages,
-                            schema=RESPONSE_SCHEMA,
+                            schema=schema,
                             strict_schema=True,
                             max_tokens=request_tokens,
                             disable_thinking=quick,
@@ -1181,14 +1237,14 @@ class ConversationService:
                     except Exception:
                         fixed_raw, fixed_meta = await self.llm.chat_with_meta(
                             close_repair_messages,
-                            schema=RESPONSE_SCHEMA,
+                            schema=schema,
                             max_tokens=request_tokens,
                             disable_thinking=quick,
                         )
                 else:
                     fixed_raw = await self.llm.chat(
                         close_repair_messages,
-                        schema=RESPONSE_SCHEMA,
+                        schema=schema,
                         max_tokens=request_tokens,
                         disable_thinking=quick,
                     )
@@ -1210,7 +1266,7 @@ class ConversationService:
         # Reparaciones de calidad restantes (una regeneración cada una, si
         # produce material mejor que lo actual):
         # 1) Respuesta vacía: reintentar con aviso explícito antes de omitir.
-        if not output.reply:
+        if not session_mode and not output.reply:
             repair = await self._repair_regenerate(
                 messages, EMPTY_REPLY_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
@@ -1219,7 +1275,7 @@ class ConversationService:
             if repair is not None:
                 raw, meta, output = repair
         # 2) Copia casi literal de un turno anterior: regenerar.
-        elif reply_repeats_history(output.reply, history):
+        elif not session_mode and reply_repeats_history(output.reply, history):
             repair = await self._repair_regenerate(
                 messages, REPEAT_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
@@ -1244,7 +1300,7 @@ class ConversationService:
                     try:
                         repaired_raw, repaired_meta = await self.llm.chat_with_meta(
                             repair_messages,
-                            schema=RESPONSE_SCHEMA,
+                            schema=schema,
                             strict_schema=True,
                             max_tokens=request_tokens,
                             disable_thinking=quick,
@@ -1252,14 +1308,14 @@ class ConversationService:
                     except Exception:
                         repaired_raw, repaired_meta = await self.llm.chat_with_meta(
                             repair_messages,
-                            schema=RESPONSE_SCHEMA,
+                            schema=schema,
                             max_tokens=request_tokens,
                             disable_thinking=quick,
                         )
                 else:
                     repaired_raw = await self.llm.chat(
                         repair_messages,
-                        schema=RESPONSE_SCHEMA,
+                        schema=schema,
                         max_tokens=request_tokens,
                         disable_thinking=quick,
                     )
@@ -1274,7 +1330,7 @@ class ConversationService:
             except Exception:
                 log.warning("No se pudo reparar la coherencia de la marcha")
 
-        if not output.reply:
+        if (not session_mode) and not output.reply:
             return (
                 system_prompt,
                 raw if isinstance(raw, str) else None,
@@ -1283,8 +1339,13 @@ class ConversationService:
                     None, "none", "none", "none", 0,
                     "continue", "none", "none",
                 ),
+                True,
             )
-        return system_prompt, raw if isinstance(raw, str) else None, meta, output
+        # stay_active solo es significativo en modo sesión; en modo normal se
+        # conserva el valor por defecto.
+        if not session_mode:
+            stay_active = True
+        return system_prompt, raw if isinstance(raw, str) else None, meta, output, stay_active
 
     async def _repair_regenerate(
         self, messages, note, *, delta_max, max_tokens, disable_thinking

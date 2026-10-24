@@ -7,6 +7,10 @@
 
 - `business-config-env` — Hacer configurables mediante variables de entorno, documentadas en `.env` y `.env.example`, los valores editables de configuración de negocio de Airi; mantener en código los defaults de compatibilidad y las constantes estructurales.
   - Spec: `.kiro/specs/business-config-env/`
+- `airi-logging-interacciones` — Registrar en INFO el estado de los módulos por interacción de Discord en JSONL, con motivos y resumen aptos para diagnóstico.
+  - Spec: `.kiro/specs/airi-logging-interacciones/`
+- `airi-conversacion-activa-llm` — Evolucionar el modo espectador a una máquina de estados por canal, con continuidad conversacional decidida por el LLM y retirada por timeout.
+  - Spec: `.kiro/specs/airi-conversacion-activa-llm/`
 
 ## Flujo de trabajo
 

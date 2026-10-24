@@ -39,7 +39,7 @@ def _spectator_context(reason, snapshot):
 
 def test_turno_espectador_inyecta_snapshot_en_prompt_sin_persistirlo():
     state, counters = make_state()
-    llm = FakeLLM(replies=[llm_json("¡yo siempre tengo espacio para un buen ramen!", affinity_delta=0)])
+    llm = FakeLLM(replies=[llm_json("¡yo siempre tengo espacio para un buen ramen!", affinity_delta=0, stay_active=True)])
     svc = make_service(llm, state)
 
     snapshot = [
@@ -68,7 +68,7 @@ def test_turno_espectador_inyecta_snapshot_en_prompt_sin_persistirlo():
 
 def test_turno_espectador_no_persiste_pasivos_al_aplicar():
     state, counters = make_state()
-    llm = FakeLLM(replies=[llm_json("suena bien", affinity_delta=0)])
+    llm = FakeLLM(replies=[llm_json("suena bien", affinity_delta=0, stay_active=True)])
     svc = make_service(llm, state)
 
     snapshot = [{"author_id": "7", "author_name": "B", "content": "mucho contexto", "message_id": "m1"}]
