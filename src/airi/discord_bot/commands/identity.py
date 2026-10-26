@@ -22,7 +22,11 @@ async def handle_yo(ctx, message):
     pero el comando público muestra solo la identidad tipada.
     """
     model = ctx.state.self_model()
-    text = render_self_narrative(model, notes=[])
+    text = render_self_narrative(
+        model,
+        notes=[],
+        preferences=ctx.state.world.get("preferences"),
+    )
     await message.channel.send(embed=embeds.system_embed(text))
 
 

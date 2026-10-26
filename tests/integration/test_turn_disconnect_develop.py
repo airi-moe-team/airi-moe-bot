@@ -6,6 +6,7 @@ import asyncio
 from types import SimpleNamespace
 
 from airi.discord_bot import turn as turn_module
+from airi.observability.trace import TurnEvent
 from airi.testing import make_state
 
 
@@ -47,8 +48,9 @@ class _FakeClientSession:
 class _FakeChannel:
     id = 7
 
-    def __init__(self):
+    def __init__(self, *, fail_first=False):
         self.sent = []
+        self.fail_first = fail_first
 
     def typing(self):
         class _Typing:
@@ -61,6 +63,9 @@ class _FakeChannel:
         return _Typing()
 
     async def send(self, content=None, **kwargs):
+        if self.fail_first:
+            self.fail_first = False
+            raise RuntimeError("fallo de publicación")
         self.sent.append((content, kwargs))
 
 
@@ -97,8 +102,8 @@ def _result(**overrides):
 def _ctx(result, shutdown_calls):
     state, _ = make_state()
 
-    async def request_shutdown(reason, user_id=None):
-        shutdown_calls.append((reason, user_id))
+    async def request_shutdown(reason, user_id=None, correlation_id=None):
+        shutdown_calls.append((reason, user_id, correlation_id))
 
     async def noop(*args, **kwargs):
         return None
@@ -132,8 +137,25 @@ def test_disconnect_requests_global_shutdown(monkeypatch):
 
     run(turn_module.run_user_turn(ctx, channel, author, [(author, "vamos a dormir")]))
 
-    assert shutdown_calls == [("me voy a dormir", 1)]
+    assert shutdown_calls == [("me voy a dormir", 1, "")]
     assert any("Buenas noches" in (content or "") for content, _ in channel.sent)
+
+
+def test_disconnect_trace_records_shutdown_request(monkeypatch):
+    monkeypatch.setattr(turn_module.aiohttp, "ClientSession", _FakeClientSession)
+    shutdown_calls = []
+    trace = TurnEvent(correlation_id="cid-disconnect")
+    ctx = _ctx(_result(trace=trace), shutdown_calls)
+    channel = _FakeChannel()
+    author = SimpleNamespace(id=1, display_name="Ana")
+
+    run(turn_module.run_user_turn(ctx, channel, author, [(author, "vamos a dormir")]))
+
+    assert shutdown_calls == [("me voy a dormir", 1, "cid-disconnect")]
+    assert trace.shutdown_request is not None
+    assert trace.shutdown_request["origin"] == "model"
+    assert trace.shutdown_request["correlation_id"] == "cid-disconnect"
+    assert trace.shutdown_request["requested_at"] > 0
 
 
 def test_no_disconnect_does_not_request_shutdown(monkeypatch):
@@ -144,5 +166,36 @@ def test_no_disconnect_does_not_request_shutdown(monkeypatch):
     author = SimpleNamespace(id=1, display_name="Ana")
 
     run(turn_module.run_user_turn(ctx, channel, author, [(author, "hola")]))
+
+    assert shutdown_calls == []
+
+
+def test_personal_farewell_does_not_request_global_shutdown(monkeypatch):
+    monkeypatch.setattr(turn_module.aiohttp, "ClientSession", _FakeClientSession)
+    shutdown_calls = []
+    ctx = _ctx(
+        _result(reply="Hasta luego, cuídate.", disconnect_reason=None),
+        shutdown_calls,
+    )
+    channel = _FakeChannel()
+    author = SimpleNamespace(id=1, display_name="Ana")
+
+    run(
+        turn_module.run_user_turn(
+            ctx, channel, author, [(author, "me voy, hasta luego")]
+        )
+    )
+
+    assert shutdown_calls == []
+
+
+def test_publication_failure_does_not_request_shutdown(monkeypatch):
+    monkeypatch.setattr(turn_module.aiohttp, "ClientSession", _FakeClientSession)
+    shutdown_calls = []
+    ctx = _ctx(_result(), shutdown_calls)
+    channel = _FakeChannel(fail_first=True)
+    author = SimpleNamespace(id=1, display_name="Ana")
+
+    run(turn_module.run_user_turn(ctx, channel, author, [(author, "vamos a dormir")]))
 
     assert shutdown_calls == []

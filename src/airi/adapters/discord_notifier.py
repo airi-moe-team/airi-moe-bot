@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import discord
+from airi.discord_bot.embeds import notice_embed
 
 
 class DiscordNotifier:
@@ -12,9 +12,4 @@ class DiscordNotifier:
         self.channel = channel
 
     async def send(self, content):
-        embed = discord.Embed(
-            title="💗 Airi",
-            description=str(content),
-            color=discord.Color(0xFFB6D9),
-        )
-        await self.channel.send(embed=embed)
+        await self.channel.send(embed=notice_embed(content))

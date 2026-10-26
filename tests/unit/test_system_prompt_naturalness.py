@@ -12,6 +12,7 @@ from airi.domain.prompts import (
     SYSTEM_PROMPT,
     date_context_section,
     identity_tags_prompt_section,
+    memories_prompt_section,
 )
 
 
@@ -22,9 +23,46 @@ def test_narrative_actions_are_not_one_per_sentence():
 
 
 def test_answers_are_proportionate_to_the_message():
-    assert "Responde de forma proporcionada" in SYSTEM_PROMPT
-    assert "una o dos frases" in SYSTEM_PROMPT
-    assert "no añadas preocupación" in SYSTEM_PROMPT
+    assert "Responde de forma proporcionada al mensaje" in SYSTEM_PROMPT
+    assert "No impongas un número fijo de frases" in SYSTEM_PROMPT
+    assert "ni añadas" in SYSTEM_PROMPT
+
+
+def test_intent_priority_comes_before_variety():
+    assert "=== PRIORIDAD DE INTENCIÓN ===" in SYSTEM_PROMPT
+    assert "responde a la pregunta pendiente" in SYSTEM_PROMPT
+    assert SYSTEM_PROMPT.index("=== PRIORIDAD DE INTENCIÓN ===") < SYSTEM_PROMPT.index(
+        "=== VARIEDAD Y NATURALIDAD ==="
+    )
+
+
+def test_personality_is_expressed_as_observable_tendencies():
+    assert "=== RASGOS COMO TENDENCIAS (NO ACTUACIÓN) ===" in SYSTEM_PROMPT
+    for trait in ("Expresiva", "Tímida", "Juguetona", "Celosa", "Sarcástica", "Curiosa"):
+        assert trait in SYSTEM_PROMPT
+    assert "no estés de acuerdo automáticamente para agradar" in SYSTEM_PROMPT
+    assert "no inventes haber visto, jugado o vivido algo" in SYSTEM_PROMPT
+
+
+def test_memory_usage_prioritizes_current_and_relevant_data():
+    assert "=== USO DE LA MEMORIA ===" in SYSTEM_PROMPT
+    assert "la versión más reciente y explícita prevalece" in SYSTEM_PROMPT
+    assert "no recites recuerdos" in SYSTEM_PROMPT
+
+
+def test_prefab_farewells_are_explicitly_discouraged():
+    assert "No uses las frases 'aquí estaré'" in SYSTEM_PROMPT
+    assert "sueños dulces" in SYSTEM_PROMPT
+    assert "mañana será otro día" in SYSTEM_PROMPT
+
+
+def test_memory_section_hides_superseded_preferences():
+    section = memories_prompt_section([
+        {"text": "Le encanta el flan.", "status": "superseded"},
+        {"text": "Su postre favorito es el tiramisú.", "status": "active"},
+    ])
+    assert "tiramisú" in section
+    assert "flan" not in section
 
 
 def test_no_loop_of_recent_narrative_tics():

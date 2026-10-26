@@ -31,6 +31,7 @@ class ChannelSession:
     last_human_activity: Optional[float] = None
     last_proactive_attempt: Optional[float] = None
     active_since: Optional[float] = None
+    turn_in_progress: bool = False
 
 
 class SpectatorSessionRegistry:
@@ -58,6 +59,16 @@ class SpectatorSessionRegistry:
         if key not in self._sessions:
             self._sessions[key] = ChannelSession()
         return self._sessions[key]
+
+    def mark_turn_started(self, channel_id) -> None:
+        """Marcar que hay un turno en progreso (invariante I1)."""
+        s = self._session(channel_id)
+        s.turn_in_progress = True
+
+    def mark_turn_finished(self, channel_id) -> None:
+        """Marcar que el turno terminó (invariante I1)."""
+        s = self._session(channel_id)
+        s.turn_in_progress = False
 
     def state(self, channel_id) -> ConversationState:
         return self._session(channel_id).state
@@ -189,14 +200,17 @@ class SpectatorSessionRegistry:
     def should_fire_proactive(self, channel_id, now) -> bool:
         """True si puede intentarse un despertar proactivo.
 
-        Invariante antispiral: solo dispara si hay actividad humana y esa
-        actividad es más reciente que la última tentativa. Al consumir la
-        ventana marca la tentativa. Un intervalo <= 0 deshabilita.
+        Invariants aplicados:
+        - I4/I6: No dispara si ya hay un turno en curso (turn_in_progress).
+        - Solo en SPECTATING, con inactividad suficiente y sin actividad
+          posterior que invalide el disparo.
         """
         s = self._sessions.get(str(channel_id))
         if s is None or s.state != ConversationState.SPECTATING:
             return False
         if self._proactive_idle_seconds <= 0:
+            return False
+        if s.turn_in_progress:
             return False
         if s.last_human_activity is None:
             return False

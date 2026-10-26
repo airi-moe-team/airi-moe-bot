@@ -14,11 +14,6 @@ from typing import Callable
 
 import aiohttp
 
-from airi.observability import jsonl_events as jl
-from airi.observability.interaction_tracker import current_tracker
-from airi.observability.trace import TurnEvent
-from airi.observability.trace_store import TraceStore
-
 from airi.domain import memories as domain_memories
 from airi.domain import prompts as domain_prompts
 from airi.domain import users as domain_users
@@ -48,28 +43,46 @@ from airi.domain.llm_output import (
     SESSION_RESPONSE_SCHEMA,
     ModelOutput,
     assistant_history_content,
+    assistant_reply_text,
     parse_model_output,
     parse_session_output,
 )
 from airi.domain.narrative_claims import disconnect_claim_problem
+from airi.domain.notices import (
+    level_up_notice,
+    meet_notice,
+    memory_saved_notice,
+    relationship_confirmed_notice,
+    relationship_proposed_notice,
+    self_changed_notice,
+    web_search_notice,
+)
 from airi.domain.prompts import SEARCH_QUERY_PROMPT
+from airi.domain.reactions import is_negative_reaction
 from airi.domain.relationship_claims import (
     relationship_claim_problem,
     soften_relationship_claims,
 )
 from airi.domain.relationships import RelationshipFingerprint
-from airi.domain.self_model import (
-    apply_self_update,
-    sync_preferences_from_self,
+from airi.domain.self_model import apply_self_update
+from airi.domain.text_filters import (
+    clean_reply,
+    limit_narrative_actions,
+    strip_repetition_loop,
 )
-from airi.domain.text_filters import clean_reply, strip_repetition_loop
 from airi.domain.turn_guard import DateFingerprint, fingerprint_of
-from airi.domain.web import needs_web_search
+from airi.domain.web import (
+    detect_search_intent,
+    recent_topic_terms,
+    web_results_relevant,
+)
 from airi.logging_setup import (
     get_logger,
     reset_correlation_id,
     set_correlation_id,
 )
+from airi.observability import jsonl_events as jl
+from airi.observability.interaction_tracker import current_tracker
 from airi.observability.trace import TurnEvent
 from airi.observability.trace_store import TraceStore
 from airi.ports.llm import LLMMeta
@@ -84,6 +97,141 @@ SEARCH_FAILED_CONTEXT = (
     "No afirmes que buscaste con éxito ni inventes datos "
     "actuales. Comunica esta limitación con naturalidad."
 )
+
+# Ventana de conversación que se envía al reformulador de la query. Sin ella,
+# una corrección como "puedes buscarlo" no contiene las entidades en disputa.
+SEARCH_CONTEXT_MESSAGES = 10
+SEARCH_CONTEXT_ENTRY_MAX_CHARS = 300
+SEARCH_CONTEXT_TOTAL_MAX_CHARS = 2000
+
+
+def _search_query_context(history, snapshot=()):
+    """Contexto reciente legible para construir una query con sentido."""
+    lines = []
+    for entry in list(history or ())[-SEARCH_CONTEXT_MESSAGES:]:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("role") == "assistant":
+            speaker = "Airi"
+            text = assistant_reply_text(entry.get("content"))
+        else:
+            speaker = entry.get("author_name") or "Usuario"
+            text = str(entry.get("content") or "")
+        text = " ".join(text.split())
+        if text:
+            lines.append(f"{speaker}: {text[:SEARCH_CONTEXT_ENTRY_MAX_CHARS]}")
+    for entry in snapshot or ():
+        if isinstance(entry, dict):
+            speaker = entry.get("author_name") or "Usuario"
+            text = entry.get("content") or ""
+        else:
+            speaker = getattr(entry, "author_name", "") or "Usuario"
+            text = getattr(entry, "content", "") or ""
+        text = " ".join(str(text).split())
+        if text:
+            lines.append(f"{speaker}: {text[:SEARCH_CONTEXT_ENTRY_MAX_CHARS]}")
+    return "\n".join(lines)[-SEARCH_CONTEXT_TOTAL_MAX_CHARS:]
+
+
+def _last_assistant_text(history):
+    """Última respuesta legible de Airi en el historial previo."""
+    for entry in reversed(history or ()):
+        if not isinstance(entry, dict) or entry.get("role") != "assistant":
+            continue
+        return assistant_reply_text(entry.get("content")) or ""
+    return ""
+
+
+def _last_user_text(history):
+    """Último mensaje del usuario en el historial previo."""
+    for entry in reversed(history or ()):
+        if not isinstance(entry, dict) or entry.get("role") != "user":
+            continue
+        return " ".join(str(entry.get("content") or "").split())
+    return ""
+
+
+def _previous_user_text(history, messages):
+    """Último mensaje del usuario anterior a los mensajes de este turno."""
+    prior = list(history or ())
+    count = len(messages or ())
+    if count:
+        prior = prior[:-count]
+    return _last_user_text(prior)
+
+
+def _recent_topic_terms_for_turn(
+    state,
+    channel_id,
+    *,
+    history=(),
+    snapshot=(),
+    current_text="",
+    exclude_names=(),
+    limit=8,
+):
+    """Entidades recientes que sirven de ancla para la búsqueda.
+
+    Los ``turn_records`` conservan respuestas de Airi que ya salieron de la
+    ventana corta de historial. Sin ellos, un tema mencionado hace diez turnos
+    desaparecía de la query. Solo se usan como pistas de tema, no como hechos.
+    """
+    texts = []
+    records = getattr(state, "turn_records", None) or {}
+    prefix = f"{channel_id}:"
+    channel_records = [
+        record
+        for key, record in records.items()
+        if isinstance(record, dict) and str(key).startswith(prefix)
+    ]
+    channel_records.sort(
+        key=lambda record: float(
+            record.get("updated_at") or record.get("created_at") or 0.0
+        )
+    )
+    for record in channel_records[-12:]:
+        reply_text = record.get("reply_text")
+        if reply_text:
+            texts.append(str(reply_text))
+    for entry in snapshot or ():
+        if isinstance(entry, dict):
+            content = entry.get("content")
+        else:
+            content = getattr(entry, "content", "")
+        if content:
+            texts.append(str(content))
+    for entry in list(history or ())[-4:]:
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
+        if entry.get("role") == "assistant":
+            content = assistant_reply_text(content)
+        if content:
+            texts.append(str(content))
+    if current_text:
+        texts.append(str(current_text))
+    return recent_topic_terms(
+        texts, exclude_names=exclude_names, limit=limit
+    )
+
+
+_SEARCH_FAILURE_MARKERS = (
+    "no he encontrado",
+    "no encontre",
+    "no pude encontrar",
+    "no pude buscar",
+    "no he podido",
+    "no tengo informacion",
+    "no dispongo de",
+    "no me ha sido posible",
+)
+
+
+def _acknowledges_search_failure(reply):
+    """True si la respuesta ya comunica honestamente el fallo de búsqueda."""
+    normalized = " ".join((reply or "").casefold().split())
+    return any(marker in normalized for marker in _SEARCH_FAILURE_MARKERS)
+
 
 # Respuesta honesta cuando el grounded-check detecta datos inventados.
 GROUNDED_FALLBACK_TEXT = (
@@ -142,12 +290,6 @@ def guaranteed_gif(gif_type, level_name):
     return "nope" if level_name in _NEGATIVE_AFFINITY_LEVELS else "happy"
 
 
-MEMORY_SAVED_NOTICE = "Airi recordará este evento"
-SELF_CHANGED_NOTICE = (
-    "Airi acaba de cambiar algo de sí misma — escribe `!identidad-airi` "
-    "para ver quién es ahora"
-)
-
 DISCONNECT_REPAIR_PROMPT = (
     "Tu respuesta anterior no fue coherente con tu decisión de marcharte. "
     "Devuelve de nuevo el objeto JSON completo: si en \"reply\" dices que te "
@@ -182,6 +324,21 @@ REPEAT_REPAIR_PROMPT = (
     "que la persona dijo AHORA, no a los turnos viejos. Está prohibido "
     "reutilizar frases tal cual de respuestas anteriores. No escribas texto "
     "fuera del JSON."
+)
+
+#: Reintento único cuando la generación agotó el techo de tokens. El caso típico
+#: es que el razonamiento (thinking) se comió todo el presupuesto y no quedó
+#: espacio para el JSON final: la respuesta llega vacía con finish_reason
+#: "length". Se desactiva el razonamiento y se pide ir directo al JSON.
+TRUNCATED_REPAIR_PROMPT = (
+    "Tu generación anterior se agotó razonando y no llegó a escribir la "
+    "respuesta. Responde AHORA sin razonar: ve directo al objeto JSON completo, "
+    "con un \"reply\" breve y suficiente para el último mensaje, y ciérralo. No "
+    "escribas texto fuera del JSON."
+)
+TRUNCATED_REPAIR_SESSION_PROMPT = (
+    TRUNCATED_REPAIR_PROMPT
+    + " Incluye también \"stay_active\" como booleano."
 )
 
 #: Longitud mínima (normalizada) para considerar copia literal de un turno.
@@ -262,6 +419,17 @@ def strip_trailing_question(text: str) -> str:
         return text
     remainder = cleaned[:sentence_start + 1].rstrip()
     return remainder if remainder.strip() else text
+
+
+def strip_trailing_questions(text: str, *, max_rounds: int = 4) -> str:
+    """Recorta varias preguntas encadenadas al final de una respuesta."""
+    result = text
+    for _ in range(max_rounds):
+        trimmed = strip_trailing_question(result)
+        if trimmed == result:
+            break
+        result = trimmed
+    return result
 
 
 def _read_only_memories(memories, user_id) -> list:
@@ -354,6 +522,10 @@ class TurnDraft:
     relationship_fingerprint: RelationshipFingerprint | None = None
     skipped: bool = False
     stay_active: bool = True
+    # Señales deterministas del turno (búsqueda, tema y reacción negativa).
+    search_intent: str | None = None
+    topic_terms: tuple = ()
+    negative_reaction: bool = False
 
 
 class ConversationService:
@@ -490,6 +662,9 @@ class ConversationService:
                 history = list(date_session.get("history") or [])
             else:
                 history = list(self.state.histories.get(ctx.channel_id, []))
+            # Vista previa a añadir el mensaje actual: la intención de búsqueda
+            # y la query no deben repetir el texto que ya se pasa aparte.
+            prior_history = list(history)
             for who, part in messages:
                 if getattr(ctx, "conversation_mode", "") == "proactive" and not (part or "").strip():
                     continue
@@ -533,15 +708,93 @@ class ConversationService:
 
             web_context = None
             search_query = None
-            if ctx.allow_web and needs_web_search(merged_text):
-                if self.notifier is not None:
-                    await self.notifier.send(
-                        "Un momentito, estoy buscando información en la web..."
+            search_intent = None
+            search_failed = False
+            exclude_names = (
+                "Airi",
+                getattr(user, "display_name", ""),
+            )
+            topic_terms = _recent_topic_terms_for_turn(
+                self.state,
+                ctx.channel_id,
+                history=prior_history,
+                snapshot=ctx.spectator_snapshot,
+                current_text=merged_text,
+                exclude_names=exclude_names,
+            )
+            negative_reaction = is_negative_reaction(merged_text)
+            if ctx.allow_web:
+                search_intent = detect_search_intent(
+                    merged_text,
+                    history=prior_history,
+                    snapshot=ctx.spectator_snapshot,
+                    exclude_names=exclude_names,
+                )
+
+            extra_note = ctx.extra_note
+            preference_correction = (
+                domain_memories.extract_preference_correction(merged_text)
+            )
+            if preference_correction:
+                preference_note = (
+                    "=== CORRECCIÓN DE PREFERENCIA (PRIORIDAD) ===\n"
+                    "La persona corrige una preferencia. La versión vigente es: "
+                    f"{preference_correction.memory_text}\n"
+                    "Responde usando esa versión; no repitas el dato anterior ni "
+                    "lo contradigas. Si la pregunta actual es sobre ese tema, "
+                    "contéstala directamente antes de preguntar cualquier otra cosa."
+                )
+                extra_note = "\n\n".join(
+                    part for part in (extra_note, preference_note) if part
+                )
+            if not preference_correction:
+                relevant = domain_memories.relevant_memories(
+                    _read_only_memories(self.state.memories, uid), merged_text
+                )
+                if relevant:
+                    relevant_note = (
+                        "=== MEMORIA RELEVANTE ===\n"
+                        + "\n".join(f"- {entry.get('text', '')}" for entry in relevant)
+                        + "\nUsa esta información para responder a lo que se te "
+                        "pregunta; no la contradigas ni inventes otro dato distinto."
                     )
+                    extra_note = "\n\n".join(
+                        part for part in (extra_note, relevant_note) if part
+                    )
+            if search_intent == "correction":
+                previous_claim = _last_assistant_text(prior_history)
+                topics_text = (
+                    ", ".join(topic_terms[:4]) or "el tema de la conversación"
+                )
+                correction_note = (
+                    "=== CORRECCIÓN DEL USUARIO (PRIORIDAD) ===\n"
+                    "La persona corrige un dato. Su corrección prevalece sobre "
+                    "cualquier respuesta anterior de Airi; el historial propio "
+                    "no es una fuente de verdad.\n"
+                    f"Tema/entidades: {topics_text}\n"
+                    "Lo que dijo Airi antes (posiblemente erróneo): "
+                    f"{previous_claim[:300] or '(nada)'}\n"
+                    f"Corrección del usuario: {merged_text[:300]}\n"
+                    "No repitas la afirmación corregida. Si no tienes el dato "
+                    "correcto, dilo con honestidad."
+                )
+                extra_note = "\n\n".join(
+                    part for part in (extra_note, correction_note) if part
+                )
+
+            if search_intent:
+                if self.notifier is not None:
+                    await self.notifier.send(web_search_notice())
                 t0 = _time.perf_counter()
-                self._log_module("web_search", "activated")
+                self._log_module("web_search", "activated", reason=search_intent)
                 try:
-                    search_query = await self._build_search_query(merged_text)
+                    search_query = await self._build_search_query(
+                        merged_text,
+                        context=_search_query_context(
+                            prior_history, ctx.spectator_snapshot
+                        ),
+                        topic_terms=topic_terms,
+                    )
                     if self.search is not None:
                         web_context = await self.search.search(search_query)
                 except Exception as exc:
@@ -556,13 +809,40 @@ class ConversationService:
                     "web_search",
                     "activated",
                     duration_ms=int((_time.perf_counter() - t0) * 1000),
+                    reason=search_intent,
                 )
-                if web_context is None:
+                if not web_context or not str(web_context).strip():
                     log.warning("La búsqueda web no devolvió resultados")
                     web_context = SEARCH_FAILED_CONTEXT
+                    search_failed = True
+                elif not web_results_relevant(
+                    web_context,
+                    search_query,
+                    # En una búsqueda explícita el usuario puede estar
+                    # introduciendo un tema nuevo: no lo comparemos con el
+                    # ancla vieja. La query sigue validándose por sus propias
+                    # entidades propias.
+                    () if search_intent == "explicit" else topic_terms,
+                    exclude_names=exclude_names,
+                ):
+                    log.warning(
+                        "Los resultados web no cubren el tema de la consulta; "
+                        "se descartan para no responder con datos ajenos."
+                    )
+                    self._log_module(
+                        "web_search",
+                        "skipped",
+                        reason_code="irrelevant_results",
+                    )
+                    web_context = SEARCH_FAILED_CONTEXT
+                    search_failed = True
                 timings["search_ms"] = int((_time.perf_counter() - t0) * 1000)
             ev.search_query = search_query
+            ev.web_query = search_query
             ev.web_context = web_context
+            ev.web_relevant = (
+                None if search_query is None else not search_failed
+            )
 
             delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
             quick = self._is_quick_turn(
@@ -570,7 +850,7 @@ class ConversationService:
                 in_date=in_date,
                 web_context=web_context,
                 kind=ctx.kind,
-                extra_note=ctx.extra_note,
+                extra_note=extra_note,
                 history=history,
                 user=uid,
                 display_name=getattr(user, "display_name", None),
@@ -580,7 +860,7 @@ class ConversationService:
             try:
                 system_prompt, raw_llm, meta, output, stay_active = await self._generate(
                     prompt_history, web_context, user, date_session, delta_max,
-                    extra_note=ctx.extra_note,
+                    extra_note=extra_note,
                     relationship_view=relationship_view,
                     now=now,
                     quick=quick,
@@ -648,11 +928,27 @@ class ConversationService:
                     trace=ev,
                     relationship_fingerprint=relationship_fingerprint,
                     skipped=True,
+                    search_intent=search_intent,
+                    topic_terms=tuple(topic_terms),
+                    negative_reaction=negative_reaction,
                 )
 
-            # Filtro anti-alucinación antes de publicar.
+            # Si la búsqueda no dio resultados o no cubría el tema, la
+            # respuesta debe reconocerlo. Si el modelo no lo hace, se sustituye
+            # por el mensaje honesto: es preferible a inventar o pedirle al
+            # usuario el dato que acabamos de buscar.
             grounded = True
-            if web_context and not reply_seems_grounded(answer, web_context):
+            if search_failed and not _acknowledges_search_failure(answer):
+                log.warning(
+                    "La búsqueda web falló o fue irrelevante y la respuesta no "
+                    "lo reconocía; se reemplaza por un mensaje honesto."
+                )
+                answer = GROUNDED_FALLBACK_TEXT
+                output = ModelOutput(
+                    answer, "none", "none", "none", 0, "continue", "none", "none",
+                )
+                grounded = False
+            elif web_context and not reply_seems_grounded(answer, web_context):
                 log.warning(
                     "La respuesta contenía datos no presentes en las fuentes; "
                     "se reemplaza por un mensaje honesto."
@@ -699,6 +995,9 @@ class ConversationService:
                 timings=timings,
                 trace=ev,
                 relationship_fingerprint=relationship_fingerprint,
+                search_intent=search_intent,
+                topic_terms=tuple(topic_terms),
+                negative_reaction=negative_reaction,
             )
         except Exception as exc:
             ev.errors.append({
@@ -730,10 +1029,19 @@ class ConversationService:
                 trace=ev,
             )
 
+        new_users = []
         for who, _part in draft.messages:
-            self._register_user(who, draft.now)
+            if self._register_user(who, draft.now):
+                new_users.append(who)
 
         uid = draft.user.id
+        notices = [
+            meet_notice(
+                self.state.display_name(who.id),
+                user_id=str(who.id),
+            )
+            for who in new_users
+        ]
         proactive = getattr(draft.context, "kind", "") == "proactive"
         date_session = self.state.dates.get(str(uid))
         in_date = draft.date_fingerprint is not None and isinstance(date_session, dict)
@@ -744,11 +1052,20 @@ class ConversationService:
         disconnect_reason = (
             output.disconnect.get("reason") if output.disconnect else None
         )
+        if ev is not None:
+            ev.disconnect = output.disconnect
+            ev.stay_active = getattr(draft, "stay_active", True)
 
         delta_to_apply = output.affinity_delta
         if draft.context.suppress_affinity:
             if delta_to_apply:
                 log.info("El turno no mueve la afinidad (ya aplicada por el sistema).")
+            delta_to_apply = 0
+        if draft.negative_reaction and delta_to_apply > 0:
+            log.info(
+                "Afinidad positiva ignorada: el mensaje es una negación o "
+                "corrección directa."
+            )
             delta_to_apply = 0
         delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
         applied = self.state.apply_affinity(
@@ -764,6 +1081,13 @@ class ConversationService:
                 f"Empiezo a sentir algo más por {self.state.display_name(uid)}; "
                 f"nuestra relación ha subido a «{level_after}».",
             )
+            notices.append(
+                level_up_notice(
+                    self.state.display_name(uid),
+                    level_after,
+                    user_id=str(uid),
+                )
+            )
         log.info(
             "afinidad %+d (aplicado %+d) total=%d (%s→%s)",
             output.affinity_delta, applied, points_now, level_before, level_after,
@@ -777,15 +1101,81 @@ class ConversationService:
         else:
             self._log_module("diary", "skipped", reason_code="not_requested")
         memory_saved = False
+        memory_saved_text = ""
+        message_text = " ".join(
+            " ".join(str(part).split()) for _, part in draft.messages
+        )
+        preference_correction = (
+            domain_memories.extract_preference_correction(message_text)
+        )
+        memory_action = output.memory
+        if preference_correction:
+            log.info(
+                "Memoria del modelo ignorada: hay una corrección explícita de "
+                "preferencia y prevalece la versión vigente."
+            )
+            memory_action = "none"
+        if (
+            draft.negative_reaction
+            and isinstance(memory_action, str)
+            and not memory_action.lower().startswith("olvidar:")
+        ):
+            log.info(
+                "Memoria del modelo ignorada: el mensaje es una negación o "
+                "corrección directa."
+            )
+            memory_action = "none"
         if not proactive:
             memory_saved = domain_memories.process_memory_action(
-                self.state.memories, uid, output.memory, now=draft.now
+                self.state.memories,
+                uid,
+                memory_action,
+                now=draft.now,
+                source="message",
+                source_text=message_text,
+                turn_key=draft.context.turn_key,
             )
+            if memory_saved:
+                memory_saved_text = str(memory_action)
+            if preference_correction and domain_memories.apply_preference_correction(
+                self.state.memories,
+                uid,
+                preference_correction,
+                now=draft.now,
+                source="correction",
+                source_text=message_text,
+                previous_text=_previous_user_text(
+                    draft.history, draft.messages
+                ),
+                turn_key=draft.context.turn_key,
+            ):
+                memory_saved = True
+                memory_saved_text = preference_correction.memory_text
+        correction_text = ""
+        if not proactive and draft.search_intent == "correction":
+            message_text_short = message_text[:160]
+            topics = ", ".join(draft.topic_terms[:3]) or "un dato factual"
+            display_name = (
+                getattr(draft.user, "display_name", None) or "El usuario"
+            )
+            correction_text = (
+                f"{display_name} me corrigió sobre {topics}: {message_text_short}"
+            )
+            if domain_memories.add_memory(
+                self.state.memories,
+                uid,
+                correction_text,
+                now=draft.now,
+                source="correction",
+                source_text=message_text,
+                turn_key=draft.context.turn_key,
+            ):
+                memory_saved = True
+                memory_saved_text = correction_text
         self._log_module("memory", "activated", memory_saved=memory_saved)
-        notices = []
         if memory_saved:
             self.state.save_memories()
-            notices.append(MEMORY_SAVED_NOTICE)
+            notices.append(memory_saved_notice(user_id=str(uid)))
 
         # Deriva lenta: si han pasado los días configurados, los rasgos se
         # acercan un paso a su base. Es idempotente y no toca el núcleo.
@@ -806,9 +1196,8 @@ class ConversationService:
             )
             if self_entry:
                 self_changed = True
-                sync_preferences_from_self(self.state.world)
                 self.state.save_identity()
-                notices.append(SELF_CHANGED_NOTICE)
+                notices.append(self_changed_notice(user_id=str(uid)))
 
         # Relación afectiva: el modelo propone y el dominio decide dentro del
         # mismo commit que la afinidad y el resto de efectos del turno.
@@ -850,9 +1239,20 @@ class ConversationService:
             )
             claims_repaired = repaired != answer
             answer = repaired
+        display_name = self.state.display_name(uid)
+        if relationship_outcome.action_applied == "propose":
+            notices.append(
+                relationship_proposed_notice(
+                    display_name,
+                    user_id=str(uid),
+                )
+            )
         if relationship_outcome.partner_confirmed:
             notices.append(
-                f"💗 **Airi y {self.state.display_name(uid)} ahora son pareja.**"
+                relationship_confirmed_notice(
+                    display_name,
+                    user_id=str(uid),
+                )
             )
 
         history = list(draft.history)
@@ -886,7 +1286,11 @@ class ConversationService:
         ev.level_before = level_before
         ev.level_after = level_after
         ev.leveled_up = leveled_up
-        ev.memory_saved = output.memory if memory_saved else None
+        ev.memory_saved = (
+            memory_saved_text
+            if memory_saved_text
+            else (output.memory if memory_saved else None)
+        )
         ev.diary_saved = output.diary if diary_saved else None
         ev.date_decision = output.date_decision
         ev.date_reason = output.date_reason
@@ -1082,9 +1486,9 @@ class ConversationService:
             notes=state.world.get("self_notes") or [],
         )
         if quick:
-            # Turno breve: tono, relación y yo. Sin diario, memorias, usuarios
-            # conocidos ni explicación de etiquetas (el mensaje es corto y no
-            # los necesita); esto recorta el prompt y acelera el prefill.
+            # Turno breve: tono, relación, yo y memorias vigentes. Sin diario,
+            # usuarios conocidos ni explicación larga de etiquetas; el mensaje
+            # es corto, pero una pregunta puede depender de una preferencia.
             sections = [
                 affinity_section,
                 relationship_section,
@@ -1102,6 +1506,9 @@ class ConversationService:
                 domain_prompts.last_shutdown_prompt_section(state.world),
                 domain_prompts.identity_tags_prompt_section(compact=True),
                 self_section,
+                domain_prompts.memories_prompt_section(
+                    _read_only_memories(state.memories, user.id)
+                ),
             ]
         else:
             sections = [
@@ -1208,8 +1615,32 @@ class ConversationService:
         if session_mode:
             output, stay_active, _valid = parse_session_output(raw, delta_max=delta_max)
         else:
-            output = parse_model_output(raw, delta_max=delta_max)
+            output = parse_model_output(
+                raw,
+                delta_max=delta_max,
+                allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+            )
         self._log_module("parsing", "activated", parse_ok=output.reply is not None)
+        # Corte por techo de tokens: normalmente el razonamiento se comió todo
+        # el presupuesto y no quedó espacio para el JSON. Se hace UNA sola
+        # regeneración sin thinking, también en turnos de sesión (antes no
+        # tenían ninguna red).
+        retried_truncation = False
+        if (
+            getattr(meta, "finish_reason", None) == "length"
+            and not (output.reply or "").strip()
+        ):
+            retried_truncation = True
+            repair = await self._retry_after_truncation(
+                messages,
+                session_mode=session_mode,
+                schema=schema,
+                delta_max=delta_max,
+                max_tokens=request_tokens,
+            )
+            if repair is not None:
+                raw, meta, output, stay_active = repair
+                self._log_module("parsing", "activated", parse_ok=True)
         # Red de seguridad anti-interrogatorio: en charla casual, si Airi ya
         # cerró con pregunta el turno anterior y vuelve a hacerlo, se pide UNA
         # regeneración sin cierre interrogativo (las citas quedan fuera: ahí la
@@ -1249,24 +1680,32 @@ class ConversationService:
                         disable_thinking=quick,
                     )
                     fixed_meta = LLMMeta()
-                fixed = parse_model_output(fixed_raw, delta_max=delta_max)
+                fixed = parse_model_output(
+                    fixed_raw,
+                    delta_max=delta_max,
+                    allow_raw_fallback=(
+                        getattr(fixed_meta, "finish_reason", None) != "length"
+                    ),
+                )
                 if (fixed.reply or "").strip():
                     raw = fixed_raw
                     meta = fixed_meta
                     output = fixed
                     # Última garantía determinista: si aun así cierra con
-                    # pregunta, se recorta la oración interrogativa final.
+                    # pregunta, se recortan las oraciones interrogativas
+                    # finales (puede haber más de una encadenada).
                     if (output.reply or "").rstrip().endswith("?"):
-                        trimmed = strip_trailing_question(output.reply)
+                        trimmed = strip_trailing_questions(output.reply)
                         if trimmed != output.reply:
-                            output.reply = trimmed
+                            output = output._replace(reply=trimmed)
             except Exception:
                 log.warning("No se pudo reparar el cierre interrogatorio")
 
         # Reparaciones de calidad restantes (una regeneración cada una, si
         # produce material mejor que lo actual):
         # 1) Respuesta vacía: reintentar con aviso explícito antes de omitir.
-        if not session_mode and not output.reply:
+        #    Si ya se reintentó por truncamiento, no se apila otra llamada.
+        if not session_mode and not output.reply and not retried_truncation:
             repair = await self._repair_regenerate(
                 messages, EMPTY_REPLY_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
@@ -1320,7 +1759,13 @@ class ConversationService:
                         disable_thinking=quick,
                     )
                     repaired_meta = LLMMeta()
-                repaired = parse_model_output(repaired_raw, delta_max=delta_max)
+                repaired = parse_model_output(
+                    repaired_raw,
+                    delta_max=delta_max,
+                    allow_raw_fallback=(
+                        getattr(repaired_meta, "finish_reason", None) != "length"
+                    ),
+                )
                 if not disconnect_claim_problem(
                     repaired.reply or "", bool(repaired.disconnect)
                 ):
@@ -1345,7 +1790,75 @@ class ConversationService:
         # conserva el valor por defecto.
         if not session_mode:
             stay_active = True
+        if isinstance(output.reply, str):
+            limited = limit_narrative_actions(output.reply)
+            if limited != output.reply:
+                output = output._replace(reply=limited)
         return system_prompt, raw if isinstance(raw, str) else None, meta, output, stay_active
+
+    async def _retry_after_truncation(
+        self, messages, *, session_mode, schema, delta_max, max_tokens
+    ):
+        """Una regeneración cuando la generación se cortó por longitud.
+
+        El techo de tokens se agotó (normalmente razonando) sin dejar un
+        `reply` utilizable. Se reintenta desactivando el thinking y pidiendo
+        explícitamente una respuesta breve con el JSON completo. Devuelve
+        `(raw, meta, output, stay_active)` o `None` si tampoco hay respuesta.
+        """
+        note = (
+            TRUNCATED_REPAIR_SESSION_PROMPT
+            if session_mode
+            else TRUNCATED_REPAIR_PROMPT
+        )
+        repair_messages = [*messages, {"role": "user", "content": note}]
+        log.warning(
+            "Generación cortada por longitud sin respuesta; se reintenta "
+            "desactivando el razonamiento."
+        )
+        try:
+            if hasattr(self.llm, "chat_with_meta"):
+                try:
+                    raw, meta = await self.llm.chat_with_meta(
+                        repair_messages,
+                        schema=schema,
+                        strict_schema=True,
+                        max_tokens=max_tokens,
+                        disable_thinking=True,
+                    )
+                except Exception:
+                    raw, meta = await self.llm.chat_with_meta(
+                        repair_messages,
+                        schema=schema,
+                        max_tokens=max_tokens,
+                        disable_thinking=True,
+                    )
+            else:
+                raw = await self.llm.chat(
+                    repair_messages,
+                    schema=schema,
+                    max_tokens=max_tokens,
+                    disable_thinking=True,
+                )
+                meta = LLMMeta()
+        except Exception:
+            log.warning("La regeneración tras un corte falló", exc_info=True)
+            return None
+        if session_mode:
+            output, stay_active, valid = parse_session_output(
+                raw, delta_max=delta_max
+            )
+            if not valid or output.reply is None:
+                return None
+            return raw, meta, output, stay_active
+        output = parse_model_output(
+            raw,
+            delta_max=delta_max,
+            allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+        )
+        if not output.reply:
+            return None
+        return raw, meta, output, True
 
     async def _repair_regenerate(
         self, messages, note, *, delta_max, max_tokens, disable_thinking
@@ -1383,7 +1896,11 @@ class ConversationService:
                     disable_thinking=disable_thinking,
                 )
                 meta = LLMMeta()
-            fixed = parse_model_output(raw, delta_max=delta_max)
+            fixed = parse_model_output(
+                raw,
+                delta_max=delta_max,
+                allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+            )
         except Exception:
             log.warning("La regeneración de reparación falló", exc_info=True)
             return None
@@ -1425,12 +1942,32 @@ class ConversationService:
             except Exception:
                 log.exception("El hook on_trace falló; se ignora")
 
-    async def _build_search_query(self, user_message):
+    async def _build_search_query(
+        self, user_message, *, context="", topic_terms=()
+    ):
+        prompt_user = user_message
+        context_parts = []
+        if topic_terms:
+            context_parts.append(
+                "Entidades y temas recientes (solo para anclar la consulta; "
+                "no son hechos verificados):\n"
+                + ", ".join(topic_terms)
+            )
+        if context:
+            context_parts.append(
+                "Contexto reciente de la conversación:\n" + context
+            )
+        if context_parts:
+            prompt_user = (
+                "\n\n".join(context_parts)
+                + "\n\nMensaje que hay que convertir en consulta:\n"
+                + user_message
+            )
         try:
             content = await self.llm.chat(
                 [
                     {"role": "system", "content": SEARCH_QUERY_PROMPT},
-                    {"role": "user", "content": user_message},
+                    {"role": "user", "content": prompt_user},
                 ],
                 max_tokens=SEARCH_QUERY_MAX_TOKENS,
                 temperature=0.2,
@@ -1461,6 +1998,7 @@ class ConversationService:
                 f"Hoy he conocido a {who.display_name} por primera vez.",
             )
         self.state.save_users()
+        return is_new
 
     def _add_diary_reflection(self, user_id, text, now):
         """Reflexión en 1ª persona del diario, con dedup y cooldown."""

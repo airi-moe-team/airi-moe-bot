@@ -192,6 +192,10 @@ def test_propose_from_enamored_keeps_the_proposal_pending():
     assert record["pending_proposal"]["target_user_id"] == "42"
     assert state.world["winner_id"] is None
     assert result.proposal_pending is True
+    assert any(
+        getattr(notice, "kind", None) == "relationship_proposed"
+        for notice in result.notices
+    )
     assert state.diary and state.diary[-1]["kind"] == "confession"
 
 
@@ -229,7 +233,11 @@ def test_acceptance_confirms_the_partner_and_enforces_monogamy():
     assert state.relationship(42)["pending_proposal"] is None
     assert state.relationship(9)["stage"] == "interest"
     assert state.entry_points(9) <= FRIENDZONE_CAP
-    assert any("ahora son pareja" in n for n in result.notices)
+    assert any(
+        getattr(notice, "kind", None) == "relationship_confirmed"
+        and "ahora son pareja" in getattr(notice, "text", "")
+        for notice in result.notices
+    )
 
 
 def test_a_second_user_cannot_accept_someone_elses_proposal():

@@ -20,22 +20,76 @@ import discord
 
 from airi.discord_bot import embeds, turn
 from airi.domain import spectator
-from airi.domain.constants import DATE_DELTA_MAX
+from airi.domain.constants import AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS, DATE_DELTA_MAX
 from airi.domain.spectator import load_policy, load_stable_profile
-from airi.services import spectator_policy as spectator_policy_module
-from airi.services.channel_queue import ChannelDispatcher
-from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
-from airi.services.spectator_policy import ActivitiesCooldown
-from airi.services.spectator_session import (
-    ConversationState,
-    SpectatorSessionRegistry,
-)
 from airi.observability.interaction_tracker import (
     current_tracker,
     tracked_interaction,
 )
+from airi.services import spectator_policy as spectator_policy_module
+from airi.services.channel_queue import ChannelDispatcher
+from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
+from airi.services.pending_message import PendingMessageTracker
+from airi.services.spectator_policy import ActivitiesCooldown
+from airi.services.spectator_session import (
+    SpectatorSessionRegistry,
+)
 
 log = logging.getLogger(__name__)
+
+PENDING_MAX_AGE_SECONDS = 86400
+
+
+def _epoch(value):
+    """Convierte un instante (datetime o epoch) a epoch en segundos."""
+    timestamp = getattr(value, "timestamp", None)
+    if timestamp is not None:
+        try:
+            return float(timestamp())
+        except Exception:
+            pass
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def pending_user_message(
+    history,
+    bot_id,
+    *,
+    now=None,
+    max_age=PENDING_MAX_AGE_SECONDS,
+    command_prefix="!",
+):
+    """Último mensaje del canal si Airi todavía no lo ha contestado."""
+    if not history:
+        return None
+    last = history[0]
+    author = getattr(last, "author", None)
+    if author is None or getattr(author, "bot", False):
+        return None
+    if getattr(author, "id", None) == bot_id:
+        return None
+    content = (getattr(last, "content", "") or "").strip()
+    command_like = bool(command_prefix and content.startswith(command_prefix))
+    attachments = getattr(last, "attachments", None) or []
+    has_media = bool(attachments)
+    if command_like:
+        return None
+    if not content and not has_media:
+        return None
+    created_at = getattr(last, "created_at", None)
+    if max_age is not None and created_at is not None:
+        current = _epoch(now) if now is not None else time.time()
+        created = _epoch(created_at)
+        if now is None and created > current + 86400:
+            age = 0
+        else:
+            age = current - created
+        if age >= float(max_age):
+            return None
+    return last
 
 
 class _Debouncer:
@@ -106,6 +160,7 @@ def create_client(
     channel_id,
     on_ready_extra=None,
     manual_shutdown=None,
+    pending_state=None,
 ):
     intents = discord.Intents.default()
     intents.message_content = True
@@ -113,7 +168,11 @@ def create_client(
     debounce = _Debouncer()
     dispatcher = ChannelDispatcher()
     timers = {}
+    pending_message_tracker = PendingMessageTracker(state=pending_state)
     shutdown = {"started": False, "phase": "running"}
+    client._spectator_timers = timers
+    client._spectator_dispatcher = dispatcher
+    client._pending_message_tracker = pending_message_tracker
 
     async def _resolve_channel(target_id=None):
         target = channel_id if target_id is None else target_id
@@ -136,13 +195,14 @@ def create_client(
         """Conecta la decisión de Airi con el cierre global del cliente."""
         ctx.is_shutting_down = lambda: bool(shutdown["started"])
 
-        async def request_shutdown(reason, user_id=None):
+        async def request_shutdown(reason, user_id=None, correlation_id=None):
             if shutdown["started"]:
                 log.info("Cierre ya en curso; se ignora la solicitud duplicada")
                 return
             shutdown["started"] = True
             shutdown["phase"] = "closing"
             clean_reason = str(reason or "").strip()[:300]
+            requested_at = time.time()
             log.info("Airi decide desconectarse: %s", clean_reason)
 
             persistence = getattr(ctx, "persistence", None)
@@ -156,6 +216,10 @@ def create_client(
                                 "user_id": (
                                     str(user_id) if user_id is not None else ""
                                 ),
+                                "origin": "model",
+                                "correlation_id": str(correlation_id or ""),
+                                "requested_at": requested_at,
+                                "updated_at": requested_at,
                                 "status": "closing",
                                 "context_delivered": False,
                             }
@@ -170,8 +234,15 @@ def create_client(
                     with persistence.transaction():
                         entry = ctx.state.world.get("last_shutdown")
                         if not isinstance(entry, dict):
-                            entry = {"kind": "self", "reason": clean_reason}
+                            entry = {
+                                "kind": "self",
+                                "reason": clean_reason,
+                                "origin": "model",
+                                "correlation_id": str(correlation_id or ""),
+                                "requested_at": requested_at,
+                            }
                         entry["status"] = status
+                        entry["updated_at"] = time.time()
                         ctx.state.world["last_shutdown"] = entry
                         ctx.state.save_world()
                 except Exception:
@@ -224,23 +295,31 @@ def create_client(
         if state is None:
             return
         persistence = ms.get("persistence")
+        now = time.time()
 
         def build_entry():
             return {
                 "kind": "self",
                 "reason": str(ms.get("reason") or "").strip()[:300],
                 "user_id": "",
+                "origin": "manual",
+                "correlation_id": "",
+                "requested_at": now,
+                "updated_at": now,
                 "status": status,
                 "context_delivered": False,
             }
 
+        def next_entry(current):
+            if status == "closing" or not isinstance(current, dict):
+                return build_entry()
+            current["status"] = status
+            current["updated_at"] = now
+            return current
+
         if persistence is None:
             try:
-                entry = state.world.get("last_shutdown")
-                if not isinstance(entry, dict):
-                    entry = build_entry()
-                else:
-                    entry["status"] = status
+                entry = next_entry(state.world.get("last_shutdown"))
                 state.world["last_shutdown"] = entry
                 state.save_world()
             except Exception:
@@ -248,11 +327,7 @@ def create_client(
             return
         try:
             with persistence.transaction():
-                entry = state.world.get("last_shutdown")
-                if not isinstance(entry, dict):
-                    entry = build_entry()
-                else:
-                    entry["status"] = status
+                entry = next_entry(state.world.get("last_shutdown"))
                 state.world["last_shutdown"] = entry
                 state.save_world()
         except Exception:
@@ -327,12 +402,12 @@ def create_client(
                     await channel.send(embed=embeds.connected_embed())
                 except Exception:
                     log.exception("No se pudo enviar el aviso de conexión")
+            if on_ready_extra is not None:
+                try:
+                    await on_ready_extra(client)
+                except Exception:
+                    log.exception("La tarea de arranque posterior falló")
             install_manual_shutdown_hook()
-        if on_ready_extra is not None:
-            try:
-                await on_ready_extra(client)
-            except Exception:
-                log.exception("La tarea de arranque posterior falló")
 
     @client.event
     async def on_message(message):
@@ -355,7 +430,7 @@ def create_client(
 
             tracker.module_result("discord_input", "activated")
 
-            ctx = build_ctx(message.channel)
+            ctx = build_ctx(message.channel, pending_message_tracker)
             _wire_shutdown(ctx)
             ctx.reset_conversation = (
                 lambda ch_id, author_id: _reset_conversation(ctx, ch_id, author_id)
@@ -510,7 +585,9 @@ def create_client(
                 await dispatcher.submit(
                     message.channel.id,
                     lambda: turn.run_user_turn(
-                        ctx, message.channel, message.author, merged, reply_target=message
+                        ctx, message.channel, message.author, merged,
+                        reply_target=message,
+                        consumed_message_ids=merged_ids,
                     ),
                     message_ids=[getattr(message, "id", None)],
                 )
@@ -529,6 +606,7 @@ def create_client(
                             merged,
                             reply_target=message,
                             kind="active",
+                            consumed_message_ids=merged_ids,
                         )
                         return
                     if current == "SPECTATING":
@@ -1189,7 +1267,7 @@ def run_bot(argv=None):
     CONFESS_THRESHOLD = int(os.getenv("CONFESS_THRESHOLD", "100"))
     manual_shutdown_reason = (
         os.getenv("AIRI_SHUTDOWN_REASON", "").strip()
-        or "se fue a dormir"
+        or "😴 Airi se fue a dormir..."
     )[:300]
 
     # Datos globales
@@ -1288,8 +1366,10 @@ def run_bot(argv=None):
                         bool(outcome.discovery),
                         outcome.self_entry is not None,
                     )
+                return outcome
         except Exception:
             log.exception("La reflexión automática falló")
+            return None
         finally:
             reflection_inflight.discard(key)
 
@@ -1358,7 +1438,7 @@ def run_bot(argv=None):
             "quarantine_path": boot.load.quarantine_path,
         }
 
-    def build_ctx(channel):
+    def build_ctx(channel, pending_message_tracker=None):
         # Política efectiva del modo espectador, recalculada del entorno.
         # El buffer y el cooldown SON COMPARTIDOS entre mensajes (vida social
         # continua); solo la política se recalcula por mensaje.
@@ -1400,9 +1480,12 @@ def run_bot(argv=None):
             log_diary_event=state.log_diary_event,
         )
         ctx.passive_buffer = shared_spectator_buffer
+        ctx.pending_message_tracker = pending_message_tracker
         ctx.spectator_policy = spectator_policy
         ctx.spectator_gate = shared_spectator_gate
         ctx.spectator_session = shared_spectator_session
+        ctx.timers = getattr(client, "_spectator_timers", None)
+        ctx.dispatcher = getattr(client, "_spectator_dispatcher", None)
         ctx.handle_scene_choice = (
             lambda interaction, payload: discord_turn.handle_scene_choice(
                 ctx, interaction, payload
@@ -1444,6 +1527,92 @@ def run_bot(argv=None):
                     apply_winner_lock(world_data, affinity_data)
                     state.save_affinity()
         return None
+
+    async def seed_last_human_activity(discord_client):
+        """Siembra last_human_activity y decide el estado inicial.
+
+        Si hay un mensaje humano pendiente (no respondido y reciente),
+        responde a ese mensaje y entra en ACTIVE. Si no hay pendiente
+        válido, entra en SPECTATING.
+        """
+        try:
+            if not load_policy().enabled:
+                return
+            channel = discord_client.get_channel(CHANNEL_ID)
+            if channel is None:
+                channel = await discord_client.fetch_channel(CHANNEL_ID)
+            if channel is None:
+                return
+
+            # Leer historial del canal (limite conservador para busqueda)
+            history = []
+            hist = channel.history(limit=50)
+            if asyncio.iscoroutine(hist):
+                hist = await hist
+            async for message in hist:
+                history.append(message)
+
+            tracker = getattr(discord_client, "_pending_message_tracker", None)
+            if tracker is None:
+                tracker = PendingMessageTracker()
+
+            # Encontrar el ultimo mensaje humano pendiente (no respondido)
+            pending = tracker.find_pending_message(
+                history,
+                bot_id=int(discord_client.user.id),
+                max_age=AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS,
+            )
+
+            if pending is not None:
+                # Hay mensaje pendiente: responder a el y entrar en ACTIVE
+                epoch = _epoch(getattr(pending, "created_at", None))
+                if epoch <= 0:
+                    return
+                shared_spectator_session.record_human_activity(
+                    channel.id, now=epoch
+                )
+                log.info(
+                    "Mensaje pendiente encontrado en canal %s (id=%s); "
+                    "iniciando respuesta dirigida",
+                    channel.id,
+                    getattr(pending, "id", ""),
+                )
+                pending_author = getattr(pending, "author", None)
+                if pending_author is None or getattr(pending_author, "bot", False):
+                    pending_author = type(
+                        "SyntheticUser", (),
+                        {"id": 0, "display_name": "usuario", "bot": False},
+                    )()
+                pending_text = (getattr(pending, "content", "") or "").strip()
+                if not pending_text:
+                    pending_text = "(mensaje sin texto)"
+                try:
+                    await turn.run_user_turn(
+                        build_ctx(channel, tracker),
+                        channel,
+                        pending_author,
+                        [(pending_author, pending_text)],
+                        reply_target=pending,
+                        kind="active",
+                        suppress_affinity=True,
+                        consumed_message_ids=[getattr(pending, "id", None)],
+                    )
+                except Exception:
+                    log.exception("Fallo la respuesta al mensaje pendiente")
+                # Notamos respuesta; sin timer proactivo (usuario activo).
+            else:
+                # No hay mensaje pendiente: entrar en SPECTATING.
+                pass
+        except Exception:
+            log.exception("No se pudo sembrar la actividad inicial del canal")
+
+    async def on_ready_extra(discord_client):
+        # Seed PRIMERO para no "matar" la última interacción humana.
+        try:
+            await seed_last_human_activity(discord_client)
+        except Exception:
+            log.exception("Fallo al sembrar la actividad inicial; se continúa el arranque")
+        await resume_pending(discord_client)
 
     async def resume_pending(discord_client):
         """Reanuda respuestas confirmadas que no llegaron a publicarse."""
@@ -1489,12 +1658,13 @@ def run_bot(argv=None):
         build_ctx=build_ctx,
         registry=registry,
         channel_id=CHANNEL_ID,
-        on_ready_extra=resume_pending,
+        on_ready_extra=on_ready_extra,
         manual_shutdown={
             "state": state,
             "persistence": persistence,
             "reason": manual_shutdown_reason,
         },
+        pending_state=state,
     )
 
     def log_startup():

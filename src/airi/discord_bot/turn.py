@@ -38,6 +38,7 @@ from airi.domain.dates import (
     new_date_session,
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
+from airi.domain.notices import discovery_notice, self_changed_notice
 from airi.domain.text_filters import clean_reply
 from airi.domain.texts import (
     DATE_QUESTION_MISSED_TEXT,
@@ -122,8 +123,22 @@ async def send_long_message(channel, content, *, reference=None):
         first_chunk = False
 
 
-async def send_gif_bytes(ctx, channel, user, gif_type, data):
-    """Envía el embed emocional con el GIF y el pie de afinidad.
+def affinity_footer_for_change(ctx, user, affinity_delta):
+    """Pie de afinidad solo cuando el turno movió los puntos.
+
+    Evita repetir el mismo "N pts" en cada respuesta: sin cambio no hay pie.
+    Con cambio se añade el delta explícito, p. ej. "· (+1)".
+    """
+    if user is None or not affinity_delta:
+        return ""
+    base = ctx.affinity_footer(user)
+    if not base:
+        return ""
+    return f"{base} ({int(affinity_delta):+d})"
+
+
+async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0):
+    """Envía el embed emocional con el GIF y, si hubo cambio, la afinidad.
 
     Si el proveedor no devolvió bytes, el embed se envía igualmente sin imagen:
     la afinidad del turno nunca debe desaparecer por un fallo de NekosBest.
@@ -139,10 +154,11 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data):
             title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
             color=embeds.GIF_EMBED_COLOR,
         )
-        if user is not None:
+        footer = affinity_footer_for_change(ctx, user, affinity_delta)
+        if footer:
             avatar = getattr(user, "display_avatar", None)
             embed.set_footer(
-                text=ctx.affinity_footer(user),
+                text=footer,
                 icon_url=avatar.url if avatar is not None else None,
             )
         if data:
@@ -161,6 +177,38 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data):
         log.exception("Discord no pudo enviar el GIF")
 
 
+def _turn_consumed_ids(
+    consumed_message_ids=(), spectator_trigger_ids=(), spectator_snapshot=()
+):
+    """IDs de mensajes que el turno incorporó y que quedan atendidos."""
+    ids = {str(message_id) for message_id in consumed_message_ids if message_id}
+    ids.update(str(message_id) for message_id in spectator_trigger_ids if message_id)
+    ids.update(
+        str(entry.get("message_id"))
+        for entry in spectator_snapshot
+        if isinstance(entry, dict) and entry.get("message_id")
+    )
+    return ids
+
+
+def _mark_turn_answered(ctx, channel, reply_target, consumed_ids):
+    """Marca como respondidos todos los mensajes cubiertos por el turno.
+
+    No basta con el `reply_target`: un turno de espectador también responde
+    sobre los mensajes del snapshot pasivo, y el debounce puede agrupar varios.
+    Se marca solo cuando el publisher confirma la publicación (invariante I3).
+    """
+    tracker = getattr(ctx, "pending_message_tracker", None)
+    if tracker is None:
+        return
+    ids = {str(message_id) for message_id in consumed_ids if message_id}
+    message_id = getattr(reply_target, "id", None)
+    if message_id is not None:
+        ids.add(str(message_id))
+    if ids:
+        tracker.mark_answered_many(channel.id, ids)
+
+
 async def run_user_turn(
     ctx,
     channel,
@@ -177,6 +225,7 @@ async def run_user_turn(
     spectator_guaranteed=False,
     spectator_handoff=False,
     spectator_trigger_ids=(),
+    consumed_message_ids=(),
 ):
     """Procesa un turno (texto libre o botón de cita) y lo traduce a Discord."""
     channel_id = channel.id
@@ -190,6 +239,8 @@ async def run_user_turn(
 
     state = ctx.state
     registry = getattr(ctx, "spectator_session", None)
+    if registry is not None:
+        registry.mark_turn_started(channel.id)
     if registry is not None and kind in ("spectator", "proactive"):
         try:
             gen = registry.session(channel.id).generation
@@ -232,6 +283,11 @@ async def run_user_turn(
                 journal = getattr(ctx, "turn_journal", None)
                 persistence = getattr(ctx, "persistence", None)
                 message_id = getattr(reply_target, "id", None)
+                consumed_ids = _turn_consumed_ids(
+                    consumed_message_ids,
+                    spectator_trigger_ids,
+                    spectator_snapshot,
+                )
                 _turn_tracker = current_tracker()
                 if (
                     _turn_tracker is not None
@@ -249,6 +305,9 @@ async def run_user_turn(
                             committed.result,
                             reply_target=reply_target,
                         )
+                        # Registrar como respondidos todos los mensajes que el
+                        # turno cubrió (invariante I2).
+                        _mark_turn_answered(ctx, channel, reply_target, consumed_ids)
 
                     coordinator = TurnCoordinator(
                         service=service,
@@ -288,18 +347,20 @@ async def run_user_turn(
                 )
                 if finish == "length":
                     text = (
-                        "La respuesta se cortó antes de terminar. "
-                        "¿Me lo repites o lo intentamos de nuevo?"
+                        "Tu pregunta o comentario dejó a Airi pensando tanto que "
+                        "se olvidó de responder. _Se quedó mirando al vacío como "
+                        "si estuviera resolviendo el sentido de la vida._ "
+                        "Inténtalo de nuevo, antes de que le eche humo la cabeza."
                     )
+                    title = "🧠 Airi pensó demasiado..."
                 else:
                     text = (
                         "No he podido generar una respuesta válida esta vez. "
                         "¿Lo intentamos de nuevo?"
                     )
+                    title = "⚠️ Generación fallida"
                 await channel.send(
-                    embed=embeds.system_embed(
-                        text, title="⚠️ Generación fallida"
-                    )
+                    embed=embeds.system_embed(text, title=title)
                 )
                 if registry is not None and kind in ("spectator", "proactive"):
                     try:
@@ -362,11 +423,51 @@ async def run_user_turn(
                 except Exception:
                     pass
 
+            # Armar temporizador de inactividad activa si el canal quedó ACTIVE
+            # (cubre turnos proactivo/espectador que transicionan a ACTIVE y el
+            # arranque con mensaje pendiente; evita quedarse ACTIVE indefinido).
+            try:
+                _reg = getattr(ctx, "spectator_session", None)
+                _timers = getattr(ctx, "timers", None)
+                _dispatcher = getattr(ctx, "dispatcher", None)
+                if _reg is not None and _timers is not None and _dispatcher is not None:
+                    if _reg.state(channel.id).name == "ACTIVE":
+                        key = (str(channel.id), "active")
+                        old = _timers.pop(key, None)
+                        if old is not None:
+                            old.cancel()
+                        timeout = getattr(_reg, "active_idle_seconds", 120.0)
+                        gen = _reg.session(channel.id).generation
+                        async def _active_timer():
+                            try:
+                                await asyncio.sleep(float(timeout))
+                            except asyncio.CancelledError:
+                                return
+                            async def _job():
+                                r = _reg
+                                if r.retire_if_idle(channel.id, gen, time.time(), timeout):
+                                    log.info(
+                                        "Retirada por inactividad en canal %s",
+                                        channel.id,
+                                    )
+                            try:
+                                await _dispatcher.submit(channel.id, _job)
+                            except Exception:
+                                log.exception(
+                                    "No se pudo procesar el retiro por inactividad"
+                                )
+                        _timers[key] = asyncio.create_task(_active_timer())
+            except Exception:
+                log.exception("No se pudo armar el temporizador de inactividad activa")
+
             # El motivo del cierre anterior es de un solo uso: solo se marca
             # entregado cuando la respuesta ya se publicó correctamente.
             acknowledge = getattr(ctx, "acknowledge_reconnect_context", None)
             if callable(acknowledge):
                 await acknowledge()
+
+            if registry is not None:
+                registry.mark_turn_finished(channel.id)
 
             now = time.time()
             uid = author_id
@@ -451,14 +552,35 @@ async def run_user_turn(
                     (state.users.get(str(uid)) or {}).get("interactions", 0) or 0
                 )
                 if state.should_reflect_self(interactions=interactions, now=now):
-                    asyncio.create_task(maybe_reflect(uid, now))
+                    asyncio.create_task(
+                        _reflect_and_publish(channel, uid, now, maybe_reflect)
+                    )
 
             # La marcha se solicita al final: la despedida y los efectos
             # confirmados del turno/cita ya se publicaron y persistieron.
             if result.disconnect_reason:
-                await ctx.request_shutdown(
-                    result.disconnect_reason, user_id=author_id
+                correlation_id = (
+                    getattr(result.trace, "correlation_id", "")
+                    if result.trace is not None
+                    else ""
                 )
+                requested_at = time.time()
+                await ctx.request_shutdown(
+                    result.disconnect_reason,
+                    user_id=author_id,
+                    correlation_id=correlation_id,
+                )
+                if result.trace is not None:
+                    result.trace.shutdown_request = {
+                        "origin": "model",
+                        "reason": result.disconnect_reason,
+                        "user_id": str(author_id),
+                        "correlation_id": correlation_id,
+                        "requested_at": requested_at,
+                    }
+                    traces = getattr(state, "traces", None)
+                    if traces is not None:
+                        await traces.update(result.trace)
 
     except StaleTurnError:
         log.warning("Turno descartado porque el estado cambió durante la generación")
@@ -532,12 +654,30 @@ async def _publish_result(ctx, channel, author, result, *, reply_target=None, su
         ctx, channel,
         None if suppress_affinity else author,
         result.gif, result.gif_bytes,
+        affinity_delta=getattr(result, "affinity_applied", 0),
     )
     for notice in result.notices:
         try:
             await channel.send(embed=embeds.notice_embed(notice))
         except discord.HTTPException:
             log.warning("No se pudo enviar el aviso post-turno")
+
+
+async def _reflect_and_publish(channel, uid, now, reflect):
+    """Ejecuta la reflexión en segundo plano y publica sus avisos."""
+    try:
+        outcome = await reflect(uid, now)
+        if outcome is None:
+            return
+        notices = []
+        if getattr(outcome, "discovery", None):
+            notices.append(discovery_notice(user_id=str(uid)))
+        if getattr(outcome, "self_entry", None):
+            notices.append(self_changed_notice(user_id=str(uid)))
+        for notice in notices:
+            await channel.send(embed=embeds.notice_embed(notice))
+    except Exception:
+        log.exception("No se pudo publicar la reflexión automática")
 
 
 async def _send_question(ctx, channel, uid, date_session, *, now):

@@ -27,7 +27,6 @@ from airi.domain.self_model import (
     migrate_from_world,
     normalize_self,
     should_reflect,
-    sync_preferences_from_self,
 )
 from airi.domain.self_notes import (
     NOTES_KEY,
@@ -197,13 +196,12 @@ class AppState:
     # ------------------------------------------------------------------
 
     def self_model(self) -> dict:
-        """Devuelve el "yo" mutable, sembrándolo desde preferences si falta."""
+        """Devuelve el "yo" mutable, sembrándolo si falta."""
         model = self.world.get("self")
         if not isinstance(model, dict):
             model = migrate_from_world(self.world)
             self.world["self"] = model
         normalize_self(model)
-        sync_preferences_from_self(self.world)
         return model
 
     def save_identity(self) -> None:

@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from airi.services.conversation import (
-    SELF_CHANGED_NOTICE,
-    ConversationService,
-    TurnContext,
-)
+from airi.services.conversation import ConversationService, TurnContext
 from airi.testing import FakeLLM, FakeNotifier, FakeUser, llm_json, make_state
 
 NOW = 1_000_000.0
@@ -97,4 +93,8 @@ def test_turn_sends_identity_notice_only_after_a_change():
             DAVID, [(DAVID, "te cuento algo")], TurnContext()
         )
     )
-    assert SELF_CHANGED_NOTICE in notifier.sent
+    assert any(
+        getattr(notice, "kind", None) == "self_changed"
+        and "identidad-airi" not in getattr(notice, "text", "")
+        for notice in notifier.sent
+    )

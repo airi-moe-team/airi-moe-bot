@@ -61,6 +61,14 @@
   - Cubrir con pruebas unitarias e integración: una sola intervención por ventana, cancelación al entrar actividad humana, tolerancia del historial sintético por consumidores y aislamiento de rankings/afinidad.
   - _Requirements: 1.4, 4.2, 4.3, 6.1, 6.2_
 
+- [x] 9. Arranque: recuperación del último mensaje humano pendiente
+  - Implementar `services/pending_message.py` (`PendingMessageTracker`): registro de IDs respondidos por canal persistido en `state.world['answered_message_ids']` con carga al construirse y guardado de mejor esfuerzo tras cada marca; exclusión de bots, comandos, vacíos y respondidos; límite de antigüedad configurable vía `AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS`.
+  - Compatibilidad de claves de canal: aceptar `entry.channel.id` (discord.Message) y `entry.channel_id` (fakes de prueba) para que un mensaje ya respondido no vuelva a ser candidato tras reinicio (invariante I2).
+  - Implementar `seed_last_human_activity` en el arranque (`on_ready_extra`): examinar historial reciente, responder únicamente al último pendiente válido y entrar en Activa; sin candidato, entrar en Espectadora sin respuesta artificial. El embed de conexión no computa actividad humana.
+  - Marcar respondido solo dentro del publisher tras publicación exitosa (invariante I3); fallo de generación/publicación conserva el mensaje como recuperable (T13/T14) y `resume_pending` concilia envíos confirmados pendientes antes de reintentar (T15).
+  - Cubrir con pruebas unitarias (`tests/unit/test_pending_message.py`): pendiente válido, exclusión de comandos/bots/respondidos (incluida la variante discord-real con `channel.id`), persistencia a través de reinicio y aislamiento por canal.
+  - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.7, 7.8, 7.9_
+
 - [x] 8. Cierre, observabilidad y verificación de extremo a extremo
   - Cancelar y esperar limpiamente las tareas de temporizador al cierre del cliente sin perder la despedida ni el comportamiento de apagado manual existente.
   - Emitir eventos de transición estructurados (estado previo/nuevo, motivo, generación) sin contenidos ni identificadores de autores; los eventos tuercen el detalle de la traza del turno ya existente sin duplicarla.

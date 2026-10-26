@@ -32,10 +32,13 @@ class FakeLLM:
     para simular un servidor que no soporta salida estructurada estricta.
     """
 
-    def __init__(self, replies=None, default_reply="{}", strict_error=None):
+    def __init__(self, replies=None, default_reply="{}", strict_error=None,
+                 metas=None):
         self.replies = list(replies or [])
         self.default_reply = default_reply
         self.strict_error = strict_error
+        # Metadatos opcionales por respuesta (p. ej. finish_reason="length").
+        self.metas = list(metas or [])
         self.calls = []  # dicts con messages/schema/max_tokens/temperature/...
 
     async def chat(self, messages, *, schema=None, max_tokens=None,
@@ -60,9 +63,14 @@ class FakeLLM:
         })
         if strict_schema and self.strict_error is not None:
             raise self.strict_error
+        meta = (
+            self.metas.pop(0)
+            if self.metas
+            else LLMMeta(finish_reason="stop", usage={})
+        )
         if self.replies:
-            return self.replies.pop(0), LLMMeta(finish_reason="stop", usage={})
-        return self.default_reply, LLMMeta(finish_reason="stop", usage={})
+            return self.replies.pop(0), meta
+        return self.default_reply, meta
 
     @property
     def last_system_prompt(self):
@@ -81,3 +89,4 @@ class FakeLLM:
         Útil para `airi.replay` que necesita la respuesta cruda del modelo.
         """
         self.replies = [raw_string]
+        self.metas = []

@@ -65,7 +65,7 @@ def _setup(monkeypatch, *, manual_shutdown):
     FakeClient.instances.clear()
     channel = FakeChannel()
 
-    def build_ctx(_ch):
+    def build_ctx(_ch, pending_message_tracker=None):
         from airi.discord_bot.context import BotContext
         from airi.services.state import AppState
 
@@ -146,6 +146,10 @@ def test_ctrl_c_sends_disconnect_embed_and_saves_reason(monkeypatch):
     assert entry["kind"] == "self"
     assert entry["reason"] == "se fue a dormir"
     assert entry["status"] == "confirmed"
+    assert entry["origin"] == "manual"
+    assert entry["correlation_id"] == ""
+    assert entry["requested_at"] > 0
+    assert entry["updated_at"] >= entry["requested_at"]
     assert entry["context_delivered"] is False
     assert persistence.commits >= 1
 

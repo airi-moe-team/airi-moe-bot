@@ -7,6 +7,7 @@ import pytest
 
 from airi.domain.constants import LLM_SHORT_MAX_TOKENS, SEARCH_QUERY_MAX_TOKENS
 from airi.domain.dates import new_date_session
+from airi.ports.llm import LLMMeta
 from airi.services.conversation import (
     GROUNDED_FALLBACK_TEXT,
     ConversationService,
@@ -272,6 +273,11 @@ def test_turn_level_up_logs_diary_and_reflection():
     assert result.leveled_up is True
     assert result.level_before == "Conocida"
     assert result.level_after == "Amiga"
+    assert any(
+        getattr(notice, "kind", None) == "level_up"
+        and "Amiga" in getattr(notice, "text", "")
+        for notice in result.notices
+    )
     kinds = [k for k, _uid, _t in counters["diary_logs"]]
     assert "level" in kinds
     assert result.diary_saved is True
@@ -288,7 +294,11 @@ def test_turn_memory_saved_sends_notice():
 
     assert result.memory_saved is True
     assert counters["memories"] == 1
-    assert "Airi recordará este evento" in notifier.sent
+    assert any(
+        getattr(notice, "kind", None) == "memory_saved"
+        and "Airi recordará este evento" in getattr(notice, "text", "")
+        for notice in notifier.sent
+    )
     entries = state.user_memories(42)
     assert any("ramen" in e["text"] for e in entries)
 
@@ -302,7 +312,49 @@ def test_turn_memory_none_does_not_notify():
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
     assert result.memory_saved is False
-    assert notifier.sent == []
+    assert all(
+        getattr(notice, "kind", None) != "memory_saved"
+        for notice in notifier.sent
+    )
+
+
+def test_turn_first_meeting_emits_notice_only_once():
+    state, _ = make_state()
+    notifier = FakeNotifier()
+    llm = FakeLLM(replies=[llm_json("Hola~"), llm_json("Otra vez~")])
+    svc = make_service(llm, state, notifier=notifier)
+
+    first = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+    second = run(svc.run_turn(DAVID, [(DAVID, "hola otra vez")], TurnContext()))
+
+    assert any(
+        getattr(notice, "kind", None) == "meet"
+        and "David" in getattr(notice, "text", "")
+        for notice in first.notices
+    )
+    assert all(
+        getattr(notice, "kind", None) != "meet"
+        for notice in second.notices
+    )
+
+
+def test_turn_negative_reaction_blocks_positive_affinity_and_memory():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json(
+        "Ay, lo siento...",
+        affinity_delta=1,
+        affinity_event="KOKODA me ayudó a corregir detalles",
+        memory="KOKODA ayuda a corregir detalles",
+    )])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "noooooooo")], TurnContext()))
+
+    assert result.affinity_delta == 1
+    assert result.affinity_applied == 0
+    assert state.entry_points(DAVID.id) == 0
+    assert result.memory_saved is False
+    assert state.user_memories(DAVID.id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +377,11 @@ def test_turn_web_search_reformulates_and_uses_context():
         DAVID, [(DAVID, "búscame en internet el precio de bitcoin")], TurnContext()
     ))
 
-    assert "Un momentito, estoy buscando información en la web..." in notifier.sent
+    assert any(
+        getattr(notice, "kind", None) == "web_search"
+        and "buscando información en la web" in getattr(notice, "text", "")
+        for notice in notifier.sent
+    )
     assert search.queries == ["precio bitcoin hoy"]
     assert "30k" in result.reply
     assert result.grounded is True
@@ -394,6 +450,213 @@ def test_turn_no_web_when_disabled():
     assert search.queries == []
     assert result.web_context is None
     assert "=== RESULTADOS DE BÚSQUEDA ===" not in llm.last_system_prompt
+
+
+def _history_entry(role, content):
+    if role == "assistant":
+        return {"role": "assistant", "content": json.dumps({"reply": content})}
+    return {
+        "role": "user",
+        "content": content,
+        "author_id": str(DAVID.id),
+        "author_name": DAVID.display_name,
+    }
+
+
+def test_turn_search_on_correction_uses_conversation_context():
+    history = [
+        _history_entry("user", "que personaje mas te gusta de esa serie?"),
+        _history_entry("assistant", "¡Frieren, sin duda!"),
+        _history_entry("user", "Eisen no era el enano?"),
+        _history_entry("assistant", "Eisen es el elfo, el enano es Stark"),
+    ]
+    state, _ = make_state(histories={0: history})
+    search = FakeSearch(
+        result=(
+            "Fuente 1: Frieren\nURL: https://x.test\n"
+            "Resumen: Eisen es el enano y Stark el guerrero humano"
+        )
+    )
+    llm = FakeLLM(replies=[
+        "Frieren personajes Eisen Stark enano elfo",
+        llm_json("Eisen es el enano y Stark el humano~"),
+    ])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "uhm creo que te estas confundiendo puedes buscarlo por inernet")],
+        TurnContext(channel_id=0),
+    ))
+
+    assert search.queries == ["Frieren personajes Eisen Stark enano elfo"]
+    query_prompt = llm.calls[0]["messages"][1]["content"]
+    assert "Eisen" in query_prompt
+    assert "Stark" in query_prompt
+    assert result.web_context is not None
+
+
+def test_turn_search_query_ancla_un_tema_que_ya_salio_del_historial():
+    """El tema de un turn_record antiguo debe seguir anclando la búsqueda."""
+    state, _ = make_state(
+        histories={
+            0: [
+                _history_entry("user", "qué opinas de los animes?"),
+                _history_entry("assistant", "Me entretienen bastante~"),
+                _history_entry("user", "Stark era el héroe, no?"),
+                _history_entry("assistant", "Sí, Stark es el héroe."),
+            ]
+        }
+    )
+    state.turn_records["0:123"] = {
+        "channel_id": "0",
+        "reply_text": "Estábamos hablando de Frieren y de su héroe.",
+        "updated_at": NOW - 1_000,
+    }
+    search = FakeSearch(
+        result=(
+            "Fuente 1: Re:Zero\nURL: https://x.test\n"
+            "Resumen: otro anime con otro protagonista"
+        )
+    )
+    llm = FakeLLM(replies=[
+        "cuál es el héroe correcto del anime",
+        llm_json("¿Podrías decirme cuál es el héroe correcto?"),
+    ])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "otra vez te equivocas, el héroe no es el correcto")],
+        TurnContext(channel_id=0),
+    ))
+
+    query_prompt = llm.calls[0]["messages"][1]["content"]
+    assert "Frieren" in query_prompt
+    assert result.reply == GROUNDED_FALLBACK_TEXT
+    assert result.grounded is False
+    assert result.trace.web_relevant is False
+    assert result.trace.search_query == "cuál es el héroe correcto del anime"
+
+
+def test_turn_explicit_search_no_usa_el_tema_viejo_como_gate():
+    """Un tema nuevo explícito no debe compararse con el ancla anterior."""
+    history = [
+        _history_entry("assistant", "Frieren y Stark son geniales."),
+    ]
+    state, _ = make_state(histories={0: history})
+    state.turn_records["0:123"] = {
+        "channel_id": "0",
+        "reply_text": "Frieren y Stark son geniales.",
+        "updated_at": NOW - 1_000,
+    }
+    search = FakeSearch(
+        result=(
+            "Fuente 1: BTC\nURL: https://x.test\n"
+            "Resumen: el precio ronda los 30k"
+        )
+    )
+    llm = FakeLLM(replies=[
+        "precio bitcoin hoy",
+        llm_json("El precio ronda los 30k según he buscado~"),
+    ])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "búscame en internet el precio de bitcoin")],
+        TurnContext(channel_id=0),
+    ))
+
+    assert result.reply != GROUNDED_FALLBACK_TEXT
+    assert result.grounded is True
+    assert result.trace.web_relevant is True
+
+
+def test_turn_correction_prioriza_al_usuario_y_guarda_memoria():
+    history = [
+        _history_entry("assistant", "El héroe de esa serie es Stark."),
+    ]
+    state, _ = make_state(histories={0: history})
+    search = FakeSearch(
+        result=(
+            "Fuente 1: Frieren\nURL: https://x.test\n"
+            "Resumen: el héroe que amaba Frieren era Himmel"
+        )
+    )
+    llm = FakeLLM(replies=[
+        "Frieren héroe Himmel",
+        llm_json("Tienes razón, el héroe era Himmel~"),
+    ])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "te equivocas, el héroe de Frieren no es Stark")],
+        TurnContext(channel_id=0),
+    ))
+
+    assert "CORRECCIÓN DEL USUARIO (PRIORIDAD)" in llm.last_system_prompt
+    assert "El héroe de esa serie es Stark" in llm.last_system_prompt
+    assert result.memory_saved is True
+    memories = [entry["text"] for entry in state.user_memories(DAVID.id)]
+    assert any("corrigió" in text and "Frieren" in text for text in memories)
+
+
+def test_turn_search_on_uncertainty_confirmation():
+    history = [
+        _history_entry(
+            "assistant",
+            "En realidad no estoy 100% segura... creo que se llamaba Eisen",
+        ),
+    ]
+    state, _ = make_state(histories={0: history})
+    search = FakeSearch(
+        result=(
+            "Fuente 1: Frieren\nURL: https://x.test\n"
+            "Resumen: el héroe que amaba Frieren era Himmel"
+        )
+    )
+    llm = FakeLLM(replies=[
+        "Frieren nombre del heroe que amaba Frieren",
+        llm_json("¡Himmel! Ese era el héroe~"),
+    ])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "sabes su nombre?")], TurnContext(channel_id=0)
+    ))
+
+    assert search.queries == ["Frieren nombre del heroe que amaba Frieren"]
+    assert result.web_context is not None
+
+
+def test_turn_no_search_on_plain_chat():
+    state, _ = make_state()
+    search = FakeSearch(result="nunca debería usarse")
+    llm = FakeLLM(replies=[llm_json("¡Frieren es una serie preciosa!")])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "me gusta Frieren")], TurnContext(channel_id=0)
+    ))
+
+    assert search.queries == []
+    assert result.web_context is None
+
+
+def test_turn_ignores_speaker_name_as_factual_marker():
+    state, _ = make_state()
+    search = FakeSearch(result="nunca debería usarse")
+    llm = FakeLLM(replies=[llm_json("Je, qué cosas dices~")])
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "David no era el enano?")], TurnContext(channel_id=0)
+    ))
+
+    assert search.queries == []
+    assert result.web_context is None
 
 
 # ---------------------------------------------------------------------------
@@ -513,3 +776,100 @@ def test_system_prompt_includes_affinity_and_user():
     assert llm.calls[-1]["schema"] is not None
 
 
+
+
+# ---------------------------------------------------------------------------
+# Corte por techo de tokens: reintento único sin razonamiento
+# ---------------------------------------------------------------------------
+
+
+def test_truncated_generation_retries_without_thinking():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=["", llm_json("Me quedé pensando, pero aquí estoy.")],
+        metas=[
+            LLMMeta(finish_reason="length"),
+            LLMMeta(finish_reason="stop"),
+        ],
+    )
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert result.skipped is False
+    assert result.reply == "Me quedé pensando, pero aquí estoy."
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["disable_thinking"] is True
+    assert "sin razonar" in llm.calls[1]["messages"][-1]["content"]
+
+
+def test_normal_turn_ignores_stay_active_false():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Hola.", stay_active=False)])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert result.stay_active is True
+    assert result.trace.stay_active is True
+    assert result.trace.disconnect is None
+
+
+def test_truncated_session_turn_retries_and_keeps_stay_active():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=["", llm_json("Sigo aquí.", stay_active=False)],
+        metas=[
+            LLMMeta(finish_reason="length"),
+            LLMMeta(finish_reason="stop"),
+        ],
+    )
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(
+        svc.run_turn(
+            DAVID,
+            [(DAVID, "hola")],
+            TurnContext(kind="proactive", conversation_mode="proactive"),
+        )
+    )
+
+    assert result.skipped is False
+    assert result.reply == "Sigo aquí."
+    assert result.stay_active is False
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["disable_thinking"] is True
+    assert "stay_active" in llm.calls[1]["messages"][-1]["content"]
+
+
+def test_valid_reply_is_not_retried_even_if_finish_reason_is_length():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=[llm_json("Respuesta completa.")],
+        metas=[LLMMeta(finish_reason="length")],
+    )
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert result.reply == "Respuesta completa."
+    assert len(llm.calls) == 1
+
+
+def test_truncated_generation_without_recovery_skips_without_raw_json():
+    state, _ = make_state()
+    raw_truncado = '{"reply": "me quedé pensando y el JSON se co'
+    llm = FakeLLM(
+        replies=[raw_truncado, raw_truncado],
+        metas=[
+            LLMMeta(finish_reason="length"),
+            LLMMeta(finish_reason="length"),
+        ],
+    )
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+
+    assert result.skipped is True
+    assert not result.reply
+    assert len(llm.calls) == 2

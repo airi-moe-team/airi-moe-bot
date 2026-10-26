@@ -7,15 +7,33 @@ from __future__ import annotations
 
 import discord
 
+from airi.domain.notices import Notice
+
 GIF_EMBED_COLOR = discord.Color(0xFFB6D9)
 
+# Presentación de los avisos de dominio. El título ya incluye el emoji para
+# que Discord lo muestre tal cual y las pruebas puedan comprobarlo.
+NOTICE_STYLES = {
+    "meet": ("🌙 Nuevo encuentro", discord.Color(0x89B4FA)),
+    "discovery": ("✨ Descubrimiento", discord.Color(0xCBA6F7)),
+    "memory_saved": ("📝 Memoria guardada", discord.Color(0xF9E2AF)),
+    "self_changed": (
+        "🧠 Airi ha aprendido algo nuevo",
+        discord.Color(0xB4BEFE),
+    ),
+    "level_up": ("💗 Nivel de afinidad", discord.Color(0xF5C2E7)),
+    "relationship_proposed": ("💍 Propuesta", discord.Color(0xF38BA8)),
+    "relationship_confirmed": ("💞 Pareja confirmada", discord.Color(0xF38BA8)),
+    "web_search": ("🔎 Buscando en la web", discord.Color(0x89B4FA)),
+}
 
-def system_embed(description, *, title=None):
+
+def system_embed(description, *, title=None, color=None):
     """Embed neutro para avisos de sistema y resultados de comandos."""
     return discord.Embed(
         title=title,
         description=description,
-        color=GIF_EMBED_COLOR,
+        color=color or GIF_EMBED_COLOR,
     )
 
 
@@ -31,16 +49,26 @@ def disconnecting_embed(reason):
     """Aviso de cierre con el motivo personal (solo canal de origen)."""
     clean = str(reason or "").strip()[:300]
     body = (
-        f"«{clean}»\n\nMe voy por ahora. Hablamos otro día."
+        f"«{clean}»\n\nAiri está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
         if clean
-        else "Me voy por ahora. Hablamos otro día."
+        else "Airi está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
     )
     return system_embed(body, title="🚪 Airi se está desconectando")
 
 
-def notice_embed(text):
-    """Embed para avisos post-turno (memoria, identidad, etc.)."""
-    return system_embed(str(text), title="💗 Airi")
+def notice_embed(notice):
+    """Embed para avisos post-turno (memoria, identidad, etc.).
+
+    Acepta `Notice` para elegir título y color según el evento, y también
+    cadenas sueltas (avisos de fecha u otros flujos antiguos) con el estilo
+    genérico de Airi.
+    """
+    if isinstance(notice, Notice):
+        title, color = NOTICE_STYLES.get(
+            notice.kind, ("💗 Airi", GIF_EMBED_COLOR)
+        )
+        return system_embed(notice.text, title=title, color=color)
+    return system_embed(str(notice), title="💗 Airi")
 
 HELP_TEXT = (
     "**🎯 Objetivo**\n"

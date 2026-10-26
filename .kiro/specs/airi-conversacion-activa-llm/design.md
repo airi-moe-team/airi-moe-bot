@@ -82,6 +82,10 @@ Python 3.11+, `discord.py`, `asyncio`, arquitectura hexagonal y configuración p
    - **Seleccionado:** `client.py` mantiene una tarea cancelable por canal/tipo y una generación monotónica en el registro. Cada callback verifica generación, estado y actividad vigente antes de encolar; el job revalida dentro de la cola FIFO antes de actuar.
    - **Rationale:** permite retirar en ausencia de mensajes y hace inocuos los timers vencidos o rearmados.
    - **Trade-offs:** requiere cancelar y recolectar tareas al cerrar el cliente y controlar los timers con reloj/scheduler falsos en tests.
+10. **Registro de mensajes respondidos y arranque (`services/pending_message.py`).**
+   - **Decisión:** el arranque (`on_ready_extra` → `seed_last_human_activity`) lee el historial reciente, localiza el último mensaje humano no respondido dentro de `AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS`, responde solo a él y entra en Activa; sin candidato entra en Espectadora. `PendingMessageTracker` persiste los IDs respondidos en `state.world['answered_message_ids']` (con `save_world()` de mejor esfuerzo) soportando tanto `entry.channel_id` (fakes de tests) como `entry.channel.id` (discord.Message). El marcado (`mark_answered`) ocurre solo dentro del publisher tras `_publish_result` exitoso. `resume_pending`/`PublicationResumer` reanuda respuestas confirmadas no entregadas tras reinicio.
+   - **Rationale:** el último mensaje humano no basta; hay que verificar pendencia real frente al registro de respuestas (I2/I3), y Discord+registro no son una transacción atómica: la garantía es registro persistente + reconciliación, no ausencia absoluta de duplicados.
+   - **Trade-offs:** la ventana de pérdida persiste entre envío y confirmación (semitransacción); se mitiga con conciliación al arrancar, no con garantías de exactamente-una-vez.
 
 ## System Flows
 

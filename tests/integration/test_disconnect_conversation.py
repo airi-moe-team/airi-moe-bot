@@ -41,6 +41,59 @@ def test_disconnect_reason_reaches_the_turn_result():
         )
     )
     assert result.disconnect_reason == "me voy a dormir"
+    assert result.trace.disconnect == {
+        "leave": True,
+        "reason": "me voy a dormir",
+    }
+    assert result.trace.stay_active is True
+
+
+def test_session_leave_false_and_stay_active_false_ends_session_without_shutdown():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=[
+            llm_json(
+                "Me quedo por aquí, pero te dejo descansar.",
+                stay_active=False,
+                disconnect={"leave": False, "reason": ""},
+            )
+        ]
+    )
+    result = run(
+        make_service(llm, state).run_turn(
+            DAVID,
+            [(DAVID, "hasta luego")],
+            TurnContext(kind="active", conversation_mode="active"),
+        )
+    )
+    assert result.disconnect_reason is None
+    assert result.stay_active is False
+    assert result.trace.disconnect is None
+    assert result.trace.stay_active is False
+
+
+def test_session_leave_false_and_stay_active_true_keeps_session_active():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=[
+            llm_json(
+                "Sigo aquí contigo.",
+                stay_active=True,
+                disconnect={"leave": False, "reason": ""},
+            )
+        ]
+    )
+    result = run(
+        make_service(llm, state).run_turn(
+            DAVID,
+            [(DAVID, "¿sigues ahí?")],
+            TurnContext(kind="active", conversation_mode="active"),
+        )
+    )
+    assert result.disconnect_reason is None
+    assert result.stay_active is True
+    assert result.trace.disconnect is None
+    assert result.trace.stay_active is True
 
 
 def test_disconnect_is_ignored_without_reason():

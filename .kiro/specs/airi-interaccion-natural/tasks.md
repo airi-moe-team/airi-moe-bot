@@ -1,17 +1,19 @@
-# Implementation Plan — airi-interaccion-natural (fase 1: modo espectador)
+# Implementation Plan — airi-interaccion-natural
+
+## Fase 1 — Escucha pasiva (completada)
 
 - [x] 1. Establecer la base del modo espectador: configuración y detección local
   - [x] 1.1 Añadir las variables de configuración del modo espectador
     - Definir interruptor global para activar/desactivar la escucha pasiva
     - Definir límite de tamaño del buffer por canal y su TTL
-    - Definir umbral de afinidad, probabilidades por señál y cooldown
+    - Definir umbral de afinidad, probabilidades por señal y cooldown
     - Ejecutar TDD: test rojo de lectura de configuración → valores por defecto
-    - _Requirements: 1.3, 2.3, 4.5, 4.7, 5._
+    - _Requirements: 1.3, 2.3, 4.5, 4.7, 5.8_
   - [x] 1.2 Implementar el matcher de temas sobre el perfil de gustos
-    - Extraer gustos positivos del modelo de identidad y preferencias vigentes
+    - Extraer gustos positivos del perfil canónico y preferencias vigentes
     - Normalizar texto y generar patrón con límites de palabra sin duplicar lista
     - Refrescar el patrón si cambia el perfil; alias solo si están declarados
-    - Test rojo→verde: sin perfil no hay patrón; con perfil detecta "ramen"-like
+    - Test rojo→verde: sin perfil no hay patrón; con perfil detecta coincidencias
     - _Requirements: 2.2, 2.6, 2.7, 2.8, 2.9_
   - [x] 1.3 Implementar la evaluación de señales de activación
     - Detectar mención directa, respuesta a Airi y nombre explícito
@@ -65,7 +67,7 @@
   - [x] 4.2 Asegurar el comportamiento con el modo desactivado
     - Sin modo espectador: flujo actual intacto, salvo menciones/respuestas a Airi
     - Ejecutar la suite completa: sin regresiones y con los fakes existentes
-    - Añadir pruebas de integración del pipeline con relay/LLM falsos y relojos
+    - Añadir pruebas de integración del pipeline con LLM falsos y relojes
     - _Requirements: 1.5, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8_
 
 - [x] 5. Cierre del incremento: validación extremo a extremo
@@ -80,7 +82,7 @@
     - Preparar el flag de configuración para activar en producción
     - _Requirements: 5.8_
 
-- [x] 6. Perfil estable de gustos (FB-006)
+- [x] 6. Perfil estable de gustos
   - [x] 6.1 Perfil canónico configurable por entorno
     - Definir `AIRI_PROFILE` (JSON: loves/dislikes/favorite_food/favorite_flower)
     - Parseo tolerante: vacía o inválida ⇒ warning y fallback al perfil persistido/defaults
@@ -93,7 +95,7 @@
     - Verificar que un self_update de gustos ya no aplica y el historial queda íntegro
     - _Requirements: 2.12_
 
-- [x] 7. Handoff y consumo del trigger (FB-007)
+- [x] 7. Handoff y consumo del trigger
   - [x] 7.1 Continuación natural tras una intervención de Airi
     - El interlocutor puede responder UNA vez dentro de la ventana de handoff sin cooldown
     - El cooldown se re-arma después del handoff; la cadena no crece sola
@@ -103,3 +105,178 @@
     - Seguir los ids de los mensajes unidos por debounce y consumirlos con el snapshot
     - El tema no queda latente en el buffer tras publicar la respuesta
     - _Requirements: 3.3, 3.4_
+
+- [x] 8. Sembrado inicial de actividad humana al arrancar
+  - [x] 8.1 Implementar la heurística reutilizable de "último mensaje sin respuesta"
+    - Añadir `_epoch` y `pending_user_message` en `client.py`
+    - Validar humano, no comando, contenido/adjuntos y antigüedad opcional (`max_age=None` para sembrado)
+    - Ejecutar TDD: casos rojo→verde para filtros y `max_age`
+    - _Requirements: 6.1, 6.2, 5.1_
+  - [x] 8.2 Sembrar `last_human_activity` al arrancar
+    - Corrutina aislada `seed_last_human_activity(client)` con try/except y log
+    - Leer `history(limit=1)`, aplicar heurística y llamar a `record_human_activity(channel_id, now=epoch)`
+    - Solo ejecutar si `load_policy().enabled`; sin cambios en `SpectatorSessionRegistry`
+    - _Requirements: 6.1, 6.2, 5.1_
+  - [x] 8.3 Armar temporizador proactivo inicial con delay 0 no bloqueante
+    - Implementar `arm_proactive_timer(channel, delay)` con `asyncio.sleep(max(0, delay))`
+    - Cancelar temporizador proactivo previo y programar la tarea en `timers`
+    - Ejecutar turno proactivo vía `dispatcher.submit` tras el delay
+    - _Requirements: 4.1, 4.2, 6.3_
+  - [x] 8.4 Integrar en el arranque y cubrir con pruebas
+    - Envolver `resume_pending` + sembrado en `on_ready_extra` condicionado
+    - Pruebas unitarias/integración: filtrado, sembrado y delay 0
+    - _Requirements: 5.8, 6.1, 6.2_
+
+## Fase 2 — Naturalidad conversacional y coherencia (implementada; aprobación humana pendiente)
+
+> Orden obligatorio: construir el harness y capturar el baseline **antes** de
+> modificar el prompt. No marcar una tarea como completada sin su test.
+> Las casillas marcadas tienen implementación y cobertura automática. La tarea
+> 15 sigue pendiente y las aprobaciones humanas de `spec.json` no se tocan.
+
+- [x] 9. Construir el harness de evaluación de interacción (`R12`)
+  - [x] 9.1 Definir escenarios y modelo de registro
+    - Crear `src/airi/evaluation/interaction.py` sin modificar las métricas románticas de `narrative.py`
+    - Definir `InteractionScenario` y los siete escenarios: pregunta directa, corrección, saludo breve, preferencia corregida, desacuerdo, charla casual y despedida
+    - Reutilizar `airi.evaluation.runner.run_scenario` o un adaptador equivalente
+    - Tests: los siete IDs existen, son únicos y cada uno tiene turnos
+    - _Requirements: 12.1_
+  - [x] 9.2 Implementar métricas objetivas y agregación de rúbrica
+    - Medir `question_only_replies`, `repeated_closings`, `gesture_density`, `stacked_gestures`, `prefab_farewells`, `schema_failures` y `state_contradictions`
+    - Agregar puntuaciones 0-2 de comprensión, naturalidad, continuidad, individualidad y coherencia; máximo 70
+    - Tests rojo→verde para cada métrica y para el total de rúbrica
+    - _Requirements: 12.2, 12.6_
+  - [x] 9.3 Añadir el CLI de evaluación con modo live
+    - Crear `tools/interaction_eval.py` con `--run`, `--live`, `--baseline`, `--out` y `--json`
+    - `--live` genera los siete escenarios contra el LLM configurado en `LLM_BASE_URL` (por defecto `http://127.0.0.1:7000`), usando `build_llm` y `ConversationService` sin pasar por Discord ni persistir estado real
+    - Permitir `--repeat` para repetir generaciones cuando el muestreo no sea determinista y `--base-url`/`--model` para fijar explícitamente el endpoint y el modelo de la comparación
+    - Devolver código de salida distinto de cero ante regresión crítica
+    - Tests del CLI con `FakeLLM` y JSONL temporales; el modo live no se ejecuta en la suite automática sin red
+    - _Requirements: 12.3, 12.4, 12.5, 12.10_
+  - [x] 9.4 Documentar el formato de registros y artefactos
+    - Documentar campos obligatorios: escenario, turno, entrada, salida, modelo, prompt, parámetros, `finish_reason`, validación y puntuaciones
+    - Ejemplo mínimo en el docstring del módulo y en `eval/README.md`
+    - _Requirements: 12.5_
+
+- [x] 10. Capturar la línea base antes de tocar el prompt (`R12`)
+  - [x] 10.1 Congelar prompt, modelo y parámetros actuales
+    - Registrar versión o hash del prompt, modelo exacto, temperatura, contexto y plantilla
+    - Ejecutar los siete escenarios con `interaction_eval.py --live --out <baseline>.jsonl`
+    - Guardar salidas originales, `finish_reason` y estado de parseo
+    - Artefacto: `eval/baseline-20261026.jsonl`
+    - _Requirements: 12.3, 12.4, 12.5_
+  - [x] 10.2 Revisar y puntuar el baseline
+    - Aplicar la rúbrica fija de 0-2 por criterio
+    - Registrar fortalezas y fallos observados sin modificar todavía el prompt
+    - Conservar los artefactos para la comparación posterior
+    - Resultado: 46/70; detalle en `eval/README.md`
+    - _Requirements: 12.2, 12.8_
+
+- [x] 11. Prioridad de intención y respuesta directa (`R7`)
+  - [x] 11.1 Añadir el bloque de intención al prompt
+    - Crear `INTENT_PRIORITY_PROMPT` en `src/airi/domain/prompts.py`
+    - Insertarlo después de `DIÁLOGO` y antes de `VARIEDAD Y NATURALIDAD`
+    - Incluir: identificar intención, responder primero, preguntas opcionales, no convertir experiencia en entrevista y no cambiar de tema
+    - Tests: el prompt contiene las reglas y el orden esperado
+    - _Requirements: 7.1, 7.4, 7.5, 7.6_
+  - [x] 11.2 Reforzar la corrección explícita
+    - Conservar la nota `=== CORRECCIÓN DEL USUARIO (PRIORIDAD) ===` y la memoria de corrección existentes
+    - Añadir tests de pregunta directa y de corrección por evasión
+    - Verificar que la respuesta reconoce el error y vuelve a la pregunta original
+    - _Requirements: 7.2, 7.3, 7.7_
+  - [x] 11.3 Mantener la red anti-interrogatorio
+    - Conservar `QUESTION_CLOSE_REPAIR_PROMPT` y `strip_trailing_question`
+    - Añadir `strip_trailing_questions` para varios cierres interrogativos encadenados y corregir la asignación inmutable de `ModelOutput`
+    - Añadir cobertura de integración para cierre con pregunta en charla casual
+    - Verificar que las citas quedan fuera de la reparación
+    - _Requirements: 7.8_
+
+- [x] 12. Naturalidad narrativa y proporcionalidad (`R8`)
+  - [x] 12.1 Integrar las reglas de naturalidad narrativa en el prompt
+    - Integrar las reglas R8 en el bloque `VARIEDAD Y NATURALIDAD` de `SYSTEM_PROMPT`
+    - Incluir: acciones opcionales, no apilar gestos, alternativas a la timidez, variar estructura y prioridad de la naturalidad
+    - Eliminar cualquier regla de número fijo de palabras
+    - Tests: no se introduce un límite fijo de palabras y las reglas nuevas están presentes
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
+  - [x] 12.2 Ajustar proporcionalidad y cierres
+    - Añadir reglas de respuesta breve para saludo, mensaje corto y despedida
+    - Evitar cierres prefabricados y preguntas para impedir que la persona termine
+    - Añadir `limit_narrative_actions` como red determinista de una acotación por respuesta
+    - Tests de longitud proporcional y de fórmulas de despedida
+    - _Requirements: 8.7, 8.8, 8.9_
+  - [x] 12.3 Medir la naturalidad del candidato
+    - Ejecutar los escenarios de saludo, charla casual y despedida
+    - Comparar densidad de acotaciones, gestos acumulados y cierres repetidos contra baseline
+    - Resultado: `stacked_gestures=0`; densidad 0.308 vs 0.154; se documenta la regresión de calidad
+    - _Requirements: 8.1-8.9, 12.6_
+
+- [x] 13. Personalidad observable y opiniones propias (`R9`)
+  - [x] 13.1 Añadir el bloque de personalidad y opiniones
+    - Crear `PERSONALITY_TENDENCIES_PROMPT` con los seis rasgos como tendencias observables
+    - Incluir opinión razonada, desacuerdo respetuoso y prohibición de inventar experiencias
+    - Tests: el bloque existe y no duplica reglas de romance/afinidad
+    - _Requirements: 9.1, 9.2, 9.3, 9.6, 9.7, 9.8_
+  - [x] 13.2 Cubrir opinión y desacuerdo
+    - Escenario de pregunta directa: elige y argumenta antes de preguntar
+    - Escenario de desacuerdo: discrepa sin atacar ni ceder automáticamente
+    - Verificar que los ejemplos son fixtures y no lógica hardcodeada
+    - _Requirements: 9.4, 9.5, 12.12_
+
+- [x] 14. Memoria consolidada y preferencias vigentes (`R10`)
+  - [x] 14.1 Ampliar el modelo de memoria de forma compatible
+    - Añadir metadatos aditivos: `updated_at`, `source`, `status`, `confidence`, `scope`, `topic`
+    - Normalizar registros antiguos al leerlos sin romper `data/state.json`
+    - Tests de compatibilidad con memorias existentes
+    - _Requirements: 10.8_
+  - [x] 14.2 Implementar consolidación y precedencia
+    - Fusionar duplicados exactos y casi exactos; no acumular versiones redundantes
+    - Marcar correcciones explícitas como vigentes y anteriores como `superseded` cuando el tema sea identificable
+    - No mezclar usuarios ni promover inferencias a hechos
+    - Tests de corrección, duplicados, contradicción e aislamiento entre usuarios
+    - _Requirements: 10.3, 10.4, 10.5, 10.6, 10.7, 10.8_
+  - [x] 14.3 Ajustar el prompt de memoria
+    - Añadir `MEMORY_USAGE_PROMPT`: priorizar información vigente y relevante, no recitar, respetar correcciones
+    - Excluir `superseded` del prompt y añadir una nota determinista de memoria relevante cuando el tema coincide con el mensaje actual
+    - Tests de prompt y de recuperación de memoria
+    - _Requirements: 10.1, 10.2, 10.3_
+  - [x] 14.4 Verificar preferencias canónicas de Airi
+    - Comprobar que flor, comida y gustos salen de `world["preferences"]`/`AIRI_PROFILE`
+    - Verificar que `self_update` no muta `tastes.*` y que no se acumulan versiones contradictorias
+    - _Requirements: 10.9, 2.10, 2.11, 2.12_
+
+- [x] 15. Coherencia de despedida, actividad y estado (`R11`)
+  - [x] 15.1 Documentar y probar el contrato normal vs. sesión
+    - Verificar que `stay_active` solo existe en `SESSION_RESPONSE_SCHEMA`
+    - Verificar que en modo normal se fuerza `True` y que un campo extra no cambia el estado
+    - Tests de campos ausentes, desconocidos, nulos y tipos inválidos
+    - _Requirements: 11.3, 11.8_
+  - [x] 15.2 Cubrir la matriz de `disconnect`/`stay_active`
+    - Casos: `leave=false` + `stay_active=true`; `leave=false` + `stay_active=false`; `leave=true` con motivo; `leave=true` sin motivo
+    - Integración: recepción de mensajes después de un apagado y recuperación del contexto
+    - Añadir datos de traza suficientes: `kind`, timestamps, origen del cierre y correlación
+    - _Requirements: 11.1, 11.2, 11.4, 11.5, 11.9_
+  - [x] 15.3 Separar despedida personal y apagado global
+    - Verificar que una despedida a una persona no cierra el bot
+    - Verificar que el apagado global solo se solicita tras publicar/persistir y cuando el estado lo confirma
+    - Tests de cierre manual vs. cierre decidido por el modelo
+    - _Requirements: 11.5, 11.6, 11.7_
+
+- [x] 16. Evaluación candidata y cierre (`R12`)
+  - [x] 16.1 Ejecutar los siete escenarios con el candidato
+    - Usar el mismo modelo, parámetros, contexto y prompt efectivo que el baseline
+    - Repetir generaciones cuando el muestreo permita variación
+    - Guardar artefactos completos y puntuaciones de rúbrica
+    - Artefacto final: `eval/candidate-20261026-v9-scored.jsonl` (60/70)
+    - _Requirements: 12.3, 12.4, 12.5_
+  - [x] 16.2 Comparar baseline y candidato
+    - Calcular deltas narrativos y técnicos por separado
+    - Rechazar regresiones graves en coherencia, privacidad, estado o formato de salida
+    - Confirmar mejora agregada sin ocultar casos críticos
+    - Resultado: +14 de rúbrica, 0 regresiones críticas, 0 fallos de formato/estado; regresión de calidad documentada
+    - _Requirements: 12.6, 12.7, 12.8, 12.11_
+  - [x] 16.3 Cerrar la validación técnica
+    - Ejecutar la suite completa, Ruff y las pruebas de fase 1
+    - Documentar la limitación de `airi-replay` determinista y el uso de `--live` para regenerar
+    - Actualizar el estado de la spec sin marcar aprobaciones humanas como automáticas
+    - Resultado: `946 passed`, Ruff limpio; `eval/README.md` documenta la limitación
+    - _Requirements: 12.9, 12.10, 12.12_

@@ -7,6 +7,8 @@ Discord ni persiste: recibe un servicio ya construido y un estado sembrado.
 
 from __future__ import annotations
 
+import copy
+
 from airi.domain.relationship_claims import looks_like_romantic_question
 from airi.services.conversation import ConversationService, TurnContext
 
@@ -31,7 +33,15 @@ async def run_scenario(
         draft = await service.generate_turn(user, [(user, text)], ctx)
         result = service.apply_turn(draft)
         output = draft.output
+        trace = draft.trace
         update = result.romantic_update_action
+        memories = getattr(service.state, "memories", {}) if service.state else {}
+        user_id = getattr(user, "id", None)
+        memories_after = (
+            copy.deepcopy(list(memories.get(str(user_id), [])))
+            if user_id is not None
+            else []
+        )
         records.append(
             {
                 "scenario": scenario.id,
@@ -49,6 +59,21 @@ async def run_scenario(
                 else [],
                 "partner_confirmed": result.partner_confirmed,
                 "proposal_pending": result.proposal_pending,
+                # Contrato de estado y trazabilidad para la evaluación de
+                # naturalidad (R7-R12). Son campos aditivos: los consumidores
+                # narrativos existentes los ignoran.
+                "conversation_mode": ctx.conversation_mode,
+                "disconnect": getattr(output, "disconnect", None),
+                "stay_active": bool(getattr(result, "stay_active", True)),
+                "parse_ok": bool(getattr(trace, "parse_ok", True)),
+                "parse_warnings": list(getattr(trace, "parse_warnings", []) or []),
+                "finish_reason": getattr(trace, "llm_finish_reason", None),
+                "raw_llm": getattr(trace, "raw_llm", None),
+                "prompt_system": getattr(trace, "prompt_system", ""),
+                "llm_usage": getattr(trace, "llm_usage", None),
+                "llm_latency_ms": int(getattr(trace, "llm_latency_ms", 0) or 0),
+                "total_latency_ms": int(getattr(trace, "total_latency_ms", 0) or 0),
+                "memories_after": memories_after,
             }
         )
     return records

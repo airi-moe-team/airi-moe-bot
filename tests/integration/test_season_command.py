@@ -109,15 +109,21 @@ def test_reset_clears_affinity_memories_diary_dates_and_histories():
     assert state.world["relationship_started_at"] is None
 
 
-def test_reset_forgets_self_notes_but_keeps_identity_traits_and_tastes():
+def test_reset_forgets_self_notes_but_keeps_identity_traits_and_values():
     state, _ = make_state(
         world={
             "season": 2,
+            "preferences": {
+                "loves": ["videojuegos"],
+                "dislikes": ["grosero"],
+                "favorite_food": "dulces",
+                "favorite_flower": "tulipanes",
+            },
             "self": {
                 "self_concept": "Todavía me estoy descubriendo",
                 "traits": {"juguetona": 5, "curiosa": 4},
                 "values": ["honestidad"],
-                "tastes": {"loves": ["videojuegos"], "dislikes": ["grosero"]},
+                "tastes": {"loves": ["romantico"], "dislikes": ["grosero"]},
                 "discoveries": [
                     {"ts": 1.0, "text": "Confío en KOKODA", "source": "reflection"}
                 ],
@@ -145,12 +151,14 @@ def test_reset_forgets_self_notes_but_keeps_identity_traits_and_tastes():
 
     model = state.world["self"]
     assert "discoveries" not in model
+    assert "tastes" not in model
     assert model["history"] == []
     assert state.world["self_notes"] == []
     # El "yo" tipado sobrevive a la temporada.
     assert model["traits"]["juguetona"] == 5
-    assert model["tastes"]["loves"] == ["videojuegos"]
     assert model["values"] == ["honestidad"]
+    # Los gustos canónicos no se tocan.
+    assert state.world["preferences"]["loves"] == ["videojuegos"]
 
 
 def test_reset_advances_season_and_persists_all_stores():

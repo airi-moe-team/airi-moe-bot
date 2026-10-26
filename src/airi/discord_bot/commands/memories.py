@@ -7,7 +7,9 @@ from airi.domain import memories as domain_memories
 
 
 async def handle_memorias(ctx, message):
-    entries = ctx.state.user_memories(message.author.id)
+    entries = domain_memories.active_memories(
+        ctx.state.user_memories(message.author.id)
+    )
     if entries:
         listing = "\n".join(
             f"{i}. {e.get('text', '')}"
@@ -42,7 +44,7 @@ async def handle_olvidar(ctx, message):
             mention_author=False,
         )
         return
-    entries = state.user_memories(uid)
+    entries = domain_memories.active_memories(state.user_memories(uid))
     if not entries:
         await message.reply(
             "No tengo memorias sobre ti todavía.", mention_author=False

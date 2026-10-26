@@ -152,19 +152,22 @@ class LlmConfig:
         )
 
 
-def build_llm(session, *, timeout=None, base_url=None) -> "HttpLlmClient":
+def build_llm(
+    session, *, timeout=None, base_url=None, model=None
+) -> "HttpLlmClient":
     """Fábrica única del cliente LLM: config del entorno → adaptador.
 
     Los tres puntos de construcción del bot (conversation, glue de citas e
     identidad) pasan por aquí para que perfil, clave y rutas se configuren en
-    un solo sitio. `base_url` explícito (glue/tests) pisa el del entorno.
+    un solo sitio. `base_url` y `model` explícitos (glue/tests/evaluación)
+    pisan los del entorno.
     """
     cfg = LlmConfig.from_env()
     return HttpLlmClient(
         base_url or cfg.base_url,
         session,
         timeout=timeout,
-        model=cfg.model,
+        model=model or cfg.model,
         provider=cfg.provider,
         api_key=cfg.api_key,
         max_tokens_field=cfg.max_tokens_field,

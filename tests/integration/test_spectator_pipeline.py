@@ -142,7 +142,7 @@ def _setup(monkeypatch, llm, *, enabled):
         proactive_idle_seconds=policy.cooldown_seconds,
     )
 
-    def build_ctx(ch):
+    def build_ctx(ch, pending_message_tracker=None):
         policy = load_policy()
         if enabled:
             policy = type(policy)(

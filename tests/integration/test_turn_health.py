@@ -194,7 +194,7 @@ def test_skipped_turn_answers_with_generation_error_embed(monkeypatch):
 
 
 def test_skipped_turn_reports_length_cut(monkeypatch):
-    """Si el modelo agotó tokens, el aviso lo dice en vez de hablar de repetir."""
+    """Si el modelo agotó tokens, el aviso lo cuenta con el embed de Airi."""
 
     class _LengthService:
         async def run_turn(self, author, messages, turn_context):
@@ -207,7 +207,11 @@ def test_skipped_turn_reports_length_cut(monkeypatch):
     channel = _run_turn(monkeypatch, ctx)
     content, kwargs = channel.sent[0]
     assert content is None
-    assert "se cortó antes de terminar" in kwargs["embed"].description
+    embed = kwargs["embed"]
+    assert embed.title == "🧠 Airi pensó demasiado..."
+    assert "se olvidó de responder" in embed.description
+    assert "resolviendo el sentido de la vida" in embed.description
+    assert "antes de que le eche humo la cabeza" in embed.description
 
 
 def test_health_check_disabled_makes_no_request(monkeypatch):

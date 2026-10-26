@@ -84,4 +84,4 @@ def test_apply_then_persists_all_effects():
     assert state.users["42"]["name"] == "David"
     assert state.entry_points(42) == 2
     assert state.histories[7][-1]["role"] == "assistant"
-    assert result.notices == []
+    assert [notice.kind for notice in result.notices] == ["meet"]

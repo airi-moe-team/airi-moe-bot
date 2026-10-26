@@ -63,6 +63,20 @@ def test_parse_session_stay_active_no_booleano_invalido():
     assert valid is False
 
 
+def test_parse_session_stay_active_nulo_invalido():
+    raw = '{"reply":"hola","stay_active":null}'
+    _output, _stay, valid = parse_session_output(raw)
+    assert valid is False
+
+
+def test_parse_session_campo_desconocido_no_cambia_el_estado():
+    raw = '{"reply":"hola","stay_active":false,"campo_futuro":1}'
+    output, stay, valid = parse_session_output(raw)
+    assert valid is True
+    assert stay is False
+    assert output.reply == "hola"
+
+
 def test_parse_session_reply_no_string_invalido():
     raw = '{"reply":123,"stay_active":true}'
     _output, _stay, valid = parse_session_output(raw)
@@ -81,3 +95,12 @@ def test_parse_model_output_normal_no_permite_vacio():
     assert out.reply is None or out.reply == ""  # tolerante
     # sin allow_empty_reply, no debe quedar como texto utilizable
     assert not (isinstance(out.reply, str) and out.reply.strip())
+
+
+def test_parse_model_output_descarta_texto_crudo_si_se_pide():
+    """Un JSON truncado no debe publicarse como reply cuando hubo corte."""
+    from airi.domain.llm_output import parse_model_output
+
+    raw = '{"reply": "me quedé pensando y el JSON se co'
+    assert parse_model_output(raw).reply
+    assert parse_model_output(raw, allow_raw_fallback=False).reply is None

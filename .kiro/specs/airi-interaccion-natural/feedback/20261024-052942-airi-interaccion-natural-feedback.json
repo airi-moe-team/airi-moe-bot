@@ -1,0 +1,33 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-24T05:29:42Z",
+  "items": [
+    {
+      "id": "FB-008",
+      "title": "Sembrar last_human_activity al arrancar desde el último mensaje humano válido",
+      "severity": "major",
+      "impact": "La proactividad solo considera actividad ocurrida con el bot encendido; al reiniciar, last_human_activity=None y no se dispara hasta un mensaje nuevo.",
+      "recommendation": "Implementar heurística reutilizable 'último mensaje del canal sin respuesta' y, al arrancar, fetch del último mensaje humano válido para inicializar last_human_activity con su created_at (epoch).",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "Al arrancar, si el modo espectador está habilitado, se debe leer el último mensaje del canal autorizado y, si es un mensaje humano válido (no bot, no comando, con contenido o adjuntos), inicializar last_human_activity con su created_at convertido a epoch.",
+          "Si no hay mensaje válido o falla la lectura, el arranque no se bloquea y last_human_activity permanece None."
+        ],
+        "design": [
+          "Añadir corrutina aislada seed_last_human_activity(client) en client.py que resuelve canal, lee history(limit=1), aplica pending_user_message(..., max_age=None) y llama a SpectatorSessionRegistry.record_human_activity(channel_id, now=epoch).",
+          "No modificar SpectatorSessionRegistry: la conversión a epoch y la inyección pertenecen a la capa Discord.",
+          "Envolver fetch/validación en try/except con log y retorno silencioso.",
+          "Armar temporizador proactivo inicial con delay=max(0, proactive_idle_seconds - (now - epoch)); delay=0 se programa con asyncio.sleep(0) sin bloquear."
+        ],
+        "tasks": [
+          "Implementar _epoch y pending_user_message en client.py.",
+          "Implementar seed_last_human_activity y arm_proactive_timer con soporte de delay 0.",
+          "Integrar en on_ready_extra solo si load_policy().enabled.",
+          "Añadir pruebas unitarias/integración para filtrado, sembrado y delay 0."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

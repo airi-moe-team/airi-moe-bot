@@ -59,6 +59,7 @@ El modo espectador actual permite a Airi observar el canal autorizado sin llamar
 2. THE Airi SHALL mantener separadas la decisión de retirada conversacional y la acción global de desconexión existente.
 
 ### Requirement 6: Privacidad, observabilidad y verificabilidad
+
 **Objective:** Como responsable del bot, quiero que el ciclo de vida sea testeable y observable sin persistir escucha temporal, para detectar fallos sin guardar contexto conversacional innecesario.
 
 #### Acceptance Criteria
@@ -66,3 +67,32 @@ El modo espectador actual permite a Airi observar el canal autorizado sin llamar
 2. WHEN se registre una transición o un turno se omita por estado/temporizador, THEN la observabilidad existente SHALL identificar el estado, la transición o el motivo de omisión sin registrar contenido de mensajes.
 3. THE Airi SHALL permitir pruebas deterministas del ciclo de vida mediante reloj y dependencias controlables.
 4. THE test suite SHALL verificar el despertar por señales, el bypass de gating en modo Activo, la respuesta y silencio estructurados, la retirada del LLM, el timeout local, la iniciativa proactiva, fallos de generación/publicación y aislamiento entre canales.
+
+### Requirement 7: Arranque, recuperación de pendientes y proactividad
+**Objective:** Como operador, quiero que Airi recupere correctamente una conversación al conectarse, permanezca activa mientras haya interacción e inicie turnos espontáneos tras inactividad, sin duplicar respuestas ni ejecutar temporizadores obsoletos.
+
+#### Acceptance Criteria
+1. WHEN Airi se conecte a Discord y publique su embed de conexión, THEN Airi SHALL examinar el historial del canal para localizar el último mensaje humano que siga pendiente de atención, y el embed SHALL NOT computarse como actividad humana.
+2. WHILE se seleccione el candidato de arranque, THE Airi SHALL excluir mensajes de bots, comandos, mensajes sin contenido y mensajes cuyos IDs consten como respondidos en el registro persistido de respuestas.
+3. WHEN el candidato sea demasiado antiguo según `AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS`, THEN Airi SHALL NOT recuperarlo y SHALL entrar en Espectadora.
+4. IF existe un candidato pendiente y reciente, THEN Airi SHALL responder únicamente a ese mensaje y SHALL entrar en Activa; IF no existe, THEN Airi SHALL entrar en Espectadora y SHALL NOT ejecutar la respuesta inicial y la proactividad como dos acciones del mismo arranque.
+5. WHEN la generación o la publicación de la respuesta de arranque falle, THEN Airi SHALL NOT marcar el mensaje como respondido (invariante I3) y SHALL conservar la posibilidad de recuperación sin duplicar envíos.
+6. WHEN un turno proactivo vaya a publicarse, THEN Airi SHALL revalidar que el canal sigue en Espectadora, que se mantiene la inactividad requerida, que no hay turno en curso y que no surgió actividad humana posterior que invalide el disparo (invariante I6).
+7. THE Airi SHALL garantizar como máximo un turno en ejecución por canal (invariante I1) y SHALL impedir que tareas de temporizador obsoletas actúen con estado, generación o token desalineados (invariante I4).
+8. THE registro de mensajes respondidos SHALL persistir en el estado del bot para que, tras un reinicio, un mensaje ya atendido no vuelva a ser candidato (invariante I2), y SHALL solo marcarse tras la publicación exitosa en Discord.
+9. WHEN la publicación esté en estado incierto (confirmación perdida tras el envío), THEN la recuperación SHALL conciliar el registro de turnos antes de reintentar (T15) y SHALL reanudar respuestas confirmadas pendientes al arrancar.
+10. THE Airi SHALL excluir del cómputo de actividad humana sus propios embeds de conexión/desconexión y los mensajes de otros bots (invariante I5), y SHALL aislar estado y temporizadores por canal (T21).
+
+#### Configuración
+| Variable | Responsabilidad |
+| --- | --- |
+| `AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS` | Inactividad humana para retirar el canal de Activa a Espectadora. |
+| `AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS` | Inactividad humana requerida para un turno espontáneo desde Espectadora. |
+| `AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS` | Antigüedad máxima del pendiente recuperable en el arranque (por defecto 3600). |
+| TTL del buffer pasivo (`AIRI_SPECTATOR_TTL_SECONDS`) | Vigencia del contexto escuchado pasivamente; no determina pendencia. |
+
+#### Matriz de aceptación (T01–T22)
+Arranque: T01 pendiente válido → respuesta dirigida; T02 último ya respondido → no repetir; T03 fuera del límite → no recuperar; T04 sin pendientes → Espectadora; T05 bot/comando → excluido; T06 varios pendientes → el último humano pendiente.
+Estados y temporizadores: T07 retirada única al vencer; T08 actividad previa al vencimiento no retira; T09 proactivo único con ventana válida; T10 carrera mensaje/proactivo → un solo turno; T11 rearmes sucesivos → solo la tarea vigente actúa; T12 proactivo publicado → siguiente ciclo Activa.
+Fallos y recuperación: T13 fallo de generación → no marcar respondido; T14 Discord rechaza → registrable y recuperable; T15 confirmación perdida → conciliar antes de reintentar; T16 reinicio en turno → sin doble respuesta; T17 desconexión → ninguna tarea obsoleta publica; T18 fallo de transición → nunca bloqueado en Despertando/Retirada.
+Regresión e integración: T19 embed de conexión ≠ actividad humana; T20 embed de desconexión no reactiva; T21 aislamiento por canal; T22 buffer pasivo conserva contexto sin responder por mensaje. Cada escenario debe tener prueba automatizada o justificación explícita de verificación.

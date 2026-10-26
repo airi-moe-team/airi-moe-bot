@@ -49,6 +49,30 @@ def clean_reply(text):
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+
+NARRATIVE_ACTION_RE = re.compile(r"\*[^*\n]+\*")
+
+
+def limit_narrative_actions(text, max_actions=1):
+    """Deja como mucho ``max_actions`` acotaciones entre asteriscos.
+
+    R8 pide que las acciones sean opcionales y que no se acumulen gestos de la
+    misma emoción. El modelo tiende a encadenar dos o tres en un turno; este
+    filtro conserva la primera y elimina el resto sin tocar el texto hablado.
+    """
+    if not isinstance(text, str) or max_actions < 0:
+        return text
+    matches = list(NARRATIVE_ACTION_RE.finditer(text))
+    if len(matches) <= max_actions:
+        return text
+    result = text
+    for match in reversed(matches[max_actions:]):
+        result = result[: match.start()] + result[match.end() :]
+    result = re.sub(r"[ \t]{2,}", " ", result)
+    result = re.sub(r" +([,.;!?])", r"\1", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
 def strip_repetition_loop(text):
     """Trunca la respuesta si detecta un bucle de repetición al final."""
     if not text:

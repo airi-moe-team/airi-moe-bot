@@ -83,7 +83,9 @@ def test_run_turn_trace_captures_search_and_grounding():
     ))
 
     assert result.trace.search_query == "precio bitcoin"
+    assert result.trace.to_dict()["search_query"] == "precio bitcoin"
     assert result.trace.web_context is not None
+    assert result.trace.web_relevant is True
     assert result.trace.grounded is True
     assert result.trace.timings_ms["search_ms"] >= 0
 

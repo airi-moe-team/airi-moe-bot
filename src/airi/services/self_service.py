@@ -11,7 +11,7 @@ from airi.domain.constants import (
 )
 from airi.domain.llm_output import extract_json_object, parse_self_update
 from airi.domain.prompts import SELF_REFLECTION_SCHEMA, self_reflection_prompt
-from airi.domain.self_model import apply_self_update, sync_preferences_from_self
+from airi.domain.self_model import apply_self_update
 from airi.domain.text_filters import clean_reply
 from airi.services.state import AppState
 
@@ -76,6 +76,7 @@ class SelfService:
             diary=list(self.state.diary),
             now=now,
             notes=notes,
+            preferences=self.state.world.get("preferences"),
         )
         messages = [
             {
@@ -158,7 +159,6 @@ class SelfService:
                         source="reflection",
                     )
                     if self_entry:
-                        sync_preferences_from_self(self.state.world)
                         self.state.save_identity()
                 self.state.mark_self_reflection(now=now)
 

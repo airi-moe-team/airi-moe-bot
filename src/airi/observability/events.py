@@ -84,7 +84,9 @@ class TurnEvent:
     # Contexto reconstruido
     prompt_system: str = ""
     web_query: str | None = None
+    search_query: str | None = None
     web_context: str | None = None
+    web_relevant: bool | None = None
 
     # Respuesta del LLM
     raw_llm: str | None = None
@@ -101,6 +103,9 @@ class TurnEvent:
 
     # Resultado
     final_reply: str = ""
+    disconnect: dict | None = None
+    stay_active: bool | None = None
+    shutdown_request: dict | None = None
 
     # GIF
     gif: str = "none"

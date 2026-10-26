@@ -88,6 +88,14 @@ def test_trace_round_trip_json():
         prompt_system="sistema",
         raw_llm='{"reply": "hola"}',
         parsed={"reply": "hola", "gif": "none"},
+        disconnect={"leave": True, "reason": "me voy a dormir"},
+        stay_active=False,
+        shutdown_request={
+            "origin": "model",
+            "reason": "me voy a dormir",
+            "correlation_id": "ab12",
+            "requested_at": 123.0,
+        },
         affinity_before=10,
         affinity_after=12,
         timings_ms={"llm_ms": 120},
@@ -95,6 +103,9 @@ def test_trace_round_trip_json():
     data = trace.to_dict()
     assert data["correlation_id"] == "ab12"
     assert data["reproducible"] is True
+    assert data["disconnect"]["leave"] is True
+    assert data["stay_active"] is False
+    assert data["shutdown_request"]["origin"] == "model"
     clone = TurnEvent.from_dict(json.loads(json.dumps(data)))
     assert clone == trace
 

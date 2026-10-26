@@ -3,12 +3,13 @@
 El núcleo inmutable de Airi (nombre, rol, honestidad anti-alucinación, idioma,
 prohibición de emojis y contrato JSON) vive en `SYSTEM_PROMPT` y NO se toca
 desde aquí. Este módulo gobierna la banda que Airi sí puede reescribir con
-guardarraíles: auto-concepto, rasgos, valores, manías y gustos.
+guardarraíles: auto-concepto, rasgos, valores y manías.
 
 Diseño (resumen):
 
-- `world["self"]` se siembra de forma perezosa y compatible con el
-  `world["preferences"]` antiguo (`migrate_from_world`).
+- `world["self"]` se siembra de forma perezosa.
+- Los gustos NO forman parte de este modelo: su única fuente canónica es
+  `world["preferences"]` (configurable por `AIRI_PROFILE`).
 - Todos los cambios pasan por `apply_self_update`, que impone:
     * allowlist de claves mutables,
     * clamps (rasgos 1..5) y topes (listas, longitudes),
@@ -23,7 +24,6 @@ Sin I/O: todo se hace sobre dicts.
 
 from __future__ import annotations
 
-from airi.domain.affinity import default_preferences
 from airi.domain.constants import (
     LEGACY_SELF_BASE_TRAITS,
     SELF_BASE_TRAITS,
@@ -36,12 +36,10 @@ from airi.domain.constants import (
     SELF_KEY_DAILY_LIMIT,
     SELF_KEY_DAILY_SECONDS,
     SELF_MAX_QUIRKS,
-    SELF_MAX_TASTES,
     SELF_MAX_VALUES,
     SELF_QUIRK_MAX_CHARS,
     SELF_REFLECTION_EVERY_N,
     SELF_REFLECTION_MIN_INTERVAL,
-    SELF_TASTE_MAX_CHARS,
     SELF_TRAIT_MAX,
     SELF_TRAIT_MIN,
     SELF_TRAITS_ALLOWLIST,
@@ -54,17 +52,14 @@ from airi.domain.constants import (
 # Prefijo de las claves de rasgo ("traits.juguetona").
 SELF_TRAIT_PREFIX = "traits."
 
-# Claves de lista (operaciones add/remove) y escalares (operación set).
+# Claves de lista (operaciones add/remove).
 SELF_LIST_KEYS = ("values", "quirks")
-SELF_SCALAR_KEYS = ()
 SELF_CONCEPT_KEY = "self_concept"
 
 # Topes y longitud por clave de lista.
 _LIST_LIMITS = {
     "values": (SELF_MAX_VALUES, SELF_VALUE_MAX_CHARS),
     "quirks": (SELF_MAX_QUIRKS, SELF_QUIRK_MAX_CHARS),
-    "tastes.loves": (SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS),
-    "tastes.dislikes": (SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS),
 }
 
 _NONE_WORDS = ("", "none", "ninguno", "null", "n/a")
@@ -137,29 +132,13 @@ def clamp_trait(value):
     return max(SELF_TRAIT_MIN, min(SELF_TRAIT_MAX, _as_int(value, SELF_TRAIT_MIN)))
 
 
-def _default_tastes(preferences):
-    prefs = preferences if isinstance(preferences, dict) else default_preferences()
-    return {
-        "loves": _clean_list(
-            prefs.get("loves"), SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS
-        ),
-        "dislikes": _clean_list(
-            prefs.get("dislikes"), SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS
-        ),
-        "favorite_flower": _clean_str(
-            prefs.get("favorite_flower"), SELF_TASTE_MAX_CHARS
-        ),
-        "favorite_food": _clean_str(prefs.get("favorite_food"), SELF_TASTE_MAX_CHARS),
-    }
-
-
 # ============================================================
 # Semilla / migración / normalización
 # ============================================================
 
 
-def default_self(preferences=None):
-    """Identidad inicial de Airi (absorbe los gustos de `preferences`)."""
+def default_self():
+    """Identidad inicial de Airi (sin gustos: esos viven en preferences)."""
     return {
         "version": 1,
         "self_concept": "",
@@ -173,7 +152,6 @@ def default_self(preferences=None):
         "traits_base": dict(SELF_BASE_TRAITS),
         "values": [],
         "quirks": [],
-        "tastes": _default_tastes(preferences),
         # `discoveries` ya NO forma parte del modelo global (decisión A5):
         # el aprendizaje libre vive en el ámbito privado del servidor.
         "history": [],
@@ -184,15 +162,14 @@ def default_self(preferences=None):
 
 
 def migrate_from_world(world):
-    """Crea el `self` desde el mundo antiguo, o normaliza el existente.
+    """Crea el `self` desde el mundo, o normaliza el existente.
 
-    Si `world` ya trae `self`, ese manda (se normaliza y se devuelve). Si no, se
-    siembra desde `world["preferences"]` para no perder los gustos ya fijados.
+    Los gustos ya no forman parte de la identidad mutable: su fuente canónica
+    es `world["preferences"]` y no se copian aquí.
     """
     if isinstance(world, dict) and isinstance(world.get("self"), dict):
         return normalize_self(world["self"])
-    preferences = world.get("preferences") if isinstance(world, dict) else None
-    return default_self(preferences)
+    return default_self()
 
 
 def _normalize_learned(name, learned, base):
@@ -343,26 +320,9 @@ def normalize_self(model):
         model.get("quirks"), SELF_MAX_QUIRKS, SELF_QUIRK_MAX_CHARS
     )
 
-    raw_tastes = model.get("tastes")
-    if not isinstance(raw_tastes, dict):
-        raw_tastes = {}
-    default_tastes = _default_tastes(None)
-    model["tastes"] = {
-        "loves": _clean_list(
-            raw_tastes.get("loves"), SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS
-        ),
-        "dislikes": _clean_list(
-            raw_tastes.get("dislikes"), SELF_MAX_TASTES, SELF_TASTE_MAX_CHARS
-        ),
-        "favorite_flower": _clean_str(
-            raw_tastes.get("favorite_flower") or default_tastes["favorite_flower"],
-            SELF_TASTE_MAX_CHARS,
-        ),
-        "favorite_food": _clean_str(
-            raw_tastes.get("favorite_food") or default_tastes["favorite_food"],
-            SELF_TASTE_MAX_CHARS,
-        ),
-    }
+    # Los gustos son legado: la fuente canónica es `world["preferences"]`.
+    # Se retiran del modelo al normalizar para que no queden listas duplicadas.
+    model.pop("tastes", None)
 
     # Descubrimientos (FIFO) — LECTURA HEREDADA (decisión A5).
     # El modelo global ya NO crea la clave: los descubrimientos libres viven
@@ -410,7 +370,7 @@ def normalize_self(model):
 def _is_mutable_key(key):
     if key == SELF_CONCEPT_KEY:
         return True
-    if key in SELF_LIST_KEYS or key in SELF_SCALAR_KEYS:
+    if key in SELF_LIST_KEYS:
         return True
     if key.startswith(SELF_TRAIT_PREFIX):
         return key[len(SELF_TRAIT_PREFIX):] in SELF_TRAITS_ALLOWLIST
@@ -452,11 +412,6 @@ def _get_list(model, key):
         return list(model.get("values") or [])
     if key == "quirks":
         return list(model.get("quirks") or [])
-    tastes = model.get("tastes") or {}
-    if key == "tastes.loves":
-        return list(tastes.get("loves") or [])
-    if key == "tastes.dislikes":
-        return list(tastes.get("dislikes") or [])
     return []
 
 
@@ -496,16 +451,6 @@ def _compute_change(model, key, op, raw_value):
             return (current, [x for x in current if x != item])
         return None
 
-    if key in SELF_SCALAR_KEYS:
-        field = key.split(".", 1)[1]
-        current = (model.get("tastes") or {}).get(field, "")
-        if op == "set":
-            new = _clean_str(raw_value, SELF_TASTE_MAX_CHARS)
-            return (current, new) if new and new != current else None
-        if op == "remove":
-            return (current, "") if current else None
-        return None
-
     return None
 
 
@@ -522,10 +467,6 @@ def _set_value(model, key, value):
                                                base)
     elif key in ("values", "quirks"):
         model[key] = value
-    elif key in ("tastes.loves", "tastes.dislikes"):
-        model["tastes"][key.split(".", 1)[1]] = value
-    elif key in SELF_SCALAR_KEYS:
-        model["tastes"][key.split(".", 1)[1]] = value
 
 
 def apply_self_update(model, update, *, now, user_id, source):
@@ -725,15 +666,6 @@ def render_self_section(model, notes=None):
         lines.append("Lo que valoro: " + "; ".join(model["values"]))
     if model["quirks"]:
         lines.append("Mis manías: " + "; ".join(model["quirks"]))
-    tastes = model["tastes"]
-    lines.append(
-        "Me encanta: "
-        + (", ".join(tastes["loves"]) or "(nada fijado todavía)")
-        + ". Me disgusta: "
-        + (", ".join(tastes["dislikes"]) or "(nada fijado todavía)")
-        + f". Mi flor favorita: {tastes['favorite_flower']}."
-        + f" Mi comida favorita: {tastes['favorite_food']}."
-    )
     if notes is None:
         recent = [e["text"] for e in (model.get("discoveries") or [])[-3:]]
     else:
@@ -745,11 +677,23 @@ def render_self_section(model, notes=None):
     return "\n".join(lines)
 
 
-def render_self_narrative(model, notes=None):
+def preferences_view(preferences):
+    """Gustos canónicos listos para mostrar (fuente: `world["preferences"]`)."""
+    prefs = preferences if isinstance(preferences, dict) else {}
+    return {
+        "loves": list(prefs.get("loves") or []),
+        "dislikes": list(prefs.get("dislikes") or []),
+        "favorite_flower": str(prefs.get("favorite_flower") or ""),
+        "favorite_food": str(prefs.get("favorite_food") or ""),
+    }
+
+
+def render_self_narrative(model, notes=None, preferences=None):
     """Resumen narrativo del "yo" para el comando público `!identidad-airi`.
 
     Los descubrimientos que se muestran son los privados de ESTE servidor
     (decisión A5): los de otros servidores no se comparten ni se consultan.
+    Los gustos se leen del perfil canónico (`world["preferences"]`).
     """
     normalize_self(model)
     lines = []
@@ -765,14 +709,14 @@ def render_self_narrative(model, notes=None):
         lines.append("**Lo que valoro:** " + ", ".join(model["values"]))
     if model["quirks"]:
         lines.append("**Mis manías:** " + "; ".join(model["quirks"]))
-    tastes = model["tastes"]
+    tastes = preferences_view(preferences)
     lines.append(
         "**Mis gustos:** me encanta "
         + (", ".join(tastes["loves"]) or "(por descubrir)")
         + "; me disgusta "
         + (", ".join(tastes["dislikes"]) or "(por descubrir)")
-        + f". Mi flor favorita son {tastes['favorite_flower']} y mi comida "
-        + f"favorita es {tastes['favorite_food']}."
+        + f". Mi flor favorita son {tastes['favorite_flower'] or '(por descubrir)'}"
+        + f" y mi comida favorita es {tastes['favorite_food'] or '(por descubrir)'}."
     )
     if notes is None:
         discoveries = list(model.get("discoveries") or [])
@@ -802,15 +746,3 @@ def render_self_history(model):
     if not lines:
         return "Airi no ha cambiado nada de su forma de ser todavía."
     return "\n".join(lines[-10:])
-
-
-
-def sync_preferences_from_self(world):
-    """NO-OP (FB-006): los gustos son parte estable y no se resincronizan.
-
-    El perfil canónico vive en `world["preferences"]` (sembrado por
-    `AIRI_PROFILE` o migrado una vez). El modelo mutable solo cambia
-    personalidad/valores/manías, así que copiar `self.tastes` al vuelo
-    potente pisar el perfil canónico tras un cambio de personalidad.
-    """
-    return None

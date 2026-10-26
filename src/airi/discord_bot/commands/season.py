@@ -94,12 +94,15 @@ def _mutate(state) -> None:
     # contadores de interacción se inyectan en el prompt, así que se borran
     # los registros activos; la copia de la temporada anterior queda archivada.
     state.users.clear()
-    # Identidad: se conservan rasgos, valores, gustos y manías (el "yo" tipado),
+    # Identidad: se conservan rasgos, valores y manías (el "yo" tipado),
     # pero se olvidan los descubrimientos libres y el historial de cambios:
     # son texto narrativo que puede nombrar a personas de la temporada anterior.
+    # Los gustos viven en `world["preferences"]` y no se tocan.
     self_model = state.world.get("self")
     if isinstance(self_model, dict):
         self_model.pop("discoveries", None)
+        # Los gustos son legado: la fuente canónica sigue en world["preferences"].
+        self_model.pop("tastes", None)
         self_model["history"] = []
     state.world[NOTES_KEY] = []
     state.dates.clear()

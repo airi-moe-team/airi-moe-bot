@@ -8,10 +8,10 @@ from airi.domain.self_model import (
     apply_self_update,
     default_self,
     normalize_self,
+    render_self_narrative,
     render_self_section,
     revert_self_update,
     should_reflect,
-    sync_preferences_from_self,
 )
 
 NOW = 1_000_000.0
@@ -29,11 +29,10 @@ def update(**overrides):
     return base
 
 
-def test_default_self_has_allowlisted_traits_and_default_tastes():
+def test_default_self_has_allowlisted_traits_and_no_tastes():
     model = default_self()
     assert set(model["traits"]) == set(SELF_BASE_TRAITS)
-    assert model["tastes"]["favorite_food"] == "postres y dulces"
-    assert {"videojuegos", "lol"} <= set(model["tastes"]["loves"])
+    assert "tastes" not in model
     assert model["history"] == []
 
 
@@ -127,13 +126,27 @@ def test_render_section_includes_identity_without_history():
     assert "me intrigó su historia" not in text
 
 
-def test_sync_preferences_from_self_keeps_legacy_world_in_sync():
-    """FB-006: el sync legacy es no-op; NO pisa el perfil canónico de gustos."""
-    world = {"season": 1, "self": default_self()}
-    world["self"]["tastes"]["favorite_food"] = "sushi"
-    world["preferences"] = {"favorite_food": "postres y dulces"}
-    sync_preferences_from_self(world)
-    assert world["preferences"]["favorite_food"] == "postres y dulces"
+def test_normalize_drops_legacy_tastes_and_keeps_canonical_preferences():
+    """Los gustos ya no viven en el self: solo en `world["preferences"]`."""
+    model = normalize_self(
+        {"tastes": {"loves": ["romantico"], "favorite_food": "postres"}}
+    )
+    assert "tastes" not in model
+    text = render_self_narrative(
+        model,
+        notes=[],
+        preferences={
+            "loves": ["videojuegos", "ramen"],
+            "dislikes": ["grosero"],
+            "favorite_flower": "tulipanes",
+            "favorite_food": "dulces",
+        },
+    )
+    assert "videojuegos, ramen" in text
+    assert "tulipanes" in text
+    assert "dulces" in text
+    assert "romantico" not in text
+    assert "postres" not in text
 
 
 def test_decay_moves_traits_toward_base_after_the_interval():

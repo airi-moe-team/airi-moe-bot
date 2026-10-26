@@ -7,7 +7,10 @@ conversación puede preguntar).
 """
 
 from airi.domain.prompts import last_assistant_reply_ended_with_question
-from airi.services.conversation import strip_trailing_question
+from airi.services.conversation import (
+    strip_trailing_question,
+    strip_trailing_questions,
+)
 
 # --- strip_trailing_question ------------------------------------------------
 
@@ -45,6 +48,15 @@ def test_no_vacia_una_respuesta_que_es_solo_pregunta():
 def test_tolerante_a_vacios():
     assert strip_trailing_question("") == ""
     assert strip_trailing_question(None) is None
+
+
+def test_recorta_varias_preguntas_encadenadas():
+    texto = "Prefiero el té. ¿Y tú qué? ¿Prefieres café o té?"
+    assert strip_trailing_questions(texto) == "Prefiero el té."
+
+
+def test_strip_trailing_questions_no_vacia_una_respuesta_de_solo_preguntas():
+    assert strip_trailing_questions("¿Y tú?") == "¿Y tú?"
 
 
 # --- last_assistant_reply_ended_with_question -------------------------------

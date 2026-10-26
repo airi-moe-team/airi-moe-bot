@@ -68,10 +68,7 @@ def test_self_update_ya_no_modifica_gustos():
 
     state = AppState()
     model = state.self_model()
-    before = {
-        "loves": list(model["tastes"]["loves"]),
-        "favorite_food": model["tastes"]["favorite_food"],
-    }
+    canonical = dict(state.world.get("preferences") or {})
     entry = apply_self_update(
         model,
         {"key": "tastes.loves", "op": "add", "value": "ramen",
@@ -81,8 +78,8 @@ def test_self_update_ya_no_modifica_gustos():
         source="message",
     )
     assert entry is None
-    assert list(model["tastes"]["loves"]) == before["loves"]
-    assert model["tastes"]["favorite_food"] == before["favorite_food"]
+    assert "tastes" not in model
+    assert dict(state.world.get("preferences") or {}) == canonical
 
 
 def test_self_update_de_personalidad_sigue_funcionando():
@@ -104,21 +101,19 @@ def test_self_update_de_personalidad_sigue_funcionando():
     assert int(model["traits"][key]) == before + 1
 
 
-def test_sync_preferences_from_self_queda_como_no_op():
-    """El fast-sync legacy NO puede pisar el perfil canónico de gustos."""
-    from airi.domain.self_model import sync_preferences_from_self
-
-    world = {
-        "self": {"tastes": {"loves": ["otra cosa"], "dislikes": [],
-                            "favorite_food": "otra", "favorite_flower": "x"}},
-        "preferences": {"loves": ["ramen"], "dislikes": [],
-                        "favorite_food": "dulces", "favorite_flower": "tulipanes"},
+def test_self_model_sin_gustos_no_pisa_el_perfil_canonico():
+    """El self ya no contiene gustos: no hay segunda fuente que sincronizar."""
+    state = AppState()
+    canonical = {
+        "loves": ["ramen"],
+        "dislikes": [],
+        "favorite_food": "dulces",
+        "favorite_flower": "tulipanes",
     }
-    sync_preferences_from_self(world)
-    assert world["preferences"] == {
-        "loves": ["ramen"], "dislikes": [],
-        "favorite_food": "dulces", "favorite_flower": "tulipanes",
-    }
+    state.world["preferences"] = dict(canonical)
+    model = state.self_model()
+    assert "tastes" not in model
+    assert state.world["preferences"] == canonical
 
 
 def test_apply_turn_no_resincroniza_gustos_tras_personalidad():

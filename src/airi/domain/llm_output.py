@@ -191,6 +191,28 @@ def assistant_history_content(answer, output=None):
     return json.dumps(payload, ensure_ascii=False)
 
 
+def assistant_reply_text(content):
+    """Extrae el texto de respuesta de una entrada de historial de Airi.
+
+    El historial guarda siempre un JSON con el contrato completo; esta función
+    tolera también texto plano (historial antiguo o entradas sintéticas) y
+    devuelve "" si no hay nada utilizable.
+    """
+    if not isinstance(content, str):
+        return ""
+    text = content.strip()
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(data, dict):
+            reply = data.get("reply")
+            return reply if isinstance(reply, str) else ""
+        return ""
+    return content
+
+
 def parse_date_question(raw_question):
     """Sanea la pregunta decisiva propuesta por la IA (texto no fiable).
 
@@ -322,7 +344,17 @@ def parse_disconnect(raw_disconnect):
     return {"leave": True, "reason": reason}
 
 
-def parse_model_output(raw_output, delta_max=None, *, allow_empty_reply=False):
+def parse_model_output(
+    raw_output, delta_max=None, *, allow_empty_reply=False,
+    allow_raw_fallback=True,
+):
+    """Normaliza la salida del modelo.
+
+    `allow_raw_fallback=False` desactiva el último recurso que publica el texto
+    crudo cuando el JSON no es parseable. Se usa cuando la generación se cortó
+    por longitud: en ese caso el texto crudo suele ser un JSON truncado y no
+    debe llegar al usuario como si fuera la respuesta de Airi.
+    """
     if not isinstance(raw_output, str) or not raw_output.strip():
         return _model_output()
 
@@ -336,6 +368,12 @@ def parse_model_output(raw_output, delta_max=None, *, allow_empty_reply=False):
         if recovered_reply:
             log.warning("JSON inválido; se recuperó reply y se desactiva el GIF")
             return _model_output(reply=clean_reply(recovered_reply))
+        if not allow_raw_fallback:
+            log.warning(
+                "JSON no recuperable y fallback de texto crudo desactivado "
+                "(generación truncada); se descarta la salida."
+            )
+            return _model_output()
         log.warning(
             "JSON no recuperable; se conserva la respuesta original "
             "y se desactiva el GIF. Salida (primeros 500 caracteres): %r",

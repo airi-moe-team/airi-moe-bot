@@ -45,16 +45,37 @@ class FakeMessage:
 class Registry:
     def match(self, _content):
         async def handler(ctx, _message):
-            await ctx.request_shutdown("me voy a dormir", user_id=42)
+            await ctx.request_shutdown(
+                "me voy a dormir",
+                user_id=42,
+                correlation_id="cid-shutdown",
+            )
 
         return handler
+
+
+class FakePersistence:
+    def __init__(self):
+        self.commits = 0
+
+    def transaction(self):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _tx():
+            try:
+                yield
+            finally:
+                self.commits += 1
+
+        return _tx()
 
 
 def test_request_shutdown_closes_the_global_client(monkeypatch):
     monkeypatch.setattr(client_module.discord, "Client", FakeClient)
     FakeClient.instances.clear()
 
-    def build_ctx(_channel):
+    def build_ctx(_channel, pending_message_tracker=None):
         return BotContext(
             channel_id=7,
             state=AppState(),
@@ -73,3 +94,41 @@ def test_request_shutdown_closes_the_global_client(monkeypatch):
 
     client = asyncio.run(scenario())
     assert client.closed is True
+
+
+def test_request_shutdown_records_origin_time_and_correlation(monkeypatch):
+    monkeypatch.setattr(client_module.discord, "Client", FakeClient)
+    FakeClient.instances.clear()
+    state = AppState()
+    persistence = FakePersistence()
+
+    def build_ctx(_channel, pending_message_tracker=None):
+        return BotContext(
+            channel_id=7,
+            state=state,
+            persistence=persistence,
+            expire_stale_dates=lambda: False,
+        )
+
+    async def scenario():
+        client = client_module.create_client(
+            build_ctx=build_ctx,
+            registry=Registry(),
+            channel_id=7,
+        )
+        await client.events["on_message"](FakeMessage("vamos a dormir"))
+        await asyncio.sleep(0.7)
+        return client
+
+    client = asyncio.run(scenario())
+    entry = state.world["last_shutdown"]
+    assert client.closed is True
+    assert entry["kind"] == "self"
+    assert entry["reason"] == "me voy a dormir"
+    assert entry["origin"] == "model"
+    assert entry["correlation_id"] == "cid-shutdown"
+    assert entry["status"] == "confirmed"
+    assert entry["requested_at"] > 0
+    assert entry["updated_at"] >= entry["requested_at"]
+    assert entry["context_delivered"] is False
+    assert persistence.commits >= 2

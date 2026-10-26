@@ -1,0 +1,206 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-24T07:03:01Z",
+  "items": [
+    {
+      "id": "FB-009",
+      "title": "Respuesta directa a la intención del disparador en intervenciones espontáneas",
+      "severity": "major",
+      "impact": "Las intervenciones espontáneas pueden devolver preguntas o cambiar de tema antes de atender el estímulo que activó el turno, reduciendo la naturalidad.",
+      "recommendation": "Añadir criterio de aceptación para que la respuesta espontánea atienda primero el mensaje activador y el contexto efímero, y solo pregunte si aporta valor o falta un dato.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "Requirement 3: añadir criterio de aceptación para respuesta directa a la intención del disparador."
+        ],
+        "design": [
+          "Definir regla de prioridad de intención en el prompt de intervención espontánea."
+        ],
+        "tasks": [
+          "Añadir pruebas de pregunta directa y corrección en intervenciones espontáneas."
+        ]
+      }
+    },
+    {
+      "id": "FB-010",
+      "title": "Naturalidad narrativa y brevedad proporcional en intervenciones",
+      "severity": "major",
+      "impact": "Las respuestas espontáneas pueden acumular gestos, fórmulas genéricas y cierres prefabricados, especialmente en mensajes breves.",
+      "recommendation": "Reforzar la regla existente para que las acotaciones sean opcionales, la extensión sea proporcional al mensaje y se eviten despedidas/genéricos repetidos.",
+      "targets": [
+        "requirements",
+        "design"
+      ],
+      "updates": {
+        "requirements": [
+          "Requirement 3: la respuesta espontánea debe ajustar su extensión al contexto y evitar acotaciones por inercia."
+        ],
+        "design": [
+          "Consolidar política de naturalidad narrativa sin duplicar instrucciones."
+        ]
+      }
+    },
+    {
+      "id": "FB-011",
+      "title": "Coherencia entre texto, disconnect, stay_active y estado real",
+      "severity": "major",
+      "impact": "La traza muestra disconnect.leave=false y stay_active=false junto a un estado persistido de apagado confirmado, lo que puede generar mensajes contradictorios.",
+      "recommendation": "Investigar el flujo completo antes de corregir; no resolver solo con prompt. Añadir pruebas unitarias e integradas para combinaciones de estado.",
+      "targets": [
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "design": [
+          "Documentar flujo de disconnect/stay_active y persistencia de actividad."
+        ],
+        "tasks": [
+          "Añadir casos técnicos para combinaciones de disconnect y stay_active."
+        ]
+      }
+    },
+    {
+      "id": "FB-012",
+      "title": "Memoria consolidada y preferencias corregidas",
+      "severity": "minor",
+      "impact": "Los recuerdos duplicados o contradictorios reducen la personalización aparente en intervenciones.",
+      "recommendation": "Definir consolidación con precedencia para correcciones explícitas y fuente canónica para preferencias de Airi.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "Añadir criterio de respeto a correcciones explícitas de preferencias."
+        ],
+        "design": [
+          "Definir modelo de consolidación de recuerdos."
+        ],
+        "tasks": [
+          "Añadir pruebas de aislamiento entre usuarios y preferencias contradictorias."
+        ]
+      }
+    },
+    {
+      "id": "FB-013",
+      "title": "Pruebas de regresión y métricas de naturalidad",
+      "severity": "minor",
+      "impact": "No hay evidencia reproducible de mejora de naturalidad tras cambios de prompt.",
+      "recommendation": "Crear escenarios fijos y puntuar comprensión, naturalidad, continuidad, individualidad y coherencia antes y después.",
+      "targets": [
+        "tasks"
+      ],
+      "updates": {
+        "tasks": [
+          "Añadir escenarios de pregunta directa, corrección, saludo breve, preferencia corregida, desacuerdo, conversación casual y despedida."
+        ]
+      }
+    },
+    {
+      "id": "FB-014",
+      "title": "Evaluación reproducible A/B del prompt",
+      "severity": "major",
+      "impact": "Los cambios de naturalidad podrían parecer mejores en ejemplos aislados, pero empeorar otros escenarios o depender de la variabilidad de generación del modelo.",
+      "recommendation": "Establecer una línea base con el prompt actual y ejecutar los mismos casos con el prompt modificado, manteniendo constantes el modelo, los parámetros de inferencia, las entradas y el contexto. Repetir las pruebas cuando la generación no sea determinista.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "Exigir evidencia comparativa de mejora antes de aprobar cambios de naturalidad."
+        ],
+        "design": [
+          "Definir un evaluador que registre entradas, contexto, versión del prompt, configuración del modelo y resultados."
+        ],
+        "tasks": [
+          "Crear un conjunto de pruebas de referencia y comparar baseline frente a candidato, conservando los resultados."
+        ]
+      }
+    },
+    {
+      "id": "FB-015",
+      "title": "Integridad del contrato de salida y del estado",
+      "severity": "major",
+      "impact": "Una respuesta puede sonar natural, pero contener campos inesperados, valores incompatibles o decisiones de actividad que el parser o el sistema de persistencia interpreten de otra manera.",
+      "recommendation": "Verificar que la salida del modelo cumpla el esquema vigente y que la normalización, las acciones ejecutadas y el estado persistido sean coherentes entre sí. No modificar el esquema por intuición: primero documentar el contrato real.",
+      "targets": [
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "design": [
+          "Documentar el flujo entre generación, validación, normalización, ejecución de acciones y persistencia."
+        ],
+        "tasks": [
+          "Probar JSON inválido, campos ausentes, campos desconocidos, valores nulos y combinaciones de disconnect y stay_active."
+        ]
+      }
+    },
+    {
+      "id": "FB-016",
+      "title": "Separación entre escucha activa e intervención espontánea",
+      "severity": "major",
+      "impact": "Mejorar la naturalidad de una intervención podría hacer que Airi responda demasiado, interrumpa conversaciones o convierta cada mensaje en una oportunidad para hablar.",
+      "recommendation": "Evaluar por separado la selección del estímulo, la decisión de intervenir y la generación del mensaje. La calidad de una respuesta no compensa una intervención innecesaria.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "Conservar las condiciones que determinan cuándo Airi debe intervenir y cuándo debe permanecer escuchando."
+        ],
+        "design": [
+          "Separar la selección del disparador de la política lingüística que redacta la respuesta."
+        ],
+        "tasks": [
+          "Probar mensajes irrelevantes, conversaciones entre otros usuarios, estímulos relevantes, mensajes consecutivos y ausencia de un objetivo narrativo."
+        ]
+      }
+    },
+    {
+      "id": "FB-017",
+      "title": "Ajustes finales de precisión y salvaguardas",
+      "severity": "major",
+      "impact": "Los requisitos podrían interpretarse de forma demasiado amplia y generar intervenciones innecesarias, conclusiones prematuras sobre FB-011, pérdida de evidencia A/B o mezcla de memoria entre usuarios.",
+      "recommendation": "Refinar FB-009, FB-011, FB-014 y FB-016, y añadir salvaguardas transversales de memoria y evaluación.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "FB-009: responder primero a la intención del mensaje activador, pero permitir preguntas cuando sean realmente útiles.",
+          "FB-011: tratar la discrepancia observada como hipótesis por investigar, no como prueba definitiva de fallo; verificar secuencia temporal y origen de last_shutdown.",
+          "FB-014: guardar salidas originales, prompt efectivo, contexto, parámetros de inferencia y versión del modelo; una repetición puede producir respuestas distintas.",
+          "FB-016: medir por separado si Airi debe intervenir y cómo redacta el mensaje.",
+          "Memoria: una corrección explícita debe prevalecer sobre un recuerdo contradictorio dentro de su ámbito, sin mezclar datos de usuarios distintos ni convertir cualquier mención reciente en preferencia permanente.",
+          "Evaluación: una mejora media no debe ocultar regresiones graves en coherencia, privacidad, estado o formato de salida."
+        ],
+        "design": [
+          "Documentar ajustes finales y salvaguardas transversales.",
+          "Separar medición de intervención y redacción en la evaluación."
+        ],
+        "tasks": [
+          "Añadir verificación temporal de last_shutdown para FB-011.",
+          "Guardar artefactos completos de línea base y repetición para FB-014.",
+          "Añadir pruebas de aislamiento de memoria y regresiones graves para salvaguardas."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ]
+}

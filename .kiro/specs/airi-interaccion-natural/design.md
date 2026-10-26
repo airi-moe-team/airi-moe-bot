@@ -1,357 +1,470 @@
-# Design Document — airi-interaccion-natural (modo espectador, fase 1)
+# Design Document — airi-interaccion-natural
 
 ## Overview
 
-**Purpose**: Añadir a Airi una capa de escucha pasiva por canal con activación local de
-turnos, para que participe de forma natural sin gastar llamadas al LLM mientras escucha.
+**Purpose**: Mejorar la naturalidad conversacional de Airi sin perder la base de
+escucha pasiva ya implementada. La fase 1 permite que Airi escuche el canal y
+decida localmente cuándo intervenir; la fase 2 mejora cómo responde, cómo usa su
+memoria y cómo mantiene coherentes el texto y el estado del bot.
 
-**Users**: Los miembros del canal autorizado verán que Airi se suma a la conversación
-cuando la mencionan o cuando un mensaje toca un gusto suyo proviene de alguien de afinidad
-alta; los desarrolladores y el dueño del bot disponen de configuración y trazas para
-regular y auditar ese comportamiento.
+**Users**: Los miembros del canal autorizado perciben una Airi más directa, menos
+repetitiva y con opiniones propias. Los desarrolladores disponen de escenarios,
+métricas y artefactos de evaluación para comparar cambios sin depender de
+impresiones aisladas.
 
-**Impact**: Extiende el flujo de entrada (`on_message`) y el servicio de conversación sin
-cambiar su contrato: se añade un buffer pasivo efímero en memoria, un evaluador de
-disparadores, una概率 de intervención con tirada local previa al LLM y un cooldown por
-canal/autor. Persistencia de usuario/estado, comandos, citas y replay no cambian salvo
-campos observables nuevos en `TurnEvent`.
+**Impact**: Se extiende el prompt de personalidad, la memoria de usuario y la
+observabilidad del estado. No se cambia el contrato de los turnos ni la
+arquitectura de persistencia salvo campos aditivos y una política de
+consolidación de memoria compatible con los datos existentes.
+
+### Fases
+
+- **Fase 1 — Escucha pasiva (`R1-R6`)**: implementada. Buffer efímero, matcher
+  local, activación por mención/tema/afinidad, probabilidad y cooldown.
+- **Fase 2 — Naturalidad y coherencia (`R7-R12`)**: pendiente. Intención,
+  naturalidad narrativa, personalidad observable, memoria consolidada, coherencia
+  de estado y evaluación reproducible.
 
 ### Goals
 
-- Cero llamadas al LLM para mensajes sin disparador.
-- Un único turno por eventos elegibles, respetando debounce/queue y cooldown.
-- Interés (matcher local sobre gustos) y afinidad alta como señales independientes.
-- Contexto reciente del canal inyectado como contexto efímero sin mezclar con el historial
-  persistido de turnos.
-- Comportamiento reproducible y testable (reloj/azar inyectables).
+- Responder primero a la intención del mensaje, sin evasivas ni preguntas
+  automáticas.
+- Reducir acotaciones repetitivas y cierres prefabricados.
+- Convertir los rasgos de personalidad en decisiones observables.
+- Consolidar memoria y respetar correcciones explícitas.
+- Mantener coherencia entre texto, `disconnect`, `stay_active` y persistencia.
+- Medir mejoras con baseline/candidato y una rúbrica fija.
 
 ### Non-Goals
 
-- Retirada ante hostilidad, mediación/DM, retorno tras episodio (fase posterior).
+- Retirada ante hostilidad, mediación/DM y retorno tras episodio.
 - Disparadores por inactividad o picos de actividad.
-- Cambiar el modelo local de LLM, el romance/afinidad o el sistema de citas.
-- Resúmenes de contexto largo: en esta fase siempre se recorta el snapshot del buffer.
+- Cambiar el modelo local, el sistema de citas o la lógica de romance.
+- Introducir un juez automático de subjetividad como única fuente de verdad.
+- Garantizar un porcentaje de "humanidad" medible.
 
 ## Architecture
 
 ### Existing Architecture Analysis
 
-Flujo actual respetado:
+Flujo actual:
 
-1. `on_message` (src/airi/discord_bot/client.py): valida apagado/bot/canal/contenido,
-   expira citas, despacha comandos, detecta cita activa, hace debounce por
-   `(canal, autor)` y encola en `ChannelDispatcher.submit(...)` el turno
-   `turn.run_user_turn(...)`.
-2. `turn.run_user_turn` (src/airi/discord_bot/turn.py): construye `TurnContext(kind=...),
-   chat con `ConversationService.generate_turn` vía `TurnCoordinator` (journal +
-   persistence con `publisher`), y publica el resultado; `run_turn` es equivalente sin
-   journal.
-3. `ConversationService._generate` (src/airi/services/conversation.py): compone el prompt
-   con secciones fijas (afinidad, relación, gustos via `preferences_prompt_section`, etc.)
-   y ejecuta la llamada al LLM; el historial por canal vive en
-   `state.histories[channel_id]`.
-4. `TurnEvent` (src/airi/observability/events.py): ya enumera `kind`, `messages_in`,
-   `history_in`, `notes` y snapshots; ampliable sin romper replay (versionación por `v`).
+1. `on_message` (`src/airi/discord_bot/client.py`) valida apagado, bot, canal y
+   contenido; expira citas; despacha comandos; detecta cita activa; aplica
+   debounce por `(canal, autor)` y encola `turn.run_user_turn(...)` en
+   `ChannelDispatcher`.
+2. `turn.run_user_turn` (`src/airi/discord_bot/turn.py`) construye
+   `TurnContext(kind=...)`, genera con `ConversationService.generate_turn`,
+   confirma con `TurnCoordinator` y publica el resultado. Los turnos de sesión
+   (`spectator`, `active`, `proactive`) usan `stay_active`.
+3. `ConversationService` (`src/airi/services/conversation.py`) compone el prompt
+   con secciones fijas y ejecuta la llamada al LLM. El historial por canal vive
+   en `state.histories[channel_id]`.
+4. `TurnEvent` (`src/airi/observability/events.py`) registra `kind`, mensajes,
+   historial, notas y snapshots. Los campos nuevos son aditivos.
+5. `src/airi/evaluation/narrative.py` y `tools/narrative_eval.py` ya evalúan
+   riesgos románticos, pero no cubren naturalidad conversacional ni la rúbrica de
+   siete escenarios.
 
-**Integración**: El modo espectador se insterta sobre el mismo pipeline de turnos
-(`TurnContext.kind="spectator"`), reutilizando debounce, dispatcher FIFO y
-`TurnCoordinator`. El buffer NO entra en `state.histories` ni en disco: es un contexto
-volátil por canal en memoria. `TurnJournal` no cambia (los IDs pasivos no se reclaman
-durablemente, solo se consume de buffer).
+### Verification Status
 
-### High-Level Architecture
+| Afirmación | Estado | Evidencia |
+|---|---|---|
+| `stay_active` no existe en el esquema normal | Verificada | `RESPONSE_SCHEMA` en `domain/llm_output.py` |
+| `stay_active` es obligatorio en modo sesión | Verificada | `SESSION_RESPONSE_SCHEMA` y `parse_session_output` |
+| En modo normal se fuerza `stay_active=True` | Verificada | `ConversationService._generate` |
+| Existe reparación de cierre con pregunta | Verificada | `QUESTION_CLOSE_REPAIR_PROMPT` y `strip_trailing_question` |
+| Existe nota prioritaria de corrección | Verificada | `ConversationService.generate_turn` |
+| La memoria deduplica textos exactos o casi exactos | Verificada | `domain/memories.py` |
+| `last_shutdown` guarda motivo, origen y estado | Verificada | `_wire_shutdown` en `discord_bot/client.py` |
+| `last_shutdown` guarda timestamps y correlación | Verificada | `requested_at`, `updated_at`, `origin`, `correlation_id` en cierres normal y manual |
+| La traza guarda `disconnect`, `stay_active` y `shutdown_request` | Verificada | `TurnEvent` y `ConversationService.apply_turn` |
+| La matriz `disconnect`/`stay_active` está cubierta | Verificada | tests de sesión y de cierre en `tests/integration/` |
+| La traza `88f9f88c0ee0` era normal o de sesión | Pendiente de inspección | Requiere revisar `kind`, timestamps y origen del cierre |
+| La discrepancia `disconnect.leave=false` + `stay_active=false` es un bug | No confirmada | Puede ser un turno normal, un cierre manual o un estado previo |
+
+No se debe presentar una hipótesis derivada de una traza como fallo confirmado.
+La fase 2 exige trazabilidad suficiente para resolverla con evidencia.
+
+## Fase 1 — Escucha pasiva
+
+### High-Level Flow
 
 ```mermaid
 graph TB
-  A[Mensaje usuario] --> B{Evaluar disparadores}
-  B -->|resolve| C[Mencion directa / respuesta a Airi]
-  B -->|local| D[Matcher de temas sobre gustos de Airi]
-  B -->|local| E[Umbral de afinidad del autor]
-  C --> F[Cooldown ok y tirada de probabilidad]
-  D --> F
-  E --> F
-  F -->|falla| G[Silencio: buffer conserva mensaje]
-  F -->|pasa| H[dataclass SpectatorActivation]
-  H --> I[dataclass SnapshotBuffer]
-  I --> J[ConversationService.generate_turn con kind=spectator]
-  J -->|respuesta publicada| K[Marcar snapshot como consumido + cooldown]
-  J -->|falla publicacion| L[No consumir, sin cooldown]
-```
-
-**Architectural Integration**:
-- Se conserva el dispatcher FIFO por canal: el turno espontáneo se encola igual.
-- Se añade `SpectatorPolicy`/`PassiveBuffer` como servicios en `services/` y el
-  matcher/evaluador puro en `domain/` (sin I/O).
-- `TurnEvent` recibe campos `spectator_*` aditivos y `kind="spectator"`.
-- No se introducen dependencias externas.
-
-### Key Design Decisions
-
-**Decision 1 — Contexto efímero, no fusión con historial.**
-- Context: Hay un buffer pasivo separado y hay que resentir al LLM sin persistir nada en
-  `state.histories` ni NASCAR a largo plazo.
-- Alternatives: (a) Volcar el buffer al final del historial del canal; (b) Enviar solo el
-  último mensaje; (c) Snapshots epheḿeros hasta publicar.
-- Selected: (c) `SpectatorSnapshot` incluye el mensaje activador exacto 1 vez + ventana
-  reciente con autor; se envía como una pseudo-historial inyectable en el prompt; al
-  publicar con éxito se marca solo como consumidos los IDs de ese snapshot; si falla se
-  conservan hasta TTL.
-- Rationale: El historial persistido conserva la regla actual (conversaciones dentro de
-  turnos); los pasivos no lo contaminan y el TTL acota memoria.
-- Trade-offs: Airi puede reaccionar sin recordar por siempre ese hilo; el snapshot
- engeance el prompt un poco más largo pero acotado.
-
-**Decision 2 — Matcher puro y determinista en `domain/`, con perfil canónico estable.**
-- Context: La detección de interés debe ser coste casi cero, testeable sin red, y debe
-      usar el perfil de gustos estable; el modelo mutable de identidad no altera qué
-      despierta a Airi ni los gustos que el prompt conoce.
-- Alternatives: LLM para interpretar; keyword embedding; solo afinidad; self-model
-      mutable como fuente.
-- Selected: `domain/spectator.py`: normalizador Unicode/casefold, word-boundary (regex
-      precompilada) y alias declarados explícitamente; fuente canónica del perfil de
-      gustos configurable desde `AIRI_PROFILE` (JSON): si está definida y es válida, el
-      bootstrap la persiste en `world["preferences"]` dentro de transacción; de lo
-      contrario, fallback al perfil persistido o a los defaults. El matcher y el prompt
-      leen ambos la misma fuente.
-- Rationale: Coherente con la pureza del dominio, evita duplicar lista de temas y la tu
-      evolución del self-model no afecta el comportamiento de activación ni su identidad.
-- Trade-offs: Sin sentido figurado; la edición del perfil se ve a través del env (editing
-      y reinicio), no por conversación.
-
-**Decision 3 — Probabilidad y cooldown como política inyectable.**
-- Context: La feature se probó en conversación natural; sin política, Airi responde a
-  cada eligible, y un cooldown fallido no debería penalizar.
-- Alternatives: (a) Siempre responder; (b) Probabilidad + cooldown académico; chaleco;
-  (c) tirada tras la petición HTTP.
-- Selected: Orden: evaluador → cooldown check → tirada local (con creador de
-  uniforme inyectable; por defecto `random.random`) → turno LLM; el cooldown se marca
-  solo al confirmar publicación con éxito; la tirada fallida NO inicia cooldown.
-- Rationale: Coincide con “apruebo” tras discusión; el ahorro de LLM sea previsible.
-- Trade-offs: No garantiza respuesta aun si el contenido es muy relevante; el cooldown
-  espontáneo no bloquea menciones directas.
-
-## System Flows
-
-### Flow: Decisión de activación
-
-```mermaid
-flowchart TD
-  A[Llega mensaje] --> B[Filtrar bot/comando/canal]
+  A[Mensaje de usuario] --> B[Filtrar bot, comando y canal]
   B --> C[Añadir al buffer pasivo]
-  C --> D{Mencion directa o respuesta a Airi?}
-  D -->|Si| F[Activacion garantizada]
-  D -->|No| E{Matcher de tema o afinidad >= umbral?}
-  E -->|No| G[Fin: buffer sin turno]
-  E -->|Si| H[Cooldown activo?]
-  H -->|Si| G
-  H -->|No| I[Tirada de probabilidad]
-  I -->|Falla| J[Silencio SIN LLM y SIN cooldown]
-  I -->|Pasa| F
-  F --> K[Persistir snapshot y despachar turno spectator]
+  C --> D{Mención, respuesta o nombre?}
+  D -->|Sí| E[Activación garantizada]
+  D -->|No| F{Matcher de tema o afinidad?}
+  F -->|No| G[Silencio: el buffer conserva el mensaje]
+  F -->|Sí| H{Cooldown activo?}
+  H -->|Sí| G
+  H -->|No| I[Tirada local de probabilidad]
+  I -->|Falla| G
+  I -->|Pasa| E
+  E --> J[Snapshot efímero]
+  J --> K[Turno spectator por el dispatcher]
+  K -->|Publicado| L[Consumir snapshot y armar cooldown]
+  K -->|Falla| M[Retener mensajes hasta TTL]
 ```
 
-### Flow: Ciclo del snapshot
+### Key Decisions
 
-```mermaid
-sequenceDiagram
-  participant U as Usuario
-  participant C as client.on_message
-  participant P as PassiveBuffer
-  participant S as ConversationService
-  participant T as turn.run_user_turn
-  U->>C: mensaje
-  C->>P: append(usuario, contenido)
-  C->>C: debounce (mismo autor)
-  C->>S: evaluar evento (matcher/afinidad)
-  alt elegible y pasantia
-    C->>P: snapshot(activador + recientes)
-    C->>T: dispatcher.submit(turn.run_user_turn, kind="spectator")
-    T->>S: generate_turn(user, snapshot, ctx)
-    S-->>T: TurnResult(reply)
-    T-->>U: reply publicada
-    T->>P: mark_consumed(snapshot_ids)
-    T->>P: register_cooldown(channel, author)
-  else tirada falla o cooldown
-    P-->>C: retener hasta TTL
-  end
-```
+**Decisión 1 — Contexto efímero, no historial persistente.**
+El buffer pasivo se guarda en memoria por canal y no se vuelca a
+`state.histories`. Al activar un turno se construye un snapshot con el mensaje
+activador y una ventana reciente, con autor y sin duplicados. Al publicar con
+éxito se consumen solo los IDs del snapshot; si falla, se conservan hasta su TTL.
 
-## Data Models
+**Decisión 2 — Matcher local y determinista.**
+`domain/spectator.py` normaliza texto, compila expresiones con límites de palabra
+y usa el perfil canónico de gustos del estado. No hay llamada al LLM para decidir
+si un mensaje coincide con un tema. Los alias deben estar declarados
+explícitamente.
 
-### buffer pasivo (memoria volátil)
+**Decisión 3 — Probabilidad y cooldown inyectables.**
+La secuencia es: evaluar señales → comprobar cooldown → tirada local → turno LLM.
+La tirada fallida no consume cooldown. El cooldown se arma solo tras publicar con
+éxito. Reloj y azar son inyectables para tests reproducibles.
+
+### Data Models (fase 1)
 
 ```python
-# (No es contrato de I/O; es in-memory dataclass snapshot)
 @dataclass
-class PassiveEntry:
-    author_id: str        # str(author.id)
-    author_name: str      # display_name
-    content: str          # texto limpio
-    ts: float             # clock() al añadir
+class BufferEntry:
+    channel_id: str
+    author_id: str
+    author_name: str
+    content: str
+    message_id: str
+    ts: float
 
-@dataclass
-class SpectatorSnapshot:
-    trigger_message_id: str | None   # id del mensaje que activó
-    entries: list[PassiveEntry]      # ventana reciente en orden cronológico
-    reason: str                      # "mention" | "reply" | "name" | "topic" | "affinity"
+@dataclass(frozen=True)
+class AiriSpectatorPolicy:
+    enabled: bool = False
+    affinity_threshold: int = AIRI_SPECTATOR_AFFINITY_POINTS
+    probability_topic: float = AIRI_SPECTATOR_PROB_TOPIC
+    probability_affinity: float = AIRI_SPECTATOR_PROB_AFFINITY
+    cooldown_seconds: int = AIRI_SPECTATOR_COOLDOWN_SECONDS
+    snapshot_max_messages: int = AIRI_SPECTATOR_SNAPSHOT_MAX
+    buffer_max: int = AIRI_SPECTATOR_BUFFER_MAX
+    ttl_seconds: int = AIRI_SPECTATOR_TTL_SECONDS
+    handoff_seconds: int = AIRI_SPECTATOR_HANDOFF_SECONDS
+    active_idle_seconds: int = AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS
+    proactive_idle_seconds: int = AIRI_SPECTATOR_PROACTIVE_IDLE_SECONDS
+
+@dataclass(frozen=True)
+class ActivationDecision:
+    proceed: bool
+    reason: str | None = None
+    guaranteed: bool = False
+    probability: float = 0.0
+    roll: float = 0.0
 ```
 
-Invariantes:
-- Máximo `AIRI_SPECTATOR_BUFFER_MAX` entradas por canal (default 20).
-- TTL: entradas con `ts < now - AIRI_SPECTATOR_TTL_SECONDS` se eliminan al leer o añadir.
-- No persiste en `state.json`; se pierde al reiniciar (aceptable y deseado).
+El snapshot es una tupla de `BufferEntry` y no se persiste como entidad propia
+en la implementación actual. La política toma sus valores por defecto de
+`AIRI_SPECTATOR_*` en `domain/constants.py`.
 
-### Política de activación
+### Error Handling (fase 1)
+
+- Generación fallida: snapshot retenido, sin cooldown.
+- Publicación fallida: no se consume el snapshot, sin cooldown.
+- Buffer vacío o expirado: no se evalúa el tema, se conserva el silencio.
+- Apagado en curso: `on_message` no evalúa señales.
+- Modo espectador desactivado: se omite todo el flujo de activación.
+
+## Fase 2 — Naturalidad y coherencia
+
+### Decisión 4 — Secciones de prompt explícitas y versionables
+
+Se añadirán bloques separados en `src/airi/domain/prompts.py` para poder
+probarlos y ajustarlos sin reescribir todo el prompt:
+
+```python
+INTENT_PRIORITY_PROMPT
+NARRATIVE_NATURALNESS_PROMPT
+OBSERVABLE_PERSONALITY_PROMPT
+OWN_OPINIONS_PROMPT
+MEMORY_USAGE_PROMPT
+FAREWELL_PROMPT
+```
+
+Orden recomendado dentro del prompt:
+
+1. Identidad y vínculos existentes.
+2. Diálogo.
+3. **Prioridad de intención conversacional**.
+4. **Naturalidad narrativa**.
+5. **Personalidad observable**.
+6. **Opiniones y preferencias propias**.
+7. Idioma.
+8. Contexto y memoria + **Uso inteligente de la memoria**.
+9. **Despedidas y cierres naturales**.
+10. Honestidad, reglas finales y formato JSON.
+
+No se reescribe el prompt completo. Se conservan las reglas de afinidad,
+romance, evidencia, honestidad y formato.
+
+### Decisión 5 — Intención y corrección sin una llamada extra al LLM
+
+La intención se resuelve en el prompt; no se añade un clasificador LLM previo.
+La corrección explícita ya dispone de una nota prioritaria determinista en
+`ConversationService.generate_turn`; se conserva y se cubre con tests.
+
+Flujo:
+
+1. Se detecta el mensaje actual y, si aplica, una corrección explícita.
+2. Se añade `=== CORRECCIÓN DEL USUARIO (PRIORIDAD) ===` al prompt.
+3. El prompt de intención exige responder primero y elegir una postura cuando se
+   pide una opinión.
+4. Si el cierre vuelve a ser una pregunta en charla casual, se mantiene la red de
+   seguridad `QUESTION_CLOSE_REPAIR_PROMPT` y el recorte determinista existente.
+5. No se prohíben las preguntas: solo se impide que sustituyan la respuesta.
+
+La reparación de cierre con pregunta no se aplica a citas, donde la pregunta
+puede formar parte del flujo.
+
+### Decisión 6 — Naturalidad medible, no solo declarada
+
+La fase 2 no se limita a pedir "sé natural". Se registran señales objetivas por
+turno para detectar:
+
+- proporción de respuestas con acotaciones;
+- gestos acumulados en una misma respuesta;
+- aperturas o cierres repetidos;
+- preguntas finales consecutivas;
+- fórmulas de despedida prefabricadas;
+- repetición de n-gramas entre turnos;
+- respuestas que solo son una pregunta;
+- longitud desproporcionada respecto al mensaje del usuario.
+
+Estas señales no sustituyen la rúbrica humana. Sirven para detectar regresiones
+evidentes y priorizar la revisión.
+
+### Decisión 7 — Memoria consolidada y con precedencia
+
+La memoria actual guarda `{"text", "created_at"}` y deduplica textos exactos o
+casi exactos. La fase 2 añade una capa compatible:
+
+```python
+@dataclass
+class MemoryEntry:
+    text: str
+    created_at: float
+    updated_at: float | None = None
+    source: str = "model"        # model | correction | canonical
+    status: str = "active"       # active | superseded
+    confidence: str = "inferred" # explicit | inferred
+    scope: str = "user"          # user | world
+    topic: str = ""
+```
+
+Los registros antiguos se normalizan al leerlos: `source="model"`,
+`status="active"`, `confidence="inferred"`, `scope="user"` y `topic=""`.
+
+Reglas:
+
+1. Duplicado exacto o casi exacto: se conserva una entrada, se actualiza el texto
+   y `updated_at`; no se crea otra.
+2. Corrección explícita: se guarda con `source="correction"` y
+   `confidence="explicit"`. Las entradas anteriores del mismo ámbito y tema se
+   marcan `superseded` cuando el tema puede identificarse; si no, la corrección
+   se muestra primero y el prompt prohíbe usar la versión anterior.
+3. Inferencia: `confidence="inferred"`. No se presenta como hecho confirmado.
+4. Contradicción sin tema identificable: no se borra información a ciegas; se
+   evita afirmar el dato dudoso y se prioriza la entrada más reciente y explícita.
+5. `memories_prompt_section` muestra solo entradas activas, con correcciones
+   primero y sin exponer metadatos internos.
+6. Las preferencias de Airi no se guardan en la memoria de usuario: viven en
+   `world["preferences"]`, con `AIRI_PROFILE` como fuente canónica cuando está
+   definida. `self_model` no puede mutar `tastes.*`.
+
+La consolidación es conservadora: no usa embeddings ni un LLM adicional. La
+similitud se basa en normalización de texto y solapamiento de tokens, con umbral
+documentado y tests de aislamiento entre usuarios.
+
+### Decisión 8 — Contrato de estado explícito
+
+Contrato real:
+
+| Modo | Esquema | `stay_active` | Efecto |
+|---|---|---|---|
+| Normal | `RESPONSE_SCHEMA` | No existe; se fuerza `True` | No cambia el estado de sesión |
+| Sesión (`spectator`, `active`, `proactive`) | `SESSION_RESPONSE_SCHEMA` | Obligatorio, booleano | Decide si la sesión sigue activa |
+
+`disconnect` se interpreta así:
+
+- `leave=true` + `reason` no vacío: Airi solicita apagado después de publicar y
+  persistir el turno.
+- `leave=false` o sin motivo: no hay apagado; el texto no debe despedirse como si
+  se fuera.
+- `disconnect_claim_problem` y `DISCONNECT_REPAIR_PROMPT` reparan la
+  contradicción entre texto y decisión.
+- `last_shutdown` guarda `kind`, `reason`, `user_id`, `status` y
+  `context_delivered`. El contexto de la última desconexión se entrega una sola
+  vez y no es una orden para volver a irse.
+
+Una despedida a una persona no implica un apagado global. El apagado global solo
+se solicita cuando el turno lo decide o cuando una acción manual lo provoca.
+
+### Decisión 9 — Evaluación de interacción separada de la evaluación romántica
+
+Se añadirá `src/airi/evaluation/interaction.py` y `tools/interaction_eval.py`.
+La evaluación romántica existente (`narrative.py`) se mantiene intacta.
+
+El CLI tendrá dos entradas: `--run` para analizar JSONL ya generados y
+`--live` para generar los siete escenarios contra el LLM configurado. El modo
+live usa `build_llm` y `ConversationService` con `notifier`, `gifs` y `search`
+desactivados, no publica en Discord y no persiste estado real. Por defecto lee
+`LLM_BASE_URL` (`http://127.0.0.1:7000`) y `LLM_MODEL`, y permite fijarlos con
+`--base-url` y `--model`. `--out` guarda los registros generados y `--repeat`
+repite cada turno para escenarios no deterministas. El baseline se captura con
+`--live` antes de modificar el prompt.
+
+Componentes:
 
 ```python
 @dataclass(frozen=True)
-class AiriSpectatorPolicy:
-    enabled: bool = True
-    affinity_threshold: int = 20     # puntos umbral (env AIRI_SPECTATOR_AFFINITY_POINTS)
-    probability_topic: float = 0.55  # AIRI_SPECTATOR_PROB_TOPIC
-    probability_affinity: float = 0.35
-    cooldown_seconds: int = 300      # AIRI_SPECTATOR_COOLDOWN_SECONDS
-    snapshot_max_messages: int = 12
+class InteractionScenario:
+    id: str
+    category: str
+    description: str
+    turns: tuple[str, ...]
+
+@dataclass
+class InteractionMetrics:
+    turns: int
+    question_only_replies: int
+    repeated_closings: int
+    gesture_density: float
+    stacked_gestures: int
+    prefab_farewells: int
+    schema_failures: int
+    state_contradictions: int
+    rubric_total: int
 ```
 
-Los valores por defecto son conservadores y permiten apagar el modo en pruebas sin tocar
-código (ensemble con `AIRI_SPECTATOR_ENABLED=0`).
+`evaluate_interaction(records)` calcula señales objetivas y agrega la rúbrica
+cuando los registros incluyen puntuaciones. `compare_interactions(baseline,
+candidate)` devuelve deltas y marca regresión si empeora una métrica crítica o
+si la rúbrica cae por debajo del umbral acordado.
 
-### Fields nuevos en TurnEvent (aditivos)
+La rúbrica se cumplimenta con revisión humana o con un evaluador externo
+explícito; no se presenta como una verdad automática.
 
-| Campo | Tipo | Propósito |
-|---|---|---|
-| `spectator_reason` | str | Motivo del despertar (`""` si no aplica) |
-| `spectator_snapshot` | list | Ventana instantánea de buffer enviada al LLM |
-| `spectator_probability_rolled` | float | Tirada local ejecutada (0 si no hubo) |
+### Escenarios de evaluación
 
-## Components and Interfaces
+| ID | Categoría | Turnos | Qué comprueba |
+|---|---|---|---|
+| `pregunta_directa` | `direct_question` | 1 | Elige personaje/opinión y explica antes de preguntar |
+| `correccion` | `correction` | 2 | Reconoce la evasión y responde la pregunta original |
+| `saludo_breve` | `brief_greeting` | 1 | Respuesta breve sin actuación innecesaria |
+| `preferencia_corregida` | `corrected_preference` | 3 | Usa la preferencia vigente y no revive la corregida |
+| `desacuerdo` | `disagreement` | 2 | Discrepa con argumentos sin atacar ni ceder automáticamente |
+| `charla_casual` | `casual` | 2 | Reacciona sin convertir el turno en entrevista |
+| `despedida` | `farewell` | 2 | Cierra con naturalidad sin afirmar un apagado falso |
 
-### domain/spectator.py (nuevo, puro)
+Los nombres concretos de usuarios, animes o apodos son fixtures de evaluación;
+no se hardcodean en la lógica de producción.
 
-**Responsibility & Boundaries**
-- **Primary Responsibility**: Evaluar señales y generar el matcher de temas; sin I/O.
-- **Domain Boundary**: `airi.domain` — puro, importable desde servicios.
-- **Data Ownership**: Ninguna (funciones puras).
+### Artefactos de evaluación
 
-**Contract (Python, tipo explícito)**
+Cada ejecución guarda, en una ruta configurable:
 
-```python
-def build_topic_matcher(tastes: dict) -> re.Pattern | None:
-    """Regex precompilada con límites de palabra + alias declarados. None si sin datos."""
+- `scenario_id`, `turn`, `user_input`, `reply`, `category`;
+- modelo, versión o hash del prompt, plantilla y parámetros;
+- contexto efectivo y prompt enviado;
+- salida original, `finish_reason` y resultado de parseo;
+- `disconnect`, `stay_active`, estado persistido y discrepancias;
+- puntuaciones de rúbrica por criterio y total;
+- marcas temporales y versión del código.
 
-def mention_signals(content: str, airi_id: str, airi_name: str, is_reply_to_airi: bool) -> bool:
-    """True si mención directa (<@id>), respuesta a Airi o nombre exacto casefold."""
+El baseline se captura antes de modificar el prompt. Las salidas grandes no se
+versionan; se conservan en el directorio de artefactos acordado.
 
-def affinity_eligible(points: int, threshold: int) -> bool:
-    """True si puntos superan el umbral configurable."""
-
-def topic_eligible(pattern: re.Pattern | None, text: str) -> bool:
-    """True si el texto cruza el matcher. Sin pattern => False."""
-
-def decide_activation(*, mentions: bool, topic: bool, affinity: bool,
-                      random_value: float, policy: AiriSpectatorPolicy) -> ActivationDecision:
-    """Composición pura: mention => garantizada; topic/affinity => probabilidad por frecuencia."""
-```
-
-### services/passive_buffer.py (nuevo)
-
-**Responsability**
-- Buffer en memoria por canal, TTL y límite, snapshot, `mark_consumed`.
-- No persiste; thread/asyncio-safe dentro del event loop.
-
-### services/spectator_policy.py (nuevo)
-
-- Encapsula cooldown por canal/autor y tirada local (inyectable clock/random).
-- Ejecutado en `client.py` antes de abrir un turno, tras debounce.
-
-### Perfil canónico (bootstrap)
-
-- `AIRI_PROFILE` (JSON) se aplica en el arranque de `run_bot` a `world["preferences"]`
-  (transacción + save). El matcher usa `positive_taste_terms(world)` y el prompt
-  `preferences_prompt_section(world)`; el self-model conserva sus gustos registrados
-  históricos pero ya no los muta (allowlist sin claves `tastes.*`).
-
-### Modificaciones punt aiming
-
-| Archivo | Cambio |
-|---|---|
-| `discord_bot/client.py` | Bootstrap del perfil canónico (`AIRI_PROFILE`), `SpectatorPolicy`/`PassiveBuffer`, evaluar señales tras debounce antes del dispatcher; `kind="spectator"` |
-| `discord_bot/turn.py` | `run_user_turn(... kind="spectator")`: acepta snapshot; al publicar con éxito, marca consumidos y cooldown |
-| `services/conversation.py` | `_generate` recibe `ctx.kind=="spectator"` y anexa `history_in` efímero con etiqueta interna clara pero sin revelar mecanística |
-| `observability/events.py` | Campos `spectator_*` aditivos |
-| `domain/constants.py` | Constantes `AIRI_SPECTATOR_*` con `env_*` |
-| `domain/self_model.py` | Allowlist de self_update sin claves `tastes.*`; gustos quedan estables |
-
-## Error Handling
-
-- **Generación fallida → snapshot retenido**: los mensajes no se marcan como consumidos;
-  caducarán por TTL. Sin cooldown.
-- **Publicación fallida (`publish_error`)**: cyan op CANAL; cooldown no aplicado.
-- **Buffer vacío (por TTL/reinicio)**: evento de topic no evaluable; se emite sin snapshot.
-- **Sluit down (`shutdown["started"]`)**: `on_message` ya retorna antes de evaluar.
-- Modo espectador desactivado por `AIRI_SPECTATOR_ENABLED=0`: TODO el flujo de espectador
-  se omite; comportamiento igual al actual excepto por las menciones/respuesta/bot con
-  turns ya garantizadas por `on_message` normal.
-
-## Testing Strategy
-
-### Unit Tests (`tests/unit/test_spectator.py`)
-
-1. `build_topic_matcher` genera patrón válido para gustos; `None` para sin gustos.
-2. `mention_signals` detecta `<@id>`, reply, nombre; ignorado en contenido largo pollution.
-3. `affinity_eligible` respeta el umbral configurable.
-4. `decide_activation`: mention garantizada; topic/affinity dependen de tirada; tirada
-   fallida devuelve sin cooldown.
-5. `PassiveBuffer`: TTL y límite FIFO; snapshot incluye activador una sola vez.
-
-### Integration Tests (`tests/integration/`)
-
-1. `test_spectator_pipeline.py`: flujo completo con `FakeLLM` y reloj inyectado: mensaje
-   topic (roll ok) genera exactamente 1 llamada al LLM; el snapshot aparece en
-   `trace.spectator_snapshot`; cooldown سبsecuente bloquea reintentos.
-2. `test_spectator_cooldown_policy.py`: tirada fallida no llama al LLM ni armar cooldown;
-   el siguiente mensaje reintenta.
-3. `test_spectator_mixed_signals.py`: mencion + topic coexisten: un solo turno.
-4. Compatibilidad: modo espectador desactivado mantiene comportamiento previo.
-
-### E2E/Regression
-
-- `tests/regression`: transcripts existentes no cambian: spectator `kind` solo aparece
-  cuando el modo está habilitado explícitamente (default on pero tests previos usan env
-  para desactivarlo en transmission).
-  - `AIRI_SPECTATOR_ENABLED=0` en fixtures de tests antiguos si fueran a romperse por
-    turnos espontáneos nuevos.
-
-## Performance & Scalability
-
-- Coste O(n) por mensaje entrante; n acotado (<= buffer max). NO LLM en silencio.
-- Snapshot acotado (<= `snapshot_max_messages`),/configuration evita prompt largos.
-- Concurrency: toda la política corre en el event loop del dispatcher; no tiene locks
-  adicionales más allá de los ya existentes (commit_lock persistencia).
-
-## Migration Strategy
+### Flujo de comparación
 
 ```mermaid
 flowchart TD
-  A[Instalar constants AIRI_SPECTATOR_*] --> B[Activar flag por env en entorno prod]
-  B --> C[Ejecutar suite: spectator tests + regression]
-  C --> D[Monitorear: latencia de turnos, llamadas LLM por hora]
-  D --> E[Ajustar probabilidad y cooldown en caliente por .env]
+  A[Congelar prompt y modelo] --> B[Ejecutar 7 escenarios baseline]
+  B --> C[Guardar artefactos y rúbrica]
+  C --> D[Aplicar cambios de prompt/memoria/estado]
+  D --> E[Ejecutar los mismos escenarios]
+  E --> F[Calcular métricas y deltas]
+  F --> G{¿Regresión grave?}
+  G -->|Sí| H[Rechazar o corregir]
+  G -->|No| I[Revisar mejora agregada]
+  I --> J[Aprobar candidato]
 ```
 
-Rollback: `AIRI_SPECTATOR_ENABLED=0` desactiva toda la feature sin cambiar código.
+## Testing Strategy
+
+### Unitarias
+
+- Prompt: las secciones nuevas existen y contienen las reglas clave.
+- Intención: los escenarios de pregunta directa y corrección no terminan en
+  evasiva; la red anti-interrogatorio sigue funcionando.
+- Naturalidad: métricas de acotaciones, gestos acumulados, cierres repetidos y
+  fórmulas prefabricadas.
+- Memoria: duplicados, corrección, precedencia, aislamiento entre usuarios y
+  preferencias canónicas.
+- Estado: matriz de `disconnect`/`stay_active`, esquema normal vs. sesión y
+  campos desconocidos.
+- Evaluación: escenarios, rúbrica, agregación y comparación baseline/candidato.
+
+### Integración
+
+- Turno con `FakeLLM` y `FakeNotifier`: respuesta directa, corrección y aviso de
+  memoria.
+- Preferencia corregida: el prompt y la memoria usan la versión vigente.
+- Despedida: el texto y `disconnect` coinciden; no se cierra la sesión global si
+  solo se despide de una persona.
+- Recepción de mensajes después de un apagado y recuperación del contexto.
+- Evaluación con fakes, sin red ni Discord real.
+
+### Regresión
+
+- Mantener la suite existente y los tests de fase 1.
+- Ejecutar `airi-replay` determinista para parser/estado.
+- Ejecutar el runner real o `--live` para la comparación narrativa.
+- Revisar explícitamente regresiones graves en coherencia, privacidad, estado y
+  formato de salida.
 
 ## Requirements Traceability
 
-| Req | Resumen | Componente(s) | Prueba(es) |
-|---|---|---|---|
-| 1.1-1.4 | Buffer por canal con límite/TTL/vacía reset | `PassiveBuffer` | unit 5 |
-| 1.5 | Modo off => comportamiento previo | `SpectatorPolicy.enabled` | integration 4 |
-| 2.1 | Mention/reply/nombre garantizada | `mention_signals` | unit 2, integration 4, 1 |
-| 2.2-2.4 | Interés O afinidad independientes | `decide_activation` | unit 4, integration 1,2 |
-| 2.5 | Sin señal => sin turno | composition | unit 4, integration 1 |
-| 2.6-2.9 | Fuente canónica + matcher determinista | `build_topic_matcher` | unit 1 |
-| 3.1-3.8 | Snapshot efímero, sin duplicados, sin revelación | generate_turn + snapshot | integration 1,3 |
-| 4.1-4.7 | Cooldown solo al publicar; roll antes del LLM | `SpectatorPolicy` | unit 4, integration 2 |
-| 5.1-5.8 | Pruebas y compatibilidad | suite nueva + Brett | integration |
+| Requisito | Componente principal | Pruebas |
+|---|---|---|
+| `R1-R6` | `client.py`, `turn.py`, `domain/spectator.py`, `services/passive_buffer.py`, `services/spectator_policy.py`, `services/spectator_session.py` | suite de fase 1 |
+| `R7` | `domain/prompts.py`, `services/conversation.py` | prompt, corrección, cierre con pregunta |
+| `R8` | `domain/prompts.py`, `evaluation/interaction.py` | métricas de naturalidad, saludo y despedida |
+| `R9` | `domain/prompts.py` | opinión, desacuerdo, rasgos observables |
+| `R10` | `domain/memories.py`, `services/state.py`, `domain/prompts.py` | corrección, duplicados, aislamiento, preferencias canónicas |
+| `R11` | `domain/llm_output.py`, `services/conversation.py`, `discord_bot/turn.py`, `discord_bot/client.py` | matriz de estado, despedida, apagado |
+| `R12` | `evaluation/interaction.py`, `tools/interaction_eval.py` | escenarios, rúbrica, baseline/candidato |
+
+## Risks and Open Questions
+
+- **Detección semántica de duplicados**: sin embeddings, la consolidación puede
+  no detectar paráfrasis lejanas. Se prioriza precisión y se documenta el límite.
+- **Prompt largo**: añadir seis bloques puede diluir instrucciones. Se usarán
+  bloques compactos y tests de presencia/orden.
+- **Subjetividad de la rúbrica**: se mitiga con criterios fijos, revisión
+  explícita y comparación baseline/candidato; no se automatiza como verdad.
+- **Discrepancia de estado observada**: debe verificarse el modo del turno y el
+  origen del cierre antes de atribuir un bug.
+- **Muestreo del LLM local**: las variaciones se registran y se repiten cuando
+  sea posible; no se comparan ejecuciones únicas como si fueran deterministas.
+
+## Closure Criteria
+
+El diseño estará listo para aprobación cuando:
+
+1. Los requisitos `R7-R12` estén revisados y aprobados.
+2. Las interfaces y archivos citados coincidan con el código real.
+3. Exista un baseline capturado antes de los cambios de prompt.
+4. Las pruebas de memoria, estado y evaluación cubran los casos críticos.
+5. La comparación candidata no presente regresiones graves.
+6. `spec.json` refleje el estado real de aprobación, sin declarar
+   `ready_for_implementation` antes de tiempo.
