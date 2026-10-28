@@ -7,7 +7,9 @@ from airi.domain.prompts import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_COMPACT_CANDIDATE,
     build_system_prompt,
+    self_model_prompt_section,
 )
+from airi.domain.self_model import default_self
 
 
 def test_compact_candidate_is_shorter_and_preserves_core_rules():
@@ -25,6 +27,8 @@ def test_compact_candidate_is_shorter_and_preserves_core_rules():
         "emojis",
     ):
         assert concept.casefold() in candidate.casefold()
+    assert "escala actual de traits (1–5)" in candidate
+    assert "nunca una obligación" in candidate
 
 
 def test_prompt_variant_only_changes_base_personality_text():
@@ -49,3 +53,20 @@ def test_prompt_variant_keeps_quick_output_contract_unchanged():
 
 def test_default_variant_is_byte_for_byte_current_prompt():
     assert build_system_prompt(None) == build_system_prompt(None, variant="current")
+
+
+def test_both_variants_use_current_dynamic_traits_without_static_overrides():
+    self_state = default_self()
+    self_state["traits"]["expresiva"] = 1
+    self_state["traits"]["timida"] = 5
+    dynamic_section = self_model_prompt_section({"self": self_state})
+
+    for variant, base in (
+        ("current", SYSTEM_PROMPT),
+        ("compact_candidate", SYSTEM_PROMPT_COMPACT_CANDIDATE),
+    ):
+        prompt = build_system_prompt(None, [dynamic_section], variant=variant)
+        assert prompt.startswith(base + FACTUAL_HONESTY_PROMPT)
+        assert "Mis rasgos (1-5): expresiva 1, timida 5" in prompt
+        assert "Eres dulce, expresiva, cariñosa" not in prompt
+        assert "Sé dulce, expresiva, cariñosa" not in prompt

@@ -39,10 +39,19 @@ def test_intent_priority_comes_before_variety():
 
 def test_personality_is_expressed_as_observable_tendencies():
     assert "=== RASGOS COMO TENDENCIAS (NO ACTUACIÓN) ===" in SYSTEM_PROMPT
-    for trait in ("Expresiva", "Tímida", "Juguetona", "Celosa", "Sarcástica", "Curiosa"):
-        assert trait in SYSTEM_PROMPT
+    assert "según el valor actual de cada rasgo" in SYSTEM_PROMPT
+    assert "no impone una intensidad fija" in SYSTEM_PROMPT
     assert "no estés de acuerdo automáticamente para agradar" in SYSTEM_PROMPT
     assert "no inventes haber visto, jugado o vivido algo" in SYSTEM_PROMPT
+
+
+def test_static_prompt_does_not_assign_levels_to_mutable_personality_traits():
+    for prompt in (SYSTEM_PROMPT, SYSTEM_PROMPT_COMPACT_CANDIDATE):
+        assert "Eres dulce, expresiva, cariñosa" not in prompt
+        assert "Sé dulce, expresiva, cariñosa" not in prompt
+        assert "espontánea, expresiva y coherente" not in prompt
+        for trait in ("Expresiva:", "Tímida:", "Juguetona:", "Celosa:", "Sarcástica:", "Curiosa:"):
+            assert trait not in prompt
 
 
 def test_memory_usage_prioritizes_current_and_relevant_data():

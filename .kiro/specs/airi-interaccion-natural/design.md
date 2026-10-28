@@ -207,6 +207,21 @@ Orden recomendado dentro del prompt:
 No se reescribe el prompt completo. Se conservan las reglas de afinidad,
 romance, evidencia, honestidad y formato.
 
+### Decisión 12 — Traits dinámicos como única fuente de intensidad de personalidad
+
+La identidad narrativa estable describe quién es Airi y no fija la intensidad de
+los seis rasgos mutables. Los valores actuales de `traits` (1–5), renderizados por
+`render_self_section`, son la única fuente para decidir cuánto se manifiestan la
+expresividad, timidez, actitud juguetona, celos, sarcasmo y curiosidad. Los bloques
+de personalidad pueden explicar límites y adecuación contextual, pero no repetir
+esos rasgos como adjetivos o mandatos permanentes.
+
+La variante `SYSTEM_PROMPT_COMPACT_CANDIDATE` debe respetar el mismo contrato que
+`SYSTEM_PROMPT`; no puede reintroducir cualidades fijas eliminadas de la variante
+actual. Las pruebas cubrirán ambas variantes, valores dinámicos en la sección de
+self y ausencia de una segunda fuente estática. Se preservan como reglas generales
+la naturalidad, el respeto, la honestidad y la prioridad de la intención.
+
 ### Decisión 5 — Intención y corrección sin una llamada extra al LLM
 
 La intención se resuelve en el prompt; no se añade un clasificador LLM previo.

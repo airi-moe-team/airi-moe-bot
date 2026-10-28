@@ -1,0 +1,45 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-28T03:37:31Z",
+  "items": [
+    {
+      "id": "FB-PERSONALITY-TRAITS",
+      "title": "Eliminar la doble fuente entre personalidad fija y traits mutables",
+      "severity": "major",
+      "impact": "SYSTEM_PROMPT y SYSTEM_PROMPT_COMPACT_CANDIDATE fijan cualidades de personalidad que pueden contradecir los rasgos numéricos mutables inyectados desde self_model; PERSONALITY_TENDENCIES_PROMPT también repite cualitativamente esos traits.",
+      "recommendation": "Conservar identidad estable y reglas universales en el prompt base. Derivar la intensidad de los seis rasgos exclusivamente de sus valores dinámicos 1–5, preservando matices conductuales condicionados por esos valores y el contexto. Aplicar la misma precedencia en ambas variantes y actualizar los tests.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "El prompt SHALL mantener la identidad estable de Airi separada de sus rasgos de personalidad variables.",
+          "WHEN se incluyen traits actuales (1–5), THEN el prompt SHALL derivar de ellos la intensidad de expresividad, timidez, juego, celos, sarcasmo y curiosidad, sin instrucciones fijas que los contradigan.",
+          "THE guía cualitativa SHALL preservar matices de comportamiento como límites y adecuación contextual, pero SHALL estar condicionada a los traits y no duplicar su definición como segunda fuente de personalidad.",
+          "THE variante compact_candidate SHALL respetar la misma precedencia de traits que la variante actual.",
+          "Los tests SHALL comprobar la separación entre identidad estable y rasgos dinámicos, sin acoplarse a que los nombres de traits estén en SYSTEM_PROMPT."
+        ],
+        "design": [
+          "Ajustar PERSONALITY_TENDENCIES_PROMPT para expresar solo reglas contextuales y no establecer un nivel fijo de rasgo.",
+          "Retirar de ambas cadenas base los adjetivos de personalidad que se solapen con traits dinámicos; mantener identidad y reglas conductuales no variables.",
+          "Garantizar mediante el ensamblado del prompt que render_self_section sea la fuente de los valores actuales de traits."
+        ],
+        "tasks": [
+          "Añadir primero tests que detecten instrucciones fijas contradictorias en ambas variantes y prueben que el bloque dinámico de self aporta los traits actuales.",
+          "Refactorizar prompts.py para eliminar las duplicaciones estáticas y condicionar la guía de matices a traits y contexto.",
+          "Actualizar tests de naturalidad y variantes; ejecutar suite unitaria relevante y suite completa aplicable."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ],
+  "owners": {
+    "FB-PERSONALITY-TRAITS": "desarrollo + revisión humana"
+  }
+}

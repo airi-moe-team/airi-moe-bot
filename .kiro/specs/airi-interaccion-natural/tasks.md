@@ -326,3 +326,26 @@
 
 > Resultados live y limitaciones: `eval/airi-pendientes-20261027.md`. La candidata
 > permanece opt-in; no se modificó el perfil de producción.
+
+## Extensión de implementación — personalidad gobernada por traits
+
+> Pendiente de revisión y aprobación de requirements, design y tasks. No iniciar
+> implementación hasta que la persona usuaria revise los documentos actualizados.
+
+- [x] 19. Eliminar la doble fuente de personalidad entre prompt y traits (`R9`)
+  - [x] 19.1 Añadir tests de regresión antes del refactor
+    - Verificar para ambas variantes que el prompt base no fija niveles de los seis traits.
+    - Verificar que el bloque dinámico conserva los valores actuales 1–5.
+    - Mantener tests de los matices conductuales contextuales sin exigir etiquetas fijas
+      dentro de `SYSTEM_PROMPT`.
+    - _Requirements: 9.1–9.6_
+  - [x] 19.2 Refactorizar los bloques de personalidad de ambas variantes
+    - Mantener identidad narrativa estable y reglas generales de interacción.
+    - Hacer que los traits dinámicos sean la única fuente de intensidad para expresividad,
+      timidez, juego, celos, sarcasmo y curiosidad.
+    - Conservar límites y matices condicionados por valor y contexto.
+    - _Requirements: 9.1–9.6_
+  - [x] 19.3 Validar ensamblado y regresiones
+    - Ejecutar tests de naturalidad, self model y variantes de prompt.
+    - Ejecutar la suite unitaria aplicable y revisar que no se alteren contratos ajenos.
+    - _Requirements: 9.1–9.6_
