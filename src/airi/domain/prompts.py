@@ -25,6 +25,7 @@ from airi.domain.self_model import (
     preferences_view,
     render_self_section,
 )
+from airi.domain.time_perception import TemporalContext, format_elapsed
 
 # ============================================================
 # BLOQUES DE PROMPT (FASE 2)
@@ -723,6 +724,49 @@ def affinity_prompt_section(points, level_name, display_name):
         "Adapta tu tono sin mencionar explícitamente ni nombrar la afinidad, los "
         "puntos ni el nivel en tu respuesta.\n"
     )
+
+
+def temporal_context_section(context: TemporalContext | None, *, compact=False, mode="normal"):
+    """Percepción temporal del turno; los datos son contexto, no texto para recitar."""
+    if context is None:
+        return ""
+    moment = context.moment
+    date_line = (
+        f"{moment.weekday}, {moment.day} de {moment.month_name} de {moment.year}, "
+        f"{moment.hour:02d}:{moment.minute:02d} ({moment.bucket})"
+    )
+    user_gap = None
+    if context.user_gap_seconds is not None and context.user_last_at is not None:
+        user_gap = format_elapsed(moment.epoch, context.user_last_at, context.zone)
+    if compact:
+        user_text = f"; silencio de esta persona: {user_gap}" if user_gap else ""
+        if context.first_time:
+            user_text = "; no hay interacción previa registrada"
+        return (
+            "\n\n=== TU PERCEPCIÓN DEL TIEMPO === "
+            f"Ahora es {date_line}{user_text}. No recites la hora salvo que te la pregunten.\n"
+        )
+
+    lines = ["\n\n=== TU PERCEPCIÓN DEL TIEMPO ===", f"Ahora es {date_line}."]
+    if mode != "proactive":
+        if user_gap:
+            subject = context.user_name or "esta persona"
+            lines.append(f"La última vez que hablaste con {subject} fue {user_gap}.")
+        elif context.first_time:
+            lines.append("Es la primera vez que tienes registrado hablar con esta persona.")
+    if context.channel_gap_seconds is not None and not context.in_date:
+        channel_gap = format_elapsed(moment.epoch, context.channel_last_at, context.zone)
+        lines.append(f"El canal llevaba {channel_gap} sin actividad.")
+    if mode == "proactive":
+        lines.append(
+            f"Es {moment.bucket}: no propongas planes propios de otra franja del día."
+        )
+    lines.extend((
+        "Esto es contexto, no un dato que anunciar: no recites la hora ni digas que "
+        "consultas un reloj. Úsalo solo si encaja con naturalidad. Si te preguntan "
+        "directamente la hora o la fecha, responde con el dato real.",
+    ))
+    return "\n".join(lines) + "\n"
 
 
 def _last_assistant_reply_text(history) -> str:

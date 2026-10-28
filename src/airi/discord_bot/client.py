@@ -22,6 +22,7 @@ from airi.discord_bot import embeds, turn
 from airi.domain import spectator
 from airi.domain.constants import AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS, DATE_DELTA_MAX
 from airi.domain.spectator import load_policy, load_stable_profile
+from airi.domain.time_perception import resolve_zone
 from airi.observability.interaction_tracker import (
     current_tracker,
     tracked_interaction,
@@ -1669,6 +1670,12 @@ def run_bot(argv=None):
 
     def log_startup():
         log.info("Proveedor LLM: %s — %s", LLM_CFG.provider, LLM_BASE_URL)
+        _time_zone, time_zone_label, time_zone_source = resolve_zone(settings.timezone)
+        log.info(
+            "Zona horaria de Airi: %s (origen: %s)",
+            time_zone_label,
+            time_zone_source,
+        )
         if LLM_CFG.provider != "llama":
             if not LLM_CFG.api_key:
                 log.warning(

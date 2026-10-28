@@ -198,16 +198,21 @@ class TemporalContext:
     channel_gap_seconds: float | None
     first_time: bool
     in_date: bool
+    user_name: str | None
+    zone: ZoneInfo | None
 
-def resolve_zone(name: str) -> tuple[ZoneInfo | None, str]        # (zona, etiqueta)
+def resolve_zone(name: str) -> tuple[ZoneInfo | None, str, str]  # zona, etiqueta, origen
 def local_moment(now: float, zone: ZoneInfo | None) -> LocalMoment
 def day_part(hour: int) -> str
 def elapsed_text(seconds: float, *, short: bool = False) -> str
 def calendar_gap_days(now: float, ts: float, zone: ZoneInfo | None) -> int
+def format_elapsed(now: float, ts: float, zone: ZoneInfo | None, *, short: bool = False) -> str
 def build_temporal_context(now: float, config: TimeConfig, *, users, history, snapshot=(), user_id, in_date: bool) -> TemporalContext | None
-def temporal_prompt_section(context: TemporalContext, *, compact: bool = False) -> str
 def time_tag(context_for_message: float, now: float, zone: ZoneInfo | None) -> str  # "[hace 5 min]"
 ```
+
+La función `temporal_context_section(context, compact=False, mode="normal")` vive
+en `domain/prompts.py`, no en este módulo de cálculo puro.
 
 - **Preconditions**: `now` es un epoch finito; `config.enabled` puede ser `False`.
 - **Postconditions**: con `enabled=False` devuelve `None` y ninguna sección; con `enabled=True` los campos son deterministas para el mismo `(now, zone, users, history, user_id)`.

@@ -25,6 +25,7 @@ import aiohttp
 import airi.env_boot  # noqa: F401
 from airi.adapters.http_llm import build_llm
 from airi.domain.affinity import default_entry
+from airi.domain.time_perception import TimeConfig
 from airi.observability.trace import TurnEvent, load_turn_trace
 from airi.ports.llm import LLMMeta
 from airi.services.conversation import ConversationService, TurnContext
@@ -32,6 +33,17 @@ from airi.services.date_service import DateService
 from airi.services.state import AppState
 
 SESSION_KINDS = {"spectator", "active", "proactive"}
+
+
+def _time_config_from_event(ev: TurnEvent) -> TimeConfig | None:
+    """Reusa la configuración capturada; trazas antiguas usan Settings actuales."""
+    data = ev.time_context if isinstance(ev.time_context, dict) else {}
+    if "enabled" not in data:
+        return None
+    return TimeConfig(
+        enabled=bool(data.get("enabled")),
+        timezone=str(data.get("timezone") or ""),
+    )
 
 
 class ReplayLLM:
@@ -154,6 +166,7 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
     svc = ConversationService(
         llm=llm, state=state, search=None, gifs=None, notifier=None,
         clock=lambda: ev.started_at or 0.0, traces=None,
+        time_config=_time_config_from_event(ev),
     )
     result = await svc.run_turn(
         user, messages,
@@ -241,6 +254,7 @@ async def run_live_trace(trace_path, *, repeat=1):
             svc = ConversationService(
                 llm=llm, state=state, search=None, gifs=None, notifier=None,
                 clock=lambda: ev.started_at or 0.0, traces=None,
+                time_config=_time_config_from_event(ev),
             )
             result = await svc.run_turn(
                 user, messages,

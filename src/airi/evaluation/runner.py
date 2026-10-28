@@ -57,7 +57,9 @@ async def run_scenario(
         ctx = TurnContext(
             channel_id=channel_id,
             turn_key=f"{turn_prefix}:{scenario.id}:{index}",
-            now=now + index,
+            now=(scenario.now if getattr(scenario, "now", None) is not None else now) + index,
+            kind=("proactive" if getattr(scenario, "conversation_mode", "normal") == "proactive" else "message"),
+            conversation_mode=getattr(scenario, "conversation_mode", "normal"),
             system_prompt_variant=prompt_variant,
         )
         draft = await service.generate_turn(user, [(user, text)], ctx)
@@ -93,6 +95,7 @@ async def run_scenario(
                 # naturalidad (R7-R12). Son campos aditivos: los consumidores
                 # narrativos existentes los ignoran.
                 "conversation_mode": ctx.conversation_mode,
+                "time_context": dict(getattr(trace, "time_context", {}) or {}),
                 "disconnect": getattr(output, "disconnect", None),
                 "stay_active": bool(getattr(result, "stay_active", True)),
                 "parse_ok": bool(getattr(trace, "parse_ok", True)),

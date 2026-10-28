@@ -80,6 +80,8 @@ class TurnEvent:
     raw_input: str = ""
     messages_in: list = field(default_factory=list)
     history_in: list = field(default_factory=list)
+    # Solo configuración y derivados temporales agregados; nunca texto de mensajes.
+    time_context: dict = field(default_factory=dict)
 
     # Contexto reconstruido
     prompt_system: str = ""

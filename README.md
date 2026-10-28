@@ -15,6 +15,8 @@
 │   │   ├── affinity.py                # niveles, deltas, decay, clamp y ranking
 │   │   ├── relationships.py           # etapas afectivas, evidencia y propuestas
 │   │   ├── dates.py                   # máquina de estados de la cita
+│   │   ├── time_perception.py          # reloj local, franjas e intervalos
+│   │   ├── history_tags.py             # vista de inferencia: identidad + cadencia
 │   │   ├── gifts.py                   # catálogo y efectos de regalos
 │   │   ├── diary.py                   # entradas, consultas, formato relativo
 │   │   ├── memories.py                # alta/olvido de memorias sobre listas
@@ -129,6 +131,35 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
+- `AIRI_TIME_CONTEXT`: percepción temporal en el prompt e historial (`1`, default; `0` desactiva para A/B o rollback)
+- `AIRI_TIMEZONE`: zona horaria IANA opcional (p. ej. `Europe/Madrid`); vacío usa la zona del sistema
+
+### Percepción temporal
+
+Airi recibe la fecha, hora local y franja del día, el tiempo desde la última
+interacción y marcas relativas por mensaje. Las marcas se calculan para cada
+prompt y no se guardan en el historial; los mensajes nuevos conservan solo su
+epoch. La hora exacta se incluye como contexto para responder preguntas directas,
+pero el prompt le pide a Airi no recitarla espontáneamente.
+
+El valor por defecto usa la zona del sistema operativo. En contenedores suele ser
+UTC: fija `TZ=Europe/Madrid` o `AIRI_TIMEZONE=Europe/Madrid` si quieres hora de
+Madrid. Al iniciar, el log informa la zona efectiva y su origen. Para revertir
+sin desplegar código, configura `AIRI_TIME_CONTEXT=0`.
+
+La comparación controlada usa los mismos instantes para baseline y candidato:
+
+```bash
+python tools/interaction_eval.py --live --scenario-set temporal \
+  --time-context off --out /tmp/opencode/airi-time-baseline.jsonl
+python tools/interaction_eval.py --live --scenario-set temporal \
+  --time-context on --out /tmp/opencode/airi-time-candidate.jsonl \
+  --baseline /tmp/opencode/airi-time-baseline.jsonl
+```
+
+La suite temporal cubre madrugada, mañana, tarde, noche, reaparición tras dos
+minutos y tres días, e iniciativa proactiva nocturna. El resumen indica respuestas
+no evaluables si no hay hora en la traza; no las cuenta como éxito.
 
 ## Naturalidad de la conversación
 

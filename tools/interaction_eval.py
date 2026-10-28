@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - dotenv es opcional en el tool
 from airi.evaluation.interaction import (  # noqa: E402
     IDENTITY_SCENARIOS,
     INTERACTION_SCENARIOS,
+    TEMPORAL_SCENARIOS,
     compare_interactions,
     evaluate_interactions,
     generate_live_records,
@@ -100,9 +101,15 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--scenario-set",
-        choices=("standard", "identity"),
+        choices=("standard", "identity", "temporal"),
         default="standard",
-        help="Conjunto de escenarios para --live (por defecto standard)",
+        help="Conjunto de escenarios para --live (standard, identity o temporal)",
+    )
+    parser.add_argument(
+        "--time-context",
+        choices=("env", "on", "off"),
+        default="env",
+        help="Activación temporal A/B para --live (por defecto respeta AIRI_TIME_CONTEXT)",
     )
     parser.add_argument(
         "--prompt-variant",
@@ -126,9 +133,15 @@ def main(argv=None) -> int:
                     scenarios=(
                         IDENTITY_SCENARIOS
                         if args.scenario_set == "identity"
+                        else TEMPORAL_SCENARIOS
+                        if args.scenario_set == "temporal"
                         else INTERACTION_SCENARIOS
                     ),
                     prompt_variant=args.prompt_variant,
+                    time_context_enabled=(
+                        None if args.time_context == "env"
+                        else args.time_context == "on"
+                    ),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - el CLI informa y falla
@@ -136,6 +149,14 @@ def main(argv=None) -> int:
             return 2
         write_records(args.out, candidate)
         print(f"Registros guardados en {args.out}", file=sys.stderr)
+        if args.scenario_set == "temporal":
+            evaluated = [r for r in candidate if r.get("time_evaluation_status") == "evaluated"]
+            recitals = sum(r.get("clock_recital") is True for r in evaluated)
+            not_evaluable = len(candidate) - len(evaluated)
+            print(
+                f"Evaluación temporal: {len(evaluated)} evaluables, "
+                f"{recitals} recitados del reloj, {not_evaluable} no evaluables"
+            )
     else:
         if args.out:
             parser.error("--out solo se usa con --live")

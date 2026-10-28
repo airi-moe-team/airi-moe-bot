@@ -14,6 +14,7 @@ from typing import Callable
 
 import aiohttp
 
+from airi.config import Settings
 from airi.domain import memories as domain_memories
 from airi.domain import prompts as domain_prompts
 from airi.domain import users as domain_users
@@ -70,6 +71,7 @@ from airi.domain.text_filters import (
     limit_narrative_actions,
     strip_repetition_loop,
 )
+from airi.domain.time_perception import TimeConfig, build_temporal_context
 from airi.domain.turn_guard import DateFingerprint, fingerprint_of
 from airi.domain.web import (
     detect_search_intent,
@@ -550,6 +552,7 @@ class ConversationService:
         date_delta_max: int = AFFINITY_DELTA_MAX,
         traces: TraceStore | None = None,
         affinity_scope: str | None = None,
+        time_config: TimeConfig | None = None,
     ):
         self.llm = llm
         self.state = state
@@ -562,6 +565,11 @@ class ConversationService:
         # Ámbito de la afinidad visible en el prompt: por defecto, solo la del
         # destinatario del turno (el resto de interlocutores, desconocidos).
         self.affinity_scope = affinity_scope or AFFINITY_VIEW_SCOPE
+        settings = Settings.from_env() if time_config is None else None
+        self.time_config = time_config or TimeConfig(
+            enabled=settings.time_context,
+            timezone=settings.timezone,
+        )
         # Almacén de eventos: por defecto el del AppState.
         self.traces = traces if traces is not None else getattr(state, "traces", None)
         # Estado romántico por usuario (etapas, evidencia y propuestas).
@@ -679,8 +687,44 @@ class ConversationService:
                     "content": part,
                     "author_id": str(who.id),
                     "author_name": getattr(who, "display_name", None),
+                    "ts": float(now),
                 })
             ev.history_in = list(history)
+
+            try:
+                temporal = build_temporal_context(
+                    now,
+                    self.time_config,
+                    users=self.state.users,
+                    history=prior_history,
+                    snapshot=ctx.spectator_snapshot,
+                    user_id=uid,
+                    in_date=in_date,
+                )
+            except Exception as exc:
+                temporal = None
+                ev.errors.append({
+                    "module": "time_perception",
+                    "error_type": type(exc).__name__,
+                })
+            ev.time_context = {"enabled": bool(self.time_config.enabled)}
+            if temporal is not None:
+                ev.time_context.update({
+                    "timezone": self.time_config.timezone,
+                    "local_iso": temporal.moment.local_iso,
+                    "weekday": temporal.moment.weekday,
+                    "bucket": temporal.moment.bucket,
+                    "minutes_since_user": (
+                        int(temporal.user_gap_seconds // 60)
+                        if temporal.user_gap_seconds is not None
+                        else None
+                    ),
+                    "minutes_since_channel": (
+                        int(temporal.channel_gap_seconds // 60)
+                        if temporal.channel_gap_seconds is not None
+                        else None
+                    ),
+                })
 
             # Modo espectador: la captura efímera del buffer pasivo se inyecta
             # EN el prompt (y solo en la traza), nunca en el historial
@@ -692,16 +736,21 @@ class ConversationService:
                     if isinstance(entry, dict):
                         author_name = entry.get("author_name") or ""
                         content = entry.get("content") or ""
+                        timestamp = entry.get("ts")
                     else:
                         author_name = getattr(entry, "author_name", "")
                         content = getattr(entry, "content", "")
-                    ephemeral.append({
+                        timestamp = getattr(entry, "ts", None)
+                    observed = {
                         "role": "user",
                         "content": content,
                         "author_id": str(getattr(entry, "author_id", "") or ""),
                         "author_name": author_name,
                         "spectator": True,
-                    })
+                    }
+                    if timestamp is not None:
+                        observed["ts"] = timestamp
+                    ephemeral.append(observed)
                 ev.spectator_reason = ctx.spectator_reason
                 ev.spectator_snapshot = [
                     entry if isinstance(entry, dict) else vars(entry)
@@ -875,6 +924,7 @@ class ConversationService:
                     max_tokens_override=ctx.llm_max_tokens,
                     conversation_mode=getattr(ctx, "conversation_mode", "normal"),
                     conversation_reason=getattr(ctx, "conversation_reason", ""),
+                    temporal=temporal,
                 )
             except Exception as exc:
                 self._log_module(
@@ -1280,6 +1330,7 @@ class ConversationService:
                 "reply_to_user_id": "",
                 "reply_to_user_name": None,
                 "system_generated": True,
+                "ts": float(draft.now),
             })
         else:
             history.append({
@@ -1287,6 +1338,7 @@ class ConversationService:
                 "content": assistant_history_content(answer, output),
                 "reply_to_user_id": str(uid),
                 "reply_to_user_name": getattr(draft.user, "display_name", None),
+                "ts": float(draft.now),
             })
         if in_date and isinstance(date_session, dict):
             date_session["history"] = history[-DATE_HISTORY_MAX:]
@@ -1634,6 +1686,7 @@ class ConversationService:
         max_tokens_override: int | None = None,
         conversation_mode="normal",
         conversation_reason="",
+        temporal=None,
     ):
         now = self.clock() if now is None else now
         session_mode = conversation_mode in ("spectator", "active", "proactive")
@@ -1659,6 +1712,9 @@ class ConversationService:
             # usuarios conocidos ni explicación larga de etiquetas; el mensaje
             # es corto, pero una pregunta puede depender de una preferencia.
             sections = [
+                domain_prompts.temporal_context_section(
+                    temporal, compact=True, mode=conversation_mode
+                ),
                 affinity_section,
                 relationship_section,
                 domain_prompts.romantic_relationship_section(
@@ -1681,6 +1737,9 @@ class ConversationService:
             ]
         else:
             sections = [
+                domain_prompts.temporal_context_section(
+                    temporal, mode=conversation_mode
+                ),
                 affinity_section,
                 relationship_section,
                 domain_prompts.romantic_relationship_section(
@@ -1737,6 +1796,8 @@ class ConversationService:
             visible_history,
             self._inference_resolver(getattr(user, "id", None)),
             users=state.users,
+            now=now if temporal is not None else None,
+            zone=temporal.zone if temporal is not None else None,
         )
         messages = [{"role": "system", "content": system_prompt}, *view]
         if conversation_mode == "proactive":

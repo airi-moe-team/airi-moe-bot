@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from airi.domain.time_perception import TimeConfig
 from airi.services.conversation import ConversationService, TurnContext
 from airi.testing import FakeLLM, FakeUser, llm_json, make_state
 
@@ -85,3 +86,46 @@ def test_apply_then_persists_all_effects():
     assert state.entry_points(42) == 2
     assert state.histories[7][-1]["role"] == "assistant"
     assert [notice.kind for notice in result.notices] == ["meet"]
+
+
+def test_temporal_prompt_and_history_view_receive_fixed_turn_time():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("¡Hola!")])
+    service = ConversationService(
+        llm=llm,
+        state=state,
+        clock=lambda: NOW,
+        time_config=TimeConfig(enabled=True, timezone="UTC"),
+    )
+    draft = run(service.generate_turn(
+        DAVID, [(DAVID, "hola")], TurnContext(channel_id=7)
+    ))
+    prompt = llm.last_system_prompt
+    user_message = llm.calls[0]["messages"][-1]["content"]
+    assert "=== TU PERCEPCIÓN DEL TIEMPO ===" in prompt
+    assert "No recites la hora" in prompt
+    assert user_message.startswith("[ahora] [speaker=David|")
+    assert draft.trace.time_context["enabled"] is True
+    assert draft.trace.time_context["local_iso"] == "1970-01-12T13:46"
+    assert "content" not in draft.trace.time_context
+    result = service.apply_turn(draft)
+    assert all(entry["ts"] == NOW for entry in result.history)
+    assert state.histories[7][-1]["ts"] == NOW
+
+
+def test_time_context_off_removes_temporal_prompt_and_tags():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("¡Hola!")])
+    service = ConversationService(
+        llm=llm,
+        state=state,
+        clock=lambda: NOW,
+        time_config=TimeConfig(enabled=False),
+    )
+    run(service.generate_turn(
+        DAVID, [(DAVID, "hola")], TurnContext(channel_id=7)
+    ))
+    prompt = llm.last_system_prompt
+    user_message = llm.calls[0]["messages"][-1]["content"]
+    assert "TU PERCEPCIÓN DEL TIEMPO" not in prompt
+    assert user_message.startswith("[speaker=David|")

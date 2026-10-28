@@ -124,6 +124,25 @@ def test_live_can_select_identity_scenarios_and_candidate_prompt(
     assert calls["prompt_variant"] == "compact_candidate"
 
 
+def test_live_can_run_temporal_scenarios_with_explicit_ab_toggle(tmp_path, monkeypatch):
+    from airi.evaluation.interaction import TEMPORAL_SCENARIOS
+
+    out = tmp_path / "temporal.jsonl"
+    calls = {}
+
+    async def fake_live(**kwargs):
+        calls.update(kwargs)
+        return [_record()]
+
+    monkeypatch.setattr(cli, "generate_live_records", fake_live)
+    assert cli.main([
+        "--live", "--out", str(out), "--scenario-set", "temporal",
+        "--time-context", "off",
+    ]) == 0
+    assert calls["scenarios"] == TEMPORAL_SCENARIOS
+    assert calls["time_context_enabled"] is False
+
+
 def test_live_requires_out(tmp_path):
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["--live"])

@@ -12,15 +12,17 @@ histórico sin prefijo (`AIRI_TRACE_DIR` → `TRACE_DIR`), igual que hace la CLI
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 
-from airi.domain.constants import env_int
+from airi.domain.constants import ENV_FALSE_VALUES, ENV_TRUE_VALUES, env_int
 
 DEFAULT_TRACE_KEEP_LAST = 500
 DEFAULT_BACKUP_RETENTION = 5
 DEFAULT_SEASON_RETENTION = 3
 DEFAULT_PUBLISH_TTL_SECONDS = 900
 DEFAULT_TURN_RETENTION_SECONDS = 7 * 24 * 3600
+_WARNED_FLAGS: set[str] = set()
 
 
 def _env_first(*names, default=""):
@@ -29,6 +31,26 @@ def _env_first(*names, default=""):
         value = os.getenv(name)
         if value is not None and value.strip() != "":
             return value
+    return default
+
+
+def _env_flag_once(name: str, default: bool) -> bool:
+    """Lee un flag y avisa una sola vez por clave ante valores inválidos."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value in ENV_TRUE_VALUES:
+        return True
+    if value in ENV_FALSE_VALUES:
+        return False
+    if name not in _WARNED_FLAGS:
+        warnings.warn(
+            f"{name}={raw!r} no es un booleano válido; se usa {default}.",
+            UserWarning,
+            stacklevel=2,
+        )
+        _WARNED_FLAGS.add(name)
     return default
 
 
@@ -49,6 +71,9 @@ class Settings:
     publish_ttl_seconds: int = DEFAULT_PUBLISH_TTL_SECONDS
     # Tiempo que se conserva un registro de turno ya resuelto.
     turn_retention_seconds: int = DEFAULT_TURN_RETENTION_SECONDS
+    # Percepción temporal del prompt y zona IANA opcional (vacío = zona del sistema).
+    time_context: bool = True
+    timezone: str = ""
 
     @property
     def state_path(self) -> str:
@@ -80,4 +105,6 @@ class Settings:
             turn_retention_seconds=env_int(
                 "AIRI_TURN_RETENTION_SECONDS", DEFAULT_TURN_RETENTION_SECONDS
             ),
+            time_context=_env_flag_once("AIRI_TIME_CONTEXT", True),
+            timezone=_env_first("AIRI_TIMEZONE", default=""),
         )

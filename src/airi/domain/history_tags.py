@@ -23,13 +23,19 @@ Principios (ver plan maestro, secciones 2 y 5):
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
+from airi.domain.time_perception import format_elapsed
+
 #: Etiqueta que genera este módulo (para detectar una vista ya etiquetada).
 _TAG_RE = re.compile(r"^\[speaker=[^\]]*\]\s*")
+_TEMPORAL_VIEW_RE = re.compile(
+    r"^\[(?:ahora|hace \d+ (?:min|h|día(?:s)?))\]\s+\[speaker=[^\]]*\]"
+)
 #: Caracteres que romperían el formato de la etiqueta.
 _UNSAFE_NAME_RE = re.compile(r"[\[\]|=\r\n\t]+")
 _WS_RE = re.compile(r"\s+")
@@ -108,6 +114,18 @@ def format_identity_tag(name, affinity) -> str:
     return f"[speaker={display}|affinity={int(affinity.points)}|level={level}]"
 
 
+def time_tag(ts, now, zone=None) -> str:
+    """Etiqueta temporal de una intervención; vacío si falta un instante válido."""
+    try:
+        stamp = float(ts)
+        reference = float(now)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if not math.isfinite(stamp) or not math.isfinite(reference):
+        return ""
+    return f"[{format_elapsed(reference, stamp, zone, short=True)}]"
+
+
 def _resolve_name(name, index) -> str | None:
     """user_id si (y solo si) el nombre normalizado identifica a UNA persona."""
     ids = index.get(normalize_name(name)) if index else None
@@ -161,7 +179,9 @@ def _author_of(msg, index, names) -> tuple[str | None, str | None, str]:
     return uid, legacy_name, text
 
 
-def build_inference_history(history, resolver: Resolver, *, users=None) -> list:
+def build_inference_history(
+    history, resolver: Resolver, *, users=None, now=None, zone=None
+) -> list:
     """Construye la vista enviada al LLM a partir del historial canónico.
 
     - No muta `history` ni sus diccionarios; devuelve mensajes nuevos.
@@ -189,13 +209,17 @@ def build_inference_history(history, resolver: Resolver, *, users=None) -> list:
 
         if role == "user":
             # Idempotencia: una vista previa ya etiquetada se conserva tal cual.
-            if msg.get("author_id") is None and _TAG_RE.match(content):
+            if msg.get("author_id") is None and (
+                _TAG_RE.match(content) or _TEMPORAL_VIEW_RE.match(content)
+            ):
                 view.append({"role": "user", "content": content})
                 continue
             user_id, name, text = _author_of(msg, index, names)
             affinity = resolver(user_id, name)
             tag = format_identity_tag(name, affinity)
-            view.append({"role": "user", "content": f"{tag} {text}".rstrip()})
+            temporal = time_tag(msg.get("ts"), now, zone) if now is not None else ""
+            prefix = f"{temporal} " if temporal else ""
+            view.append({"role": "user", "content": f"{prefix}{tag} {text}".rstrip()})
             continue
 
         # Asistente (o cualquier rol no-usuario): se conserva el contenido y,

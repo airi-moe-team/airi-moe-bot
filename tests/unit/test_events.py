@@ -66,6 +66,22 @@ def test_from_dict_translates_legacy_keys():
     ev = TurnEvent.from_dict({"correlation_id": "old", "reply": "hola", "turn_ms": 42})
     assert ev.final_reply == "hola"
     assert ev.total_latency_ms == 42
+    assert ev.time_context == {}
+
+
+def test_time_context_round_trips_without_message_content():
+    source = {
+        "enabled": True,
+        "timezone": "Europe/Madrid",
+        "local_iso": "2026-10-27T03:14",
+        "weekday": "martes",
+        "bucket": "madrugada",
+        "minutes_since_user": 12,
+        "minutes_since_channel": None,
+    }
+    ev = TurnEvent(time_context=source)
+    restored = TurnEvent.from_dict(ev.to_dict())
+    assert restored.time_context == source
 
 
 def test_finish_sets_total_latency():

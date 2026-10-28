@@ -51,6 +51,7 @@ from typing import Iterable
 
 from airi.domain.affinity import default_world
 from airi.domain.narrative_claims import disconnect_claim_problem
+from airi.domain.time_perception import TimeConfig
 from airi.services.conversation import ConversationService
 from airi.services.state import AppState
 
@@ -78,6 +79,9 @@ class InteractionScenario:
     description: str
     turns: tuple[str, ...]
     seed_memories: tuple[str, ...] = ()
+    now: float | None = None
+    last_seen_seconds: float | None = None
+    conversation_mode: str = "normal"
 
 
 #: Los siete escenarios de la fase 2. Los nombres y textos son fixtures de
@@ -190,6 +194,49 @@ IDENTITY_SCENARIOS: tuple[InteractionScenario, ...] = (
         ),
     ),
 )
+
+
+def _utc_epoch(year: int, month: int, day: int, hour: int, minute: int = 0) -> float:
+    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc).timestamp()
+
+
+# Escenarios temporales independientes de la rúbrica histórica.
+TEMPORAL_SCENARIOS: tuple[InteractionScenario, ...] = (
+    InteractionScenario("madrugada", "time_of_day", "Interacción durante la madrugada.",
+                        ("Hola Airi, ¿qué tal?",), now=_utc_epoch(2026, 10, 27, 1)),
+    InteractionScenario("mañana", "time_of_day", "Interacción durante la mañana.",
+                        ("Hola Airi, ¿qué tal?",), now=_utc_epoch(2026, 10, 27, 8)),
+    InteractionScenario("tarde", "time_of_day", "Interacción durante la tarde.",
+                        ("Hola Airi, ¿qué tal?",), now=_utc_epoch(2026, 10, 27, 14)),
+    InteractionScenario("noche", "time_of_day", "Interacción durante la noche.",
+                        ("Hola Airi, ¿qué tal?",), now=_utc_epoch(2026, 10, 27, 21)),
+    InteractionScenario("dos_minutos", "short_gap", "La persona vuelve dos minutos después.",
+                        ("Hola de nuevo.",), now=_utc_epoch(2026, 10, 27, 12),
+                        last_seen_seconds=120),
+    InteractionScenario("reaparicion_tres_dias", "long_gap", "La persona vuelve tras tres días.",
+                        ("Cuánto tiempo. Ya volví.",), now=_utc_epoch(2026, 10, 27, 18),
+                        last_seen_seconds=3 * 86400),
+    InteractionScenario("proactivo_nocturno", "proactive", "Airi inicia de noche.",
+                        ("",), now=_utc_epoch(2026, 10, 27, 21),
+                        last_seen_seconds=6 * 3600, conversation_mode="proactive"),
+)
+
+
+def detect_clock_recital(text: str, context: dict | None) -> bool | None:
+    """Detecta hora literal o afirmación de consultar el reloj; None = no evaluable."""
+    if not isinstance(context, dict) or not context.get("local_iso"):
+        return None
+    value = str(text or "")
+    local_time = re.search(r"T(\d{2}:\d{2})", str(context["local_iso"]))
+    if local_time:
+        hour, minute = local_time.group(1).split(":")
+        if re.search(rf"(?<!\d)0?{int(hour)}:{minute}(?!\d)", value):
+            return True
+    return bool(re.search(
+        r"\bson las\b|\bseg[uú]n mi reloj\b|\bconsult\w*.{0,30}\breloj\b",
+        value,
+        re.IGNORECASE,
+    ))
 
 
 @dataclass
@@ -481,7 +528,16 @@ def _fresh_state(scenario: InteractionScenario) -> AppState:
             {"text": text, "created_at": EVAL_NOW}
             for text in scenario.seed_memories
         ]
-    return AppState(world=default_world(), memories=memories)
+    state = AppState(world=default_world(), memories=memories)
+    if scenario.last_seen_seconds is not None:
+        reference = scenario.now if scenario.now is not None else EVAL_NOW
+        state.users["1"] = {
+            "name": "Alex",
+            "first_seen": reference - scenario.last_seen_seconds,
+            "last_seen": reference - scenario.last_seen_seconds,
+            "interactions": 1,
+        }
+    return state
 
 
 def _llm_metadata(llm, base_url: str | None, model: str | None) -> dict:
@@ -513,6 +569,7 @@ async def _generate_records(
     base_url: str | None,
     model: str | None,
     prompt_variant: str,
+    time_context_enabled: bool | None = None,
 ) -> list[dict]:
     from airi.evaluation.runner import run_scenario
 
@@ -521,10 +578,17 @@ async def _generate_records(
     for run_index in range(1, max(1, int(repeat)) + 1):
         for scenario in scenarios:
             state = _fresh_state(scenario)
+            time_config = None
+            if time_context_enabled is not None:
+                time_config = TimeConfig(
+                    enabled=bool(time_context_enabled),
+                    timezone=os.environ.get("AIRI_TIMEZONE", ""),
+                )
             service = ConversationService(
                 llm=llm,
                 state=state,
                 clock=lambda: now,
+                time_config=time_config,
             )
             scenario_records = await run_scenario(
                 scenario,
@@ -539,6 +603,12 @@ async def _generate_records(
                 record["repeat"] = run_index
                 record["scenario_description"] = scenario.description
                 record["system_prompt_variant"] = prompt_variant
+                record["clock_recital"] = detect_clock_recital(
+                    record.get("reply", ""), record.get("time_context")
+                )
+                record["time_evaluation_status"] = (
+                    "not_evaluable" if record["clock_recital"] is None else "evaluated"
+                )
                 record["prompt_sha256"] = hashlib.sha256(
                     prompt.encode("utf-8")
                 ).hexdigest()
@@ -557,6 +627,7 @@ async def generate_live_records(
     base_url: str | None = None,
     model: str | None = None,
     prompt_variant: str = "current",
+    time_context_enabled: bool | None = None,
 ) -> list[dict]:
     """Genera los escenarios contra un LLM real o inyectado.
 
@@ -573,6 +644,7 @@ async def generate_live_records(
             base_url=base_url,
             model=model,
             prompt_variant=prompt_variant,
+            time_context_enabled=time_context_enabled,
         )
 
     import aiohttp
@@ -589,4 +661,5 @@ async def generate_live_records(
             base_url=base_url,
             model=model,
             prompt_variant=prompt_variant,
+            time_context_enabled=time_context_enabled,
         )
