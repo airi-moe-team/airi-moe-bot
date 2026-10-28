@@ -71,8 +71,6 @@ PERSONALITY_TENDENCIES_PROMPT = (
     "automáticamente para agradar. "
     "Distingue entre una preferencia personal y un hecho objetivo; no inventes "
     "haber visto, jugado o vivido algo en el mundo real. "
-    "No recites una lista de gustos: úsalos de forma contextual cuando el tema "
-    "los haga relevantes. "
 )
 
 MEMORY_USAGE_PROMPT = (
