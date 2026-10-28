@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
+from airi.adapters import http_llm
 from airi.adapters.http_llm import DEFAULT_MAX_OUTPUT_TOKENS, HttpLlmClient
 
 # ---------------------------------------------------------------------------
@@ -219,13 +220,13 @@ def test_none_explicit_uses_env_max_tokens(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _make_async_session():
+def _make_async_session(response_data=None):
     """Sesión doble con `post` que captura el payload."""
     session = MagicMock()
 
     class _Resp:
         async def json(self):
-            return {"choices": [{"message": {"content": "hi"}}]}
+            return response_data or {"choices": [{"message": {"content": "hi"}}]}
 
         def raise_for_status(self):
             pass
@@ -252,6 +253,39 @@ def _make_async_session():
     return session
 
 
+def _make_streaming_session(chunks):
+    """Sesión que entrega bloques arbitrarios de un event-stream SSE."""
+    session = MagicMock()
+
+    class _Content:
+        async def iter_any(self):
+            for chunk in chunks:
+                yield chunk
+
+    class _Resp:
+        status = 200
+        content = _Content()
+
+        def raise_for_status(self):
+            pass
+
+    class _PostCtx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        session._captured = json
+        session._captured_url = url
+        session._captured_headers = headers
+        return _PostCtx()
+
+    session.post = fake_post
+    return session
+
+
 def test_payload_uses_max_output_tokens():
     """Verifica que `chat_with_meta` envía `max_tokens` correcto en el payload."""
     session = _make_async_session()
@@ -268,6 +302,99 @@ def test_payload_uses_max_output_tokens():
     )
     payload = session._captured
     assert payload["max_tokens"] == 1234
+
+
+def test_chat_with_meta_is_non_streaming_by_default():
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    run(client.chat_with_meta([{"role": "user", "content": "hola"}]))
+
+    assert session._captured["stream"] is False
+
+
+def test_non_stream_response_preserves_reasoning_presence_and_server_timings():
+    session = _make_async_session({
+        "choices": [{"message": {
+            "content": '{"reply":"hola"}',
+            "reasoning_content": "no persistir reasoning",
+        }, "finish_reason": "stop"}],
+        "usage": {
+            "completion_tokens": 8,
+            "completion_tokens_details": {"reasoning_tokens": 4},
+        },
+        "timings": {"prompt_ms": 12.5, "predicted_ms": 30, "ignored": "x"},
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    content, meta = run(client.chat_with_meta([{"role": "user", "content": "hola"}]))
+
+    assert content == '{"reply":"hola"}'
+    assert meta.reasoning_present is True
+    assert meta.reasoning_tokens == 4
+    assert meta.server_timings == {"prompt_ms": 12.5, "predicted_ms": 30}
+    assert meta.ttft_ms is None
+
+
+def test_streaming_chat_collects_content_ttft_and_optional_metadata(monkeypatch):
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"reasoning_content":"pensando"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"{\\"reply\\":"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"\\"hola\\"}"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20,"completion_tokens_details":{"reasoning_tokens":4}},"timings":{"prompt_ms":11.5,"predicted_ms":20.0,"prompt_n":12,"predicted_n":8}}\n\n',
+        b"data: [DONE]\n\n",
+    ])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+    ticks = iter((10.0, 10.05, 10.20))
+    monkeypatch.setattr(http_llm.time, "perf_counter", lambda: next(ticks))
+
+    content, meta = run(
+        client.chat_with_meta(
+            [{"role": "user", "content": "hola"}],
+            schema={"type": "object"},
+            strict_schema=True,
+            stream=True,
+        )
+    )
+
+    assert content == '{"reply":"hola"}'
+    assert session._captured["stream"] is True
+    assert meta.ttft_ms == 50
+    assert meta.first_content_ms == 200
+    assert meta.reasoning_present is True
+    assert meta.reasoning_tokens == 4
+    assert meta.server_timings["prompt_ms"] == 11.5
+    assert meta.usage["prompt_tokens"] == 12
+
+
+def test_streaming_sse_parser_accepts_fragmented_network_chunks():
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"content":"hel',
+        b'lo"},"finish_reason":null}]}\n\ndata: [DO',
+        b'NE]\n\n',
+    ])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    content, meta = run(
+        client.chat_with_meta(
+            [{"role": "user", "content": "hola"}], stream=True
+        )
+    )
+
+    assert content == "hello"
+    assert meta.finish_reason is None
+    assert meta.ttft_ms is not None
+
+
+def test_streaming_missing_done_fails_instead_of_silent_fallback():
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"content":"respuesta"},"finish_reason":null}]}\n\n'
+    ])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    with pytest.raises(ValueError, match="SSE"):
+        run(client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True))
 
 
 def test_payload_explicit_max_tokens_overrides_adapter():
@@ -475,6 +602,64 @@ def test_thinking_mode_on_forces_reasoning_even_for_quick_turns(monkeypatch, req
     assert "chat_template_kwargs" not in session._captured
 
 
+@pytest.mark.parametrize("mode", ["on", "auto", "off"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_repair_override_disables_thinking_per_call(
+    monkeypatch, mode, stream
+):
+    monkeypatch.setenv("LLM_THINKING_MODE", mode)
+    session = (
+        _make_streaming_session([b"data: [DONE]\n\n"])
+        if stream
+        else _make_async_session()
+    )
+    client = HttpLlmClient(
+        base_url="http://localhost:7000", session=session, thinking_mode=mode
+    )
+
+    run(client.chat_with_meta(
+        [{"role": "user", "content": "repair"}],
+        disable_thinking=True,
+        force_disable_thinking=True,
+        stream=stream,
+    ))
+
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_thinking_override_does_not_disable_primary_in_global_on(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "on")
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="http://localhost:7000", session=session, thinking_mode="on"
+    )
+
+    run(client.chat_with_meta(
+        [{"role": "user", "content": "primary"}],
+        disable_thinking=False,
+    ))
+
+    assert "chat_template_kwargs" not in session._captured
+
+
+def test_force_disable_thinking_is_not_sent_to_non_llama_profile():
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="http://localhost:7000",
+        session=session,
+        provider="openai-compatible",
+        thinking_mode="on",
+    )
+
+    run(client.chat_with_meta(
+        [{"role": "user", "content": "repair"}],
+        disable_thinking=True,
+        force_disable_thinking=True,
+    ))
+
+    assert "chat_template_kwargs" not in session._captured
+
+
 @pytest.mark.parametrize("requested", [True, False])
 def test_thinking_mode_off_disables_reasoning_in_all_turns(monkeypatch, requested):
     """`off`: chat_template_kwargs siempre presente en el perfil `llama`."""
@@ -666,3 +851,63 @@ def test_post_error_truncates_long_bodies(caplog):
     lines = [record.getMessage() for record in caplog.records]
     assert lines, "no se registró ningún error"
     assert all(len(line) < 600 for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# Conteo de deltas y solicitud de `usage` en streaming (metadatos por llamada)
+# ---------------------------------------------------------------------------
+
+
+def test_streaming_counts_reasoning_and_content_deltas():
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"reasoning_content":"a"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"reasoning_content":"b"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"reasoning_content":"c"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"{1}"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"{2}"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True)
+    )
+
+    assert meta.reasoning_deltas == 3
+    assert meta.content_deltas == 2
+
+
+def test_streaming_payload_requests_usage_for_llama_profile():
+    session = _make_streaming_session([b"data: [DONE]\n\n"])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    run(client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True))
+
+    assert session._captured["stream_options"] == {"include_usage": True}
+
+
+def test_streaming_payload_omits_usage_request_for_openai_compatible():
+    session = _make_streaming_session([b"data: [DONE]\n\n"])
+    client = HttpLlmClient(
+        base_url="http://localhost:7000",
+        session=session,
+        provider="openai-compatible",
+        thinking_mode="auto",
+    )
+
+    run(client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True))
+
+    assert "stream_options" not in session._captured
+
+
+def test_non_streaming_response_has_no_delta_counts():
+    session = _make_async_session({
+        "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(client.chat_with_meta([{"role": "user", "content": "hola"}]))
+
+    assert meta.reasoning_deltas is None
+    assert meta.content_deltas is None

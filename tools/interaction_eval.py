@@ -6,10 +6,12 @@ Uso:
     python tools/interaction_eval.py --run candidata.jsonl --baseline base.jsonl
     python tools/interaction_eval.py --live --out candidata.jsonl --baseline base.jsonl
 
-``--live`` genera los siete escenarios contra el LLM configurado (por defecto
-``LLM_BASE_URL`` o ``http://127.0.0.1:7000``) usando ``ConversationService``.
-No publica en Discord ni persiste estado real. ``--run`` analiza un JSONL ya
-generado. El modo live no se ejecuta en la suite automática sin red.
+``--live`` genera los siete escenarios estándar o el grupo de seis escenarios
+de identidad contra el LLM configurado (por defecto ``LLM_BASE_URL`` o
+``http://127.0.0.1:7000``) usando ``ConversationService``. Permite elegir el
+prompt actual o la candidata compacta. No publica en Discord ni persiste estado
+real. ``--run`` analiza un JSONL ya generado. El modo live no se ejecuta en la
+suite automática sin red.
 
 La rúbrica 0-2 por criterio se añade al revisar el JSONL. Cada escenario vale
 10 puntos; los siete suman 70.
@@ -34,6 +36,8 @@ except Exception:  # pragma: no cover - dotenv es opcional en el tool
     pass
 
 from airi.evaluation.interaction import (  # noqa: E402
+    IDENTITY_SCENARIOS,
+    INTERACTION_SCENARIOS,
     compare_interactions,
     evaluate_interactions,
     generate_live_records,
@@ -94,6 +98,18 @@ def main(argv=None) -> int:
         "--model",
         help="Modelo explícito para --live (por defecto LLM_MODEL)",
     )
+    parser.add_argument(
+        "--scenario-set",
+        choices=("standard", "identity"),
+        default="standard",
+        help="Conjunto de escenarios para --live (por defecto standard)",
+    )
+    parser.add_argument(
+        "--prompt-variant",
+        choices=("current", "compact_candidate"),
+        default="current",
+        help="Variante del system prompt para --live (por defecto current)",
+    )
     args = parser.parse_args(argv)
 
     if args.live:
@@ -107,6 +123,12 @@ def main(argv=None) -> int:
                     repeat=args.repeat,
                     base_url=args.base_url,
                     model=args.model,
+                    scenarios=(
+                        IDENTITY_SCENARIOS
+                        if args.scenario_set == "identity"
+                        else INTERACTION_SCENARIOS
+                    ),
+                    prompt_variant=args.prompt_variant,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - el CLI informa y falla

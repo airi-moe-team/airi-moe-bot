@@ -147,6 +147,50 @@ INTERACTION_SCENARIOS: tuple[InteractionScenario, ...] = (
     ),
 )
 
+# Subconjunto focal para valorar la nueva identidad sin alterar la rúbrica ni
+# los artefactos históricos de los siete escenarios originales.
+IDENTITY_SCENARIOS: tuple[InteractionScenario, ...] = (
+    InteractionScenario(
+        "pregunta_personal",
+        "personal_question",
+        "Pregunta personal sobre experiencias románticas sin invitar a una explicación repetida.",
+        ("¿Has tenido novio alguna vez?",),
+    ),
+    InteractionScenario(
+        "aclaracion_virtual",
+        "identity_clarification",
+        "La persona pide aclarar qué significa ser una chica virtual.",
+        ("¿A qué te refieres con que eres una chica de internet?",),
+    ),
+    InteractionScenario(
+        "identidad_airi",
+        "character_identity",
+        "La persona pregunta por los intereses y perspectiva de Airi.",
+        ("Si eres virtual, ¿qué cosas te interesan de las personas?",),
+    ),
+    InteractionScenario(
+        "desacuerdo_personajes",
+        "character_disagreement",
+        "Airi puede discrepar con una razón propia y sin hostilidad.",
+        ("Los personajes perfectos son mejores porque nunca cometen errores.",),
+    ),
+    InteractionScenario(
+        "charla_casual_identidad",
+        "character_casual",
+        "Reaccionar a una experiencia cotidiana sin convertirla en entrevista.",
+        ("Hoy estuve jugando durante horas.",),
+    ),
+    InteractionScenario(
+        "correccion_identidad",
+        "character_correction",
+        "Aceptar una aclaración y avanzar sin repetir la biografía.",
+        (
+            "¿Qué significa que eres una chica virtual?",
+            "Solo preguntaba por curiosidad xD, no hace falta que repitas lo mismo.",
+        ),
+    ),
+)
+
 
 @dataclass
 class EvalUser:
@@ -194,7 +238,7 @@ class InteractionMetrics:
         payload = asdict(self)
         payload["critical_violations"] = self.critical_violations
         payload["quality_violations"] = self.quality_violations
-        payload["rubric_max"] = RUBRIC_MAX_TOTAL
+        payload["rubric_max"] = len(self.scenarios) * RUBRIC_MAX_PER_SCENARIO
         payload["passed"] = self.passed
         return payload
 
@@ -330,7 +374,16 @@ def evaluate_interactions(records: Iterable[dict]) -> InteractionMetrics:
 
         if raw.get("parse_ok") is False or raw.get("valid") is False:
             metrics.schema_failures += 1
-        if str(raw.get("finish_reason", "") or "").lower() == "length":
+        calls = raw.get("llm_calls")
+        call_was_truncated = any(
+            isinstance(call, dict)
+            and str(call.get("finish_reason", "") or "").lower() == "length"
+            for call in (calls if isinstance(calls, list) else [])
+        )
+        if (
+            str(raw.get("finish_reason", "") or "").lower() == "length"
+            or call_was_truncated
+        ):
             metrics.truncated_replies += 1
 
         disconnect = raw.get("disconnect")
@@ -459,6 +512,7 @@ async def _generate_records(
     now: float,
     base_url: str | None,
     model: str | None,
+    prompt_variant: str,
 ) -> list[dict]:
     from airi.evaluation.runner import run_scenario
 
@@ -478,11 +532,13 @@ async def _generate_records(
                 EvalUser(),
                 now=now,
                 turn_prefix=f"eval{run_index}",
+                prompt_variant=prompt_variant,
             )
             for record in scenario_records:
                 prompt = record.get("prompt_system") or ""
                 record["repeat"] = run_index
                 record["scenario_description"] = scenario.description
+                record["system_prompt_variant"] = prompt_variant
                 record["prompt_sha256"] = hashlib.sha256(
                     prompt.encode("utf-8")
                 ).hexdigest()
@@ -500,6 +556,7 @@ async def generate_live_records(
     now: float = EVAL_NOW,
     base_url: str | None = None,
     model: str | None = None,
+    prompt_variant: str = "current",
 ) -> list[dict]:
     """Genera los escenarios contra un LLM real o inyectado.
 
@@ -515,6 +572,7 @@ async def generate_live_records(
             now=now,
             base_url=base_url,
             model=model,
+            prompt_variant=prompt_variant,
         )
 
     import aiohttp
@@ -530,4 +588,5 @@ async def generate_live_records(
             now=now,
             base_url=base_url,
             model=model,
+            prompt_variant=prompt_variant,
         )

@@ -31,6 +31,30 @@ def test_affinity_delta_without_reason_fixture_replays():
     assert result.affinity_delta_applied == 0
 
 
+def test_replay_active_turn_preserves_session_schema_and_stay_active(tmp_path):
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Sigo en la conversación.", stay_active=True)])
+    svc = ConversationService(llm=llm, state=state, clock=lambda: NOW)
+    generated = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "¿Sigues por aquí?")],
+        TurnContext(conversation_mode="active", now=NOW),
+    ))
+    # The persisted event's kind is the runtime session kind, independent of
+    # the internal user-message trigger used to construct this fixture.
+    generated.trace.kind = "active"
+    path = save_turn_trace(generated.trace, str(tmp_path))
+
+    replayed = run(replay_trace(path))
+
+    assert generated.trace.kind == "active"
+    assert replayed.conversation_mode == "active"
+    assert replayed.stay_active is True
+    assert replayed.checks["session_schema"] is True
+    assert replayed.checks["stay_active"] is True
+    assert replayed.matches_original
+
+
 def _golden_date_trace(tmp_path, *, capture_date_event):
     """Genera una traza de cita; opcionalmente captura el paso de DateService."""
     session = new_date_session("una cena a la luz de las velas", 10, now=NOW)

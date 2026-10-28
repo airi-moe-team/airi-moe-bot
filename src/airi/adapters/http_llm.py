@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -37,6 +38,58 @@ LLM_PROVIDERS = ("llama", "openai", "openai-compatible")
 LLM_THINKING_MODES = ("auto", "on", "off")
 
 _ERROR_DETAIL_LIMIT = 300
+
+
+async def _iter_sse_data(content):
+    """Yield `data:` event payloads across arbitrary network chunk boundaries."""
+    buffer = b""
+    data_lines = []
+
+    def consume_line(raw_line):
+        line = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
+        if not line:
+            return "event" if data_lines else None
+        if line.startswith(":"):
+            return None
+        if line.startswith("data:"):
+            value = line[5:]
+            data_lines.append(value[1:] if value.startswith(" ") else value)
+        return None
+
+    async for chunk in content.iter_any():
+        if not isinstance(chunk, (bytes, bytearray)):
+            chunk = str(chunk).encode("utf-8")
+        buffer += bytes(chunk)
+        while b"\n" in buffer:
+            raw_line, buffer = buffer.split(b"\n", 1)
+            if consume_line(raw_line):
+                yield "\n".join(data_lines)
+                data_lines.clear()
+    if buffer:
+        consume_line(buffer)
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def _numeric_timings(value):
+    if not isinstance(value, dict):
+        return None
+    timings = {
+        str(key): item
+        for key, item in value.items()
+        if isinstance(item, (int, float)) and not isinstance(item, bool)
+    }
+    return timings or None
+
+
+def _reasoning_token_count(usage):
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("completion_tokens_details")
+    value = details.get("reasoning_tokens") if isinstance(details, dict) else None
+    if value is None:
+        value = usage.get("reasoning_tokens")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _env_str(*names, default=""):
@@ -358,26 +411,35 @@ class HttpLlmClient:
             return await response.json()
 
     async def chat(self, messages, *, schema=None, max_tokens=None, temperature=None,
-                   disable_thinking: bool = False, strict_schema: bool = False):
+                   disable_thinking: bool = False,
+                   force_disable_thinking: bool = False,
+                   strict_schema: bool = False):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens, temperature=temperature,
-            disable_thinking=disable_thinking, strict_schema=strict_schema,
+            disable_thinking=disable_thinking,
+            force_disable_thinking=force_disable_thinking,
+            strict_schema=strict_schema,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
                              temperature=None, disable_thinking: bool = False,
-                             strict_schema: bool = False):
+                             force_disable_thinking: bool = False,
+                             strict_schema: bool = False, stream: bool = False):
         payload = {
             "model": self.model,
             "messages": messages,
             self.max_tokens_field: max_tokens or self.max_output_tokens,
-            "stream": False,
+            "stream": bool(stream),
         }
         if not self.skip_temperature:
             payload["temperature"] = (
                 self.temperature if temperature is None else temperature
             )
+        if stream and self.provider in ("llama", "openai"):
+            # Sin esto el servidor no manda `usage` en SSE y el conteo de
+            # tokens de una corrida en streaming queda desconocido.
+            payload["stream_options"] = {"include_usage": True}
         if schema is not None:
             if not self.response_format:
                 log.debug("response_format omitido (LLM_RESPONSE_FORMAT=0)")
@@ -396,12 +458,19 @@ class HttpLlmClient:
         # OpenAI y compatibles la rechazarían.
         # `LLM_THINKING_MODE` pisa lo que pida el servicio: `on` nunca apaga el
         # razonamiento y `off` lo apaga en todos los turnos.
-        if self.thinking_mode == "on":
-            disable_thinking = False
-        elif self.thinking_mode == "off":
-            disable_thinking = True
+        if self.provider == "llama":
+            if self.thinking_mode == "off":
+                disable_thinking = True
+            elif self.thinking_mode == "on":
+                # El modo global manda en llamadas normales. Las reparaciones
+                # clasificadas pueden solicitar un override solo para esta POST.
+                disable_thinking = bool(force_disable_thinking)
+            elif force_disable_thinking:
+                disable_thinking = True
         if disable_thinking and self.provider == "llama":
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if stream:
+            return await self._chat_with_meta_stream(payload)
         data = await self.post(payload)
         choices = data.get("choices") or []
         if not choices:
@@ -414,5 +483,91 @@ class HttpLlmClient:
         meta = LLMMeta(
             finish_reason=choice.get("finish_reason"),
             usage=data.get("usage"),
+            server_timings=_numeric_timings(data.get("timings")),
+            reasoning_present=(
+                bool(message.get("reasoning_content"))
+                if isinstance(message.get("reasoning_content"), str)
+                else None
+            ),
+            reasoning_tokens=_reasoning_token_count(data.get("usage")),
         )
         return text, meta
+
+    async def _chat_with_meta_stream(self, payload):
+        """Lee SSE; ensambla content para el parser y nunca retiene reasoning."""
+        url = chat_completions_url(self.base_url)
+        kwargs: dict = {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
+        if self.api_key:
+            kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
+        started = time.perf_counter()
+        async with self.session.post(url, json=payload, **kwargs) as response:
+            response.raise_for_status()
+            content_parts = []
+            usage = None
+            finish_reason = None
+            server_timings = None
+            reasoning_present = None
+            reasoning_deltas = 0
+            content_deltas = 0
+            ttft_ms = None
+            first_content_ms = None
+            done = False
+            async for data in _iter_sse_data(response.content):
+                if data.strip() == "[DONE]":
+                    done = True
+                    break
+                try:
+                    event = json.loads(data)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Evento SSE JSON inválido") from exc
+                if not isinstance(event, dict):
+                    continue
+                if event.get("error") is not None:
+                    raise ValueError("El stream SSE devolvió un evento de error")
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                timings = _numeric_timings(event.get("timings"))
+                if timings:
+                    server_timings = timings
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if choice.get("finish_reason") is not None:
+                    finish_reason = choice["finish_reason"]
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                reasoning = delta.get("reasoning_content")
+                has_reasoning = isinstance(reasoning, str) and bool(reasoning)
+                if has_reasoning:
+                    reasoning_present = True
+                    reasoning_deltas += 1
+                content = delta.get("content")
+                has_content = isinstance(content, str) and bool(content)
+                if has_content:
+                    content_deltas += 1
+                if (
+                    (ttft_ms is None and (has_reasoning or has_content))
+                    or (first_content_ms is None and has_content)
+                ):
+                    elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+                    if ttft_ms is None:
+                        ttft_ms = elapsed_ms
+                    if first_content_ms is None and has_content:
+                        first_content_ms = elapsed_ms
+                if has_content:
+                    content_parts.append(content)
+            if not done:
+                raise ValueError("Stream SSE terminó sin el marcador [DONE]")
+        return "".join(content_parts), LLMMeta(
+            finish_reason=finish_reason,
+            usage=usage or {},
+            ttft_ms=ttft_ms,
+            first_content_ms=first_content_ms,
+            server_timings=server_timings,
+            reasoning_present=reasoning_present,
+            reasoning_tokens=_reasoning_token_count(usage),
+            reasoning_deltas=reasoning_deltas,
+            content_deltas=content_deltas,
+        )

@@ -125,7 +125,7 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `CHANNEL_ID`: ID del canal autorizado
 - `LLM_PROVIDER`: perfil del proveedor (`llama`, `openai` u `openai-compatible`)
 - `LLM_BASE_URL`: URL base del proveedor (default: http://127.0.0.1:7000)
-- `LLM_THINKING_MODE`: modo de razonamiento (`auto` — solo se desactiva en turnos rápidos—, `on` —siempre activo— u `off` —siempre desactivado—; default: `auto`, solo aplicable con `LLM_PROVIDER=llama`)
+- `LLM_THINKING_MODE`: modo global de razonamiento (`auto` — se desactiva en turnos rápidos—, `on` —activo en llamadas principales— u `off` —desactivado—; default: `auto`, solo aplicable con `LLM_PROVIDER=llama`). Las llamadas de reparación pueden apagar thinking por petición para no repetir razonamiento costoso; esto no altera la política de la llamada principal.
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
@@ -250,6 +250,43 @@ airi-replay ./traces/2026-10-14/<cid>.json
 airi-replay --emit-test ./traces/.../<cid>.json
 # genera tests/integration/test_regression_<cid>.py desde la traza
 ```
+
+### Comparar variantes del system prompt
+
+Con llama-server disponible y thinking activado, el benchmark ejecuta cinco
+pares secuenciales por defecto, alterna su orden y guarda/imprime solo métricas
+y checks (no el prompt ni las respuestas). El benchmark usa streaming para
+medir TTFT; el camino normal del bot sigue sin streaming:
+
+```bash
+LLM_THINKING_MODE=on airi-prompt-benchmark \
+  ./traces/2026-10-26/722f84144006.json --pairs 5 \
+  --metrics-url http://127.0.0.1:7000/metrics \
+  --out /tmp/opencode/prompt-benchmark.json
+```
+
+Para timings internos y snapshots, el operador debe iniciar manualmente
+llama-server con `--perf --metrics`; el benchmark nunca reinicia ni reconfigura
+el servidor. Comprueba primero que esas opciones existan con el `--help` de tu
+build. `--expert-stats` no reemplaza timings de inferencia. Los deltas de
+Prometheus se etiquetan como agregados, pues puede haber otras peticiones al
+servidor.
+
+Añade `--review` para valorar localmente relevancia, coherencia, proporcionalidad
+y reglas esenciales. En ese modo el texto se muestra en terminal durante la
+revisión, pero no se guarda en el reporte. Sin esa revisión semántica el informe
+deja `candidate_acceptable` pendiente. `ttft_ms` mide el primer delta generado y
+`first_content_ms` el primer texto visible; ambos pueden diferir si el servidor
+separa `reasoning_content` de `content`.
+
+Cada muestra incluye además `call_count`, `repair_ms`, `call_purposes` y el
+detalle `calls`: una entrada por invocación al modelo con propósito y duración.
+Así se distingue la respuesta visible del coste de las reparaciones, sin guardar
+prompt, historial, contenido ni reasoning. En streaming el cliente pide `usage`
+al servidor (`stream_options`), de modo que `completion_tokens` deja de ser nulo;
+`reasoning_deltas` es un proxy por fragmento SSE, no un conteo exacto.
+`server_timings` y `ttft_ms` describen la primera llamada; `llm_ms` incluye las
+reparaciones.
 
 ## Regresión y cobertura (Fase 6)
 

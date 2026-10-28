@@ -42,25 +42,32 @@ class FakeLLM:
         self.calls = []  # dicts con messages/schema/max_tokens/temperature/...
 
     async def chat(self, messages, *, schema=None, max_tokens=None,
-                   temperature=None, disable_thinking=False, strict_schema=False):
+                   temperature=None, disable_thinking=False, strict_schema=False,
+                   stream=False, force_disable_thinking=False):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens,
             temperature=temperature, disable_thinking=disable_thinking,
-            strict_schema=strict_schema,
+            strict_schema=strict_schema, stream=stream,
+            force_disable_thinking=force_disable_thinking,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
                              temperature=None, disable_thinking=False,
-                             strict_schema=False):
-        self.calls.append({
+                             strict_schema=False, stream=False,
+                             force_disable_thinking=False):
+        call = {
             "messages": messages,
             "schema": schema,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "disable_thinking": disable_thinking,
+            "force_disable_thinking": force_disable_thinking,
             "strict_schema": strict_schema,
-        })
+        }
+        if stream:
+            call["stream"] = True
+        self.calls.append(call)
         if strict_schema and self.strict_error is not None:
             raise self.strict_error
         meta = (

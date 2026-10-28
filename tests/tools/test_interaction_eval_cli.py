@@ -103,6 +103,27 @@ def test_live_writes_records_and_compares_against_baseline(
     assert payload["regression"] is False
 
 
+def test_live_can_select_identity_scenarios_and_candidate_prompt(
+    tmp_path, monkeypatch
+):
+    from airi.evaluation.interaction import IDENTITY_SCENARIOS
+
+    out = tmp_path / "identity.jsonl"
+    calls = {}
+
+    async def fake_live(**kwargs):
+        calls.update(kwargs)
+        return [_record()]
+
+    monkeypatch.setattr(cli, "generate_live_records", fake_live)
+    assert cli.main([
+        "--live", "--out", str(out), "--scenario-set", "identity",
+        "--prompt-variant", "compact_candidate",
+    ]) == 0
+    assert calls["scenarios"] == IDENTITY_SCENARIOS
+    assert calls["prompt_variant"] == "compact_candidate"
+
+
 def test_live_requires_out(tmp_path):
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["--live"])

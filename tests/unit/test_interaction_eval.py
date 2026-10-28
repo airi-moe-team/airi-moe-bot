@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from airi.evaluation.interaction import (
+    IDENTITY_SCENARIOS,
     INTERACTION_SCENARIOS,
     RUBRIC_CRITERIA,
     RUBRIC_MAX_TOTAL,
@@ -47,6 +48,19 @@ def test_scenarios_cover_the_seven_required_situations():
     } <= categories
     assert all(scenario.turns for scenario in INTERACTION_SCENARIOS)
     assert sum(1 for scenario in INTERACTION_SCENARIOS if len(scenario.turns) > 1) >= 5
+
+
+def test_identity_scenarios_cover_the_six_personality_checks():
+    ids = [scenario.id for scenario in IDENTITY_SCENARIOS]
+    assert ids == [
+        "pregunta_personal",
+        "aclaracion_virtual",
+        "identidad_airi",
+        "desacuerdo_personajes",
+        "charla_casual_identidad",
+        "correccion_identidad",
+    ]
+    assert all(scenario.turns for scenario in IDENTITY_SCENARIOS)
 
 
 def test_question_only_replies_and_repeated_closings_are_counted():
@@ -115,6 +129,29 @@ def test_schema_and_state_failures_are_critical():
     assert metrics.passed is False
 
 
+def test_repaired_truncation_is_still_counted_from_call_metadata():
+    metrics = evaluate_interactions([
+        record(
+            finish_reason="stop",
+            llm_calls=[
+                {"purpose": "primary", "finish_reason": "length"},
+                {"purpose": "truncation_repair", "finish_reason": "stop"},
+            ],
+        )
+    ])
+
+    assert metrics.truncated_replies == 1
+
+
+def test_rubric_max_matches_the_scenarios_in_the_evaluation_group():
+    metrics = evaluate_interactions([
+        record(scenario=scenario.id, turn=1)
+        for scenario in IDENTITY_SCENARIOS
+    ])
+
+    assert metrics.to_dict()["rubric_max"] == 60
+
+
 def test_rubric_is_per_scenario_and_caps_at_seventy():
     records = []
     for index, scenario in enumerate(INTERACTION_SCENARIOS):
@@ -157,6 +194,51 @@ def test_live_generation_uses_a_fake_llm_without_network():
     assert all(r["prompt_sha256"] for r in records)
     assert all(r["model"] for r in records)
     assert all(r["parse_ok"] is True for r in records)
+
+
+def test_identity_scenarios_can_be_generated_with_candidate_prompt():
+    from airi.domain.prompts import SYSTEM_PROMPT_COMPACT_CANDIDATE
+    from airi.testing import FakeLLM, llm_json
+
+    records = asyncio.run(
+        generate_live_records(
+            llm=FakeLLM(default_reply=llm_json("Soy una chica virtual.")),
+            scenarios=IDENTITY_SCENARIOS,
+            prompt_variant="compact_candidate",
+        )
+    )
+
+    assert len(records) == sum(len(s.turns) for s in IDENTITY_SCENARIOS)
+    assert {r["scenario"] for r in records} == {s.id for s in IDENTITY_SCENARIOS}
+    assert all(r["system_prompt_variant"] == "compact_candidate" for r in records)
+    assert all(SYSTEM_PROMPT_COMPACT_CANDIDATE in r["prompt_system"] for r in records)
+    assert all("llm_calls" in record for record in records)
+    assert all(
+        "messages" not in call and "content" not in call
+        for record in records
+        for call in record["llm_calls"]
+    )
+
+
+def test_identity_baseline_and_candidate_keep_the_same_context():
+    from airi.testing import FakeLLM, llm_json
+
+    scenario = (IDENTITY_SCENARIOS[2],)
+    baseline_llm = FakeLLM(default_reply=llm_json("Me interesan las historias."))
+    candidate_llm = FakeLLM(default_reply=llm_json("Me interesan las historias."))
+    asyncio.run(generate_live_records(llm=baseline_llm, scenarios=scenario))
+    asyncio.run(generate_live_records(
+        llm=candidate_llm,
+        scenarios=scenario,
+        prompt_variant="compact_candidate",
+    ))
+
+    baseline_call, candidate_call = baseline_llm.calls[0], candidate_llm.calls[0]
+    assert baseline_call["messages"][1:] == candidate_call["messages"][1:]
+    assert baseline_call["messages"][0] != candidate_call["messages"][0]
+    assert baseline_call["schema"] == candidate_call["schema"]
+    assert baseline_call["max_tokens"] == candidate_call["max_tokens"]
+    assert baseline_call["disable_thinking"] == candidate_call["disable_thinking"]
 
 
 def test_memory_snapshots_are_not_mutated_by_later_turns():

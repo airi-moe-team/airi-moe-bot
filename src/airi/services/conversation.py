@@ -459,6 +459,12 @@ class TurnContext:
     conversation_mode: str = "normal"
     conversation_reason: str = ""
     spectator_roll: float = 0.0
+    # Selector experimental, independiente del camino rápido de producción.
+    system_prompt_variant: domain_prompts.PromptVariant = "current"
+    # Streaming se activa exclusivamente para el runner de benchmark.
+    stream_llm: bool = False
+    # Override opcional exclusivo de evaluaciones/controladores explícitos.
+    llm_max_tokens: int | None = None
 
 
 @dataclass
@@ -858,12 +864,15 @@ class ConversationService:
             t0 = _time.perf_counter()
             self._log_module("llm_call", "activated")
             try:
-                system_prompt, raw_llm, meta, output, stay_active = await self._generate(
+                system_prompt, raw_llm, meta, output, stay_active, llm_calls = await self._generate(
                     prompt_history, web_context, user, date_session, delta_max,
                     extra_note=extra_note,
                     relationship_view=relationship_view,
                     now=now,
                     quick=quick,
+                    prompt_variant=ctx.system_prompt_variant,
+                    stream_llm=ctx.stream_llm,
+                    max_tokens_override=ctx.llm_max_tokens,
                     conversation_mode=getattr(ctx, "conversation_mode", "normal"),
                     conversation_reason=getattr(ctx, "conversation_reason", ""),
                 )
@@ -887,6 +896,12 @@ class ConversationService:
             ev.llm_ms = timings["llm_ms"]
             ev.llm_finish_reason = meta.finish_reason
             ev.llm_usage = meta.usage
+            ev.llm_ttft_ms = meta.ttft_ms
+            ev.llm_first_content_ms = meta.first_content_ms
+            ev.llm_server_timings = meta.server_timings
+            ev.llm_reasoning_present = meta.reasoning_present
+            ev.llm_reasoning_tokens = meta.reasoning_tokens
+            ev.llm_calls = llm_calls
             ev.parse_ok = output.reply is not None
             ev.parsed = {
                 "reply": output.reply,
@@ -1452,6 +1467,157 @@ class ConversationService:
             return False
         return True
 
+    async def _chat(
+        self,
+        calls,
+        purpose,
+        messages,
+        *,
+        schema,
+        max_tokens,
+        disable_thinking,
+        stream_llm=False,
+    ):
+        """Una invocación al modelo, registrada en `calls` con su propósito.
+
+        Encapsula el reintento de `json_schema` a `json_object` para que la
+        traza refleje cuántas peticiones se hicieron de verdad y por qué.
+        """
+        stream_kwargs = {"stream": True} if stream_llm else {}
+        # La llamada primaria respeta el modo global; cada reparación tiene
+        # un override acotado a esa petición.
+        force_disable_thinking = purpose != "primary"
+        requested_disable_thinking = bool(disable_thinking or force_disable_thinking)
+        if not hasattr(self.llm, "chat_with_meta"):
+            if stream_llm:
+                raise RuntimeError(
+                    "El cliente LLM no soporta metadata necesaria para streaming"
+                )
+            started = time.perf_counter()
+            try:
+                raw = await self.llm.chat(
+                    messages,
+                    schema=schema,
+                    max_tokens=max_tokens,
+                    disable_thinking=requested_disable_thinking,
+                    force_disable_thinking=force_disable_thinking,
+                )
+            except Exception as exc:
+                self._record_call(
+                    calls, purpose, None, started, max_tokens,
+                    requested_disable_thinking, force_disable_thinking,
+                    status="failed", error_type=type(exc).__name__,
+                )
+                raise
+            meta = LLMMeta()
+            self._record_call(
+                calls, purpose, meta, started, max_tokens,
+                requested_disable_thinking, force_disable_thinking
+            )
+            return raw, meta
+        started = time.perf_counter()
+        try:
+            # Salida estricta: la gramática del servidor garantiza JSON aunque
+            # el modelo quiera responder en texto plano.
+            raw, meta = await self.llm.chat_with_meta(
+                messages,
+                schema=schema,
+                strict_schema=True,
+                max_tokens=max_tokens,
+                disable_thinking=requested_disable_thinking,
+                force_disable_thinking=force_disable_thinking,
+                **stream_kwargs,
+            )
+        except Exception as exc:
+            self._record_call(
+                calls, purpose, None, started, max_tokens,
+                requested_disable_thinking, force_disable_thinking,
+                status="failed", error_type=type(exc).__name__,
+            )
+            if not self._can_retry_without_strict(exc):
+                raise
+            log.warning(
+                "La salida estricta no está soportada por el servidor; "
+                "se reintenta en modo json_object.",
+                exc_info=True,
+            )
+            started = time.perf_counter()
+            raw, meta = await self.llm.chat_with_meta(
+                messages,
+                schema=schema,
+                max_tokens=max_tokens,
+                disable_thinking=requested_disable_thinking,
+                force_disable_thinking=force_disable_thinking,
+                **stream_kwargs,
+            )
+            self._record_call(
+                calls, f"{purpose}:json_object_retry", meta, started,
+                max_tokens, requested_disable_thinking, force_disable_thinking,
+            )
+            return raw, meta
+        self._record_call(
+            calls, purpose, meta, started, max_tokens,
+            requested_disable_thinking, force_disable_thinking
+        )
+        return raw, meta
+
+    def _record_call(
+        self, calls, purpose, meta, started, max_tokens, disable_thinking,
+        force_disable_thinking=False, *, status="ok", error_type=None,
+    ):
+        """Añade a `calls` solo metadatos: nunca prompt, content ni reasoning."""
+        if calls is None:
+            return
+        effective_max = max_tokens
+        if effective_max is None:
+            effective_max = getattr(self.llm, "max_output_tokens", None)
+        calls.append(
+            {
+                "purpose": purpose,
+                "status": status,
+                "duration_ms": int(
+                    round((time.perf_counter() - started) * 1000)
+                ),
+                "finish_reason": getattr(meta, "finish_reason", None),
+                "usage": (
+                    meta.usage
+                    if meta is not None and isinstance(meta.usage, dict)
+                    else None
+                ),
+                "ttft_ms": getattr(meta, "ttft_ms", None),
+                "first_content_ms": getattr(meta, "first_content_ms", None),
+                "server_timings": getattr(meta, "server_timings", None),
+                "reasoning_present": getattr(meta, "reasoning_present", None),
+                "reasoning_tokens": getattr(meta, "reasoning_tokens", None),
+                "reasoning_deltas": getattr(meta, "reasoning_deltas", None),
+                "content_deltas": getattr(meta, "content_deltas", None),
+                "max_tokens": (
+                    effective_max if isinstance(effective_max, int) else None
+                ),
+                "thinking_requested_off": bool(disable_thinking),
+                "thinking_effective": self._thinking_effective(
+                    disable_thinking, force_disable_thinking
+                ),
+                "error_type": error_type,
+            }
+        )
+
+    def _thinking_effective(self, disable_thinking, force_disable_thinking=False):
+        """Si el razonamiento quedará activo tras aplicar los overrides.
+
+        Las reparaciones marcadas tienen override local; la llamada primaria
+        continúa obedeciendo `LLM_THINKING_MODE`.
+        """
+        mode = str(getattr(self.llm, "thinking_mode", "") or "auto").strip().lower()
+        provider = str(getattr(self.llm, "provider", "llama") or "llama").lower()
+        if provider != "llama":
+            return None
+        if mode == "on":
+            return not force_disable_thinking
+        if mode == "off":
+            return False
+        return not (disable_thinking or force_disable_thinking)
+
     async def _generate(
         self,
         history,
@@ -1463,6 +1629,9 @@ class ConversationService:
         relationship_view=None,
         now=None,
         quick=False,
+        prompt_variant: domain_prompts.PromptVariant = "current",
+        stream_llm=False,
+        max_tokens_override: int | None = None,
         conversation_mode="normal",
         conversation_reason="",
     ):
@@ -1556,7 +1725,7 @@ class ConversationService:
                 f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
             )
         system_prompt = domain_prompts.build_system_prompt(
-            web_context, sections, compact=quick
+            web_context, sections, compact=quick, variant=prompt_variant
         )
         # Vista de inferencia: el historial canónico se envía etiquetado con la
         # identidad y la afinidad de cada interlocutor. La etiqueta se
@@ -1577,40 +1746,22 @@ class ConversationService:
                     "content": domain_prompts.PROACTIVE_TRIGGER_TEXT,
                 }
             )
-        request_tokens = LLM_SHORT_MAX_TOKENS if quick else None
-        if hasattr(self.llm, "chat_with_meta"):
-            try:
-                # Salida estricta: la gramática del servidor garantiza JSON
-                # aunque el modelo quiera responder en texto plano.
-                raw, meta = await self.llm.chat_with_meta(
-                    messages,
-                    schema=schema,
-                    strict_schema=True,
-                    max_tokens=request_tokens,
-                    disable_thinking=quick,
-                )
-            except Exception as exc:
-                if not self._can_retry_without_strict(exc):
-                    raise
-                log.warning(
-                    "La salida estricta no está soportada por el servidor; "
-                    "se reintenta en modo json_object.",
-                    exc_info=True,
-                )
-                raw, meta = await self.llm.chat_with_meta(
-                    messages,
-                    schema=schema,
-                    max_tokens=request_tokens,
-                    disable_thinking=quick,
-                )
-        else:
-            raw = await self.llm.chat(
-                messages,
-                schema=schema,
-                max_tokens=request_tokens,
-                disable_thinking=quick,
-            )
-            meta = LLMMeta()
+        request_tokens = (
+            max_tokens_override
+            if isinstance(max_tokens_override, int) and max_tokens_override > 0
+            else LLM_SHORT_MAX_TOKENS if quick else None
+        )
+        calls: list[dict] = []
+        raw, meta = await self._chat(
+            calls,
+            "primary",
+            messages,
+            schema=schema,
+            max_tokens=request_tokens,
+            disable_thinking=quick,
+            stream_llm=stream_llm,
+        )
+        first_meta = meta
         stay_active = True
         if session_mode:
             output, stay_active, _valid = parse_session_output(raw, delta_max=delta_max)
@@ -1637,6 +1788,8 @@ class ConversationService:
                 schema=schema,
                 delta_max=delta_max,
                 max_tokens=request_tokens,
+                stream_llm=stream_llm,
+                calls=calls,
             )
             if repair is not None:
                 raw, meta, output, stay_active = repair
@@ -1656,30 +1809,15 @@ class ConversationService:
                 {"role": "user", "content": QUESTION_CLOSE_REPAIR_PROMPT},
             ]
             try:
-                if hasattr(self.llm, "chat_with_meta"):
-                    try:
-                        fixed_raw, fixed_meta = await self.llm.chat_with_meta(
-                            close_repair_messages,
-                            schema=schema,
-                            strict_schema=True,
-                            max_tokens=request_tokens,
-                            disable_thinking=quick,
-                        )
-                    except Exception:
-                        fixed_raw, fixed_meta = await self.llm.chat_with_meta(
-                            close_repair_messages,
-                            schema=schema,
-                            max_tokens=request_tokens,
-                            disable_thinking=quick,
-                        )
-                else:
-                    fixed_raw = await self.llm.chat(
-                        close_repair_messages,
-                        schema=schema,
-                        max_tokens=request_tokens,
-                        disable_thinking=quick,
-                    )
-                    fixed_meta = LLMMeta()
+                fixed_raw, fixed_meta = await self._chat(
+                    calls,
+                    "question_close_repair",
+                    close_repair_messages,
+                    schema=schema,
+                    max_tokens=request_tokens,
+                    disable_thinking=quick,
+                    stream_llm=stream_llm,
+                )
                 fixed = parse_model_output(
                     fixed_raw,
                     delta_max=delta_max,
@@ -1699,6 +1837,8 @@ class ConversationService:
                         if trimmed != output.reply:
                             output = output._replace(reply=trimmed)
             except Exception:
+                if stream_llm:
+                    raise
                 log.warning("No se pudo reparar el cierre interrogatorio")
 
         # Reparaciones de calidad restantes (una regeneración cada una, si
@@ -1710,6 +1850,9 @@ class ConversationService:
                 messages, EMPTY_REPLY_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
                 disable_thinking=quick,
+                stream_llm=stream_llm,
+                calls=calls,
+                purpose="empty_reply_repair",
             )
             if repair is not None:
                 raw, meta, output = repair
@@ -1719,6 +1862,9 @@ class ConversationService:
                 messages, REPEAT_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
                 disable_thinking=quick,
+                stream_llm=stream_llm,
+                calls=calls,
+                purpose="repeat_reply_repair",
             )
             if repair is not None:
                 raw, meta, output = repair
@@ -1735,30 +1881,15 @@ class ConversationService:
                 },
             ]
             try:
-                if hasattr(self.llm, "chat_with_meta"):
-                    try:
-                        repaired_raw, repaired_meta = await self.llm.chat_with_meta(
-                            repair_messages,
-                            schema=schema,
-                            strict_schema=True,
-                            max_tokens=request_tokens,
-                            disable_thinking=quick,
-                        )
-                    except Exception:
-                        repaired_raw, repaired_meta = await self.llm.chat_with_meta(
-                            repair_messages,
-                            schema=schema,
-                            max_tokens=request_tokens,
-                            disable_thinking=quick,
-                        )
-                else:
-                    repaired_raw = await self.llm.chat(
-                        repair_messages,
-                        schema=schema,
-                        max_tokens=request_tokens,
-                        disable_thinking=quick,
-                    )
-                    repaired_meta = LLMMeta()
+                repaired_raw, repaired_meta = await self._chat(
+                    calls,
+                    "disconnect_repair",
+                    repair_messages,
+                    schema=schema,
+                    max_tokens=request_tokens,
+                    disable_thinking=quick,
+                    stream_llm=stream_llm,
+                )
                 repaired = parse_model_output(
                     repaired_raw,
                     delta_max=delta_max,
@@ -1773,8 +1904,17 @@ class ConversationService:
                     meta = repaired_meta
                     output = repaired
             except Exception:
+                if stream_llm:
+                    raise
                 log.warning("No se pudo reparar la coherencia de la marcha")
 
+        if stream_llm:
+            # TTFT describe la primera solicitud, aunque haya una regeneración.
+            meta.ttft_ms = first_meta.ttft_ms
+            meta.first_content_ms = first_meta.first_content_ms
+            meta.server_timings = first_meta.server_timings
+            meta.reasoning_present = first_meta.reasoning_present
+            meta.reasoning_tokens = first_meta.reasoning_tokens
         if (not session_mode) and not output.reply:
             return (
                 system_prompt,
@@ -1785,6 +1925,7 @@ class ConversationService:
                     "continue", "none", "none",
                 ),
                 True,
+                calls,
             )
         # stay_active solo es significativo en modo sesión; en modo normal se
         # conserva el valor por defecto.
@@ -1794,10 +1935,11 @@ class ConversationService:
             limited = limit_narrative_actions(output.reply)
             if limited != output.reply:
                 output = output._replace(reply=limited)
-        return system_prompt, raw if isinstance(raw, str) else None, meta, output, stay_active
+        return system_prompt, raw if isinstance(raw, str) else None, meta, output, stay_active, calls
 
     async def _retry_after_truncation(
-        self, messages, *, session_mode, schema, delta_max, max_tokens
+        self, messages, *, session_mode, schema, delta_max, max_tokens,
+        stream_llm=False, calls=None,
     ):
         """Una regeneración cuando la generación se cortó por longitud.
 
@@ -1817,31 +1959,18 @@ class ConversationService:
             "desactivando el razonamiento."
         )
         try:
-            if hasattr(self.llm, "chat_with_meta"):
-                try:
-                    raw, meta = await self.llm.chat_with_meta(
-                        repair_messages,
-                        schema=schema,
-                        strict_schema=True,
-                        max_tokens=max_tokens,
-                        disable_thinking=True,
-                    )
-                except Exception:
-                    raw, meta = await self.llm.chat_with_meta(
-                        repair_messages,
-                        schema=schema,
-                        max_tokens=max_tokens,
-                        disable_thinking=True,
-                    )
-            else:
-                raw = await self.llm.chat(
-                    repair_messages,
-                    schema=schema,
-                    max_tokens=max_tokens,
-                    disable_thinking=True,
-                )
-                meta = LLMMeta()
+            raw, meta = await self._chat(
+                calls,
+                "truncation_repair",
+                repair_messages,
+                schema=schema,
+                max_tokens=max_tokens,
+                disable_thinking=True,
+                stream_llm=stream_llm,
+            )
         except Exception:
+            if stream_llm:
+                raise
             log.warning("La regeneración tras un corte falló", exc_info=True)
             return None
         if session_mode:
@@ -1861,7 +1990,8 @@ class ConversationService:
         return raw, meta, output, True
 
     async def _repair_regenerate(
-        self, messages, note, *, delta_max, max_tokens, disable_thinking
+        self, messages, note, *, delta_max, max_tokens, disable_thinking,
+        stream_llm=False, calls=None, purpose="repair",
     ):
         """Una regeneración de reparación. None si no produce reply utilizable.
 
@@ -1872,36 +2002,23 @@ class ConversationService:
         """
         repair_messages = [*messages, {"role": "user", "content": note}]
         try:
-            if hasattr(self.llm, "chat_with_meta"):
-                try:
-                    raw, meta = await self.llm.chat_with_meta(
-                        repair_messages,
-                        schema=RESPONSE_SCHEMA,
-                        strict_schema=True,
-                        max_tokens=max_tokens,
-                        disable_thinking=disable_thinking,
-                    )
-                except Exception:
-                    raw, meta = await self.llm.chat_with_meta(
-                        repair_messages,
-                        schema=RESPONSE_SCHEMA,
-                        max_tokens=max_tokens,
-                        disable_thinking=disable_thinking,
-                    )
-            else:
-                raw = await self.llm.chat(
-                    repair_messages,
-                    schema=RESPONSE_SCHEMA,
-                    max_tokens=max_tokens,
-                    disable_thinking=disable_thinking,
-                )
-                meta = LLMMeta()
+            raw, meta = await self._chat(
+                calls,
+                purpose,
+                repair_messages,
+                schema=RESPONSE_SCHEMA,
+                max_tokens=max_tokens,
+                disable_thinking=disable_thinking,
+                stream_llm=stream_llm,
+            )
             fixed = parse_model_output(
                 raw,
                 delta_max=delta_max,
                 allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
             )
         except Exception:
+            if stream_llm:
+                raise
             log.warning("La regeneración de reparación falló", exc_info=True)
             return None
         if fixed.reply and fixed.reply.strip():
@@ -2033,6 +2150,3 @@ class ConversationService:
             log.info("Reflexión guardada para %s: %r", user_id, text)
             return True
         return False
-
-
-

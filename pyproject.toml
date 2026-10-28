@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 airi = "airi.__main__:main"
 airi-trace = "airi.observability.cli:main"
 airi-replay = "airi.observability.replay:main"
+airi-prompt-benchmark = "airi.observability.prompt_benchmark:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

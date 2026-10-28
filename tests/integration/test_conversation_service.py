@@ -159,6 +159,79 @@ def test_long_turn_uses_full_contract():
     assert llm.calls[-1]["disable_thinking"] is False
 
 
+def test_prompt_variant_changes_only_system_message_not_quick_contract():
+    message = "explícame con mucho detalle cómo funciona un motor de combustión interna"
+    llms = [FakeLLM(replies=[llm_json("Claro")]) for _ in range(2)]
+    contexts = [
+        TurnContext(system_prompt_variant="current"),
+        TurnContext(system_prompt_variant="compact_candidate"),
+    ]
+    for llm, context in zip(llms, contexts):
+        state, _ = make_state()
+        svc = make_service(llm, state, notifier=FakeNotifier())
+        run(svc.run_turn(DAVID, [(DAVID, message)], context))
+
+    current_call, candidate_call = (llm.calls[-1] for llm in llms)
+    assert current_call["messages"][0]["content"] != candidate_call["messages"][0]["content"]
+    assert current_call["messages"][1:] == candidate_call["messages"][1:]
+    for key in ("schema", "max_tokens", "temperature", "disable_thinking", "strict_schema"):
+        assert current_call[key] == candidate_call[key]
+    assert current_call["disable_thinking"] is False
+    assert current_call["max_tokens"] is None
+    assert all(
+        call["messages"][1:] == llms[0].calls[0]["messages"][1:]
+        for llm in llms
+        for call in llm.calls
+    )
+
+
+def test_streaming_is_opt_in_and_records_client_and_server_timings():
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=[llm_json("Respuesta")],
+        metas=[
+            LLMMeta(
+                finish_reason="stop",
+                usage={"prompt_tokens": 12, "completion_tokens": 3},
+                ttft_ms=42,
+                first_content_ms=58,
+                server_timings={"prompt_ms": 20.0, "predicted_ms": 10.0},
+                reasoning_present=True,
+                reasoning_tokens=7,
+            )
+        ],
+    )
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(
+        svc.run_turn(
+            DAVID,
+            [(DAVID, "explícame detalladamente cómo funciona un motor")],
+            TurnContext(stream_llm=True),
+        )
+    )
+
+    assert llm.calls[0]["stream"] is True
+    assert result.trace.llm_ttft_ms == 42
+    assert result.trace.llm_first_content_ms == 58
+    assert result.trace.llm_server_timings == {"prompt_ms": 20.0, "predicted_ms": 10.0}
+    assert result.trace.llm_reasoning_present is True
+    assert result.trace.llm_reasoning_tokens == 7
+
+
+def test_normal_turn_does_not_enable_streaming_or_add_ttft():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Respuesta")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(
+        svc.run_turn(DAVID, [(DAVID, "explícame detalladamente un motor")], TurnContext())
+    )
+
+    assert "stream" not in llm.calls[0]
+    assert result.trace.llm_ttft_ms is None
+
+
 def test_short_memory_question_uses_full_contract():
     """Un mensaje corto que pide memoria no puede perder ese contexto."""
     state, _ = make_state()

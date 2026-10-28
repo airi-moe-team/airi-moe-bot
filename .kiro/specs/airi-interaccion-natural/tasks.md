@@ -280,3 +280,49 @@
     - Actualizar el estado de la spec sin marcar aprobaciones humanas como automáticas
     - Resultado: `946 passed`, Ruff limpio; `eval/README.md` documenta la limitación
     - _Requirements: 12.9, 12.10, 12.12_
+
+## Fase 3 — Identidad narrativa y eficiencia de generación (pendiente de aprobación)
+
+> Ejecutar estas tareas solo después de revisar y aprobar los requisitos, el diseño y
+> este plan actualizado. Evaluar identidad y rendimiento por separado.
+
+- [x] 17. Incorporar identidad narrativa compacta de Airi (`R13`)
+  - [x] 17.1 Diseñar una candidata de identidad sin alterar aún el prompt predeterminado
+    - Definir premisa ficticia breve, perspectiva/opiniones, preferencias con motivos y
+      contradicciones moderadas.
+    - Distinguir identidad estable, experiencias confirmadas y roleplay.
+    - Preservar honestidad, límites afectivos y la decisión previa contra tsundere.
+    - _Requirements: 13.1-13.6_
+  - [x] 17.2 Corregir la concatenación del prompt y cubrir composición
+    - Separar correctamente la instrucción de “contar algo tuyo” de la siguiente regla.
+    - Añadir tests para separación, contenido, orden y ausencia de contradicciones con
+      memoria/romance.
+    - _Requirements: 13.1-13.4_
+  - [x] 17.3 Evaluar identidad con seis escenarios controlados
+    - Incluir pregunta personal, aclaración, identidad, desacuerdo, charla casual y
+      corrección explícita.
+    - Mantener iguales modelo, parámetros, historial, thinking y contrato entre baseline
+      y candidata.
+    - Puntuar repetición, perspectiva, naturalidad, respuesta directa y schema; no
+      adoptar automáticamente la candidata.
+    - _Requirements: 12.3-12.8, 13.1-13.6_
+
+- [x] 18. Diagnosticar latencia, thinking y recuperación JSON (`R14`)
+  - [x] 18.1 Confirmar el modo y el schema de la traza investigada
+    - Identificar si el turno era normal o de sesión antes de evaluar `stay_active`.
+    - Añadir/regenerar cobertura del contrato JSON aplicable; no tratar la clave de sesión
+      como extra inválida en `SESSION_RESPONSE_SCHEMA`.
+    - _Requirements: 11.3, 11.8, 14.4_
+  - [x] 18.2 Registrar y reportar coste y truncamiento
+    - Capturar tiempos, tokens disponibles, `finish_reason`, truncamiento y reparación.
+    - Conservar valores ausentes como no disponibles y separar métricas técnicas de la
+      evaluación narrativa.
+    - _Requirements: 12.5, 12.6, 14.1, 14.2_
+  - [x] 18.3 Comparar perfiles técnicos sin tocar producción
+    - Probar perfiles con y sin thinking y límites de salida calibrados al schema activo.
+    - Verificar JSON válido en modo normal y sesión; medir latencia y tasa de reparación.
+    - Recomendar cambios solo con resultados repetidos y sin regresiones esenciales.
+    - _Requirements: 14.2-14.5_
+
+> Resultados live y limitaciones: `eval/airi-pendientes-20261027.md`. La candidata
+> permanece opt-in; no se modificó el perfil de producción.

@@ -1,0 +1,72 @@
+{
+  "baseline": {
+    "turns": 7,
+    "scenarios": [
+      "pregunta_personal",
+      "aclaracion_virtual",
+      "identidad_airi",
+      "desacuerdo_personajes",
+      "charla_casual_identidad",
+      "correccion_identidad"
+    ],
+    "question_only_replies": 0,
+    "repeated_closings": 0,
+    "gesture_density": 0.571,
+    "stacked_gestures": 0,
+    "prefab_farewells": 0,
+    "schema_failures": 0,
+    "truncated_replies": 1,
+    "state_contradictions": 0,
+    "disproportionate_replies": 2,
+    "rubric_total": 0,
+    "rubric_scenarios_scored": 0,
+    "critical_violations": 1,
+    "quality_violations": 2,
+    "rubric_max": 60,
+    "passed": false
+  },
+  "candidate": {
+    "turns": 7,
+    "scenarios": [
+      "pregunta_personal",
+      "aclaracion_virtual",
+      "identidad_airi",
+      "desacuerdo_personajes",
+      "charla_casual_identidad",
+      "correccion_identidad"
+    ],
+    "question_only_replies": 0,
+    "repeated_closings": 0,
+    "gesture_density": 0.429,
+    "stacked_gestures": 0,
+    "prefab_farewells": 0,
+    "schema_failures": 0,
+    "truncated_replies": 1,
+    "state_contradictions": 0,
+    "disproportionate_replies": 3,
+    "rubric_total": 0,
+    "rubric_scenarios_scored": 0,
+    "critical_violations": 1,
+    "quality_violations": 3,
+    "rubric_max": 60,
+    "passed": false
+  },
+  "delta": {
+    "turns": 0,
+    "question_only_replies": 0,
+    "repeated_closings": 0,
+    "gesture_density": -0.14199999999999996,
+    "stacked_gestures": 0,
+    "prefab_farewells": 0,
+    "schema_failures": 0,
+    "truncated_replies": 0,
+    "state_contradictions": 0,
+    "disproportionate_replies": 1,
+    "rubric_total": 0,
+    "rubric_scenarios_scored": 0
+  },
+  "rubric_delta": 0,
+  "critical_regression": false,
+  "quality_regression": true,
+  "regression": false
+}

@@ -1,0 +1,51 @@
+# Requirements Document
+
+## Introducción
+
+Este experimento determina si una versión más compacta, organizada y coherente del system prompt de Airi mejora la latencia cuando el modelo opera con thinking activado, y distingue el coste de procesar el prompt del coste de generar la respuesta. La traza `traces/2026-10-26/722f84144006.json` proporciona el primer caso reproducible. La evaluación debe mantener la calidad conversacional y no atribuir causalidad a una única inferencia.
+
+## Requisitos
+
+### Requisito 1: Comparación controlada de prompts
+**Objective:** Como responsable del experimento, quiero comparar el prompt actual con uno compacto y reorganizado, para aislar el efecto del system prompt bajo thinking activado.
+
+#### Acceptance Criteria
+1. WHEN se ejecuta una muestra de cualquiera de las variantes THEN el experimento SHALL usar el mismo modelo, configuración de generación, estado/contexto reconstruido y entrada de usuario para ambas variantes.
+2. WHILE se ejecutan las muestras, EL experimento SHALL mantener thinking activado en todas las inferencias.
+3. WHEN se cambia de variante THEN el experimento SHALL cambiar únicamente el contenido/organización del system prompt y no el historial, el contrato de salida, los límites de tokens ni otros parámetros.
+4. WHERE se usa la traza de referencia, EL experimento SHALL cargar `traces/2026-10-26/722f84144006.json` sin publicar la respuesta ni persistir mutaciones del turno en Discord o en el estado de producción.
+
+### Requisito 2: Compactación y coherencia del system prompt
+**Objective:** Como responsable de Airi, quiero que la variante compacta elimine redundancias y aclare instrucciones que compiten entre sí, para reducir carga innecesaria sin degradar su comportamiento esencial.
+
+#### Acceptance Criteria
+1. WHEN se construye la variante compacta THEN el experimento SHALL conservar las reglas esenciales de identidad, prioridad de intención, honestidad, continuidad/memoria, límites relacionales y formato de salida.
+2. WHEN dos o más reglas expresan la misma obligación THEN la variante compacta SHALL consolidarlas sin cambiar su alcance funcional.
+3. IF dos reglas pueden interpretarse como incongruentes THEN la variante compacta SHALL expresar una prioridad o formulación inequívoca, en vez de eliminar silenciosamente una obligación esencial.
+4. WHEN se preparan las variantes THEN el experimento SHALL conservar artefactos identificables del prompt actual y del candidato para que los resultados puedan asociarse a la variante correcta.
+
+### Requisito 3: Medición y análisis de latencia
+**Objective:** Como responsable del experimento, quiero registrar métricas por inferencia y agregarlas de manera robusta, para saber si la mejora proviene del prefill o de la generación.
+
+#### Acceptance Criteria
+1. WHEN termina una inferencia THEN el experimento SHALL registrar variante, duración LLM, duración total, `prompt_tokens`, `completion_tokens`, `total_tokens` y `finish_reason`, cuando el backend los proporcione.
+2. IF el backend expone TTFT THEN el experimento SHALL registrar también TTFT y tokens por segundo; IF no lo expone THEN el informe SHALL marcar esas métricas como no disponibles.
+3. WHEN se comparan variantes THEN el experimento SHALL ejecutar al menos cinco pares de muestras alternando el orden de las variantes y SHALL reportar mediana y rango por métrica.
+4. WHEN el informe interpreta el resultado THEN el informe SHALL separar cambios en tokens/latencia de entrada (prefill) de cambios en tokens/latencia de salida (generación) y SHALL indicar las limitaciones de variabilidad del modelo.
+5. IF solo existe una muestra por variante THEN el informe SHALL identificarla como exploratoria y SHALL abstenerse de concluir que el cambio causó una mejora.
+
+### Requisito 4: Calidad y no regresión
+**Objective:** Como responsable de Airi, quiero comprobar que la optimización no empeore las respuestas, para no intercambiar calidad por velocidad sin evidencia.
+
+#### Acceptance Criteria
+1. WHEN se evalúa cada respuesta THEN el experimento SHALL verificar parseo y conformidad con el esquema de salida, relevancia respecto al mensaje, cumplimiento de reglas esenciales y proporcionalidad de la respuesta.
+2. WHEN se comparan resultados THEN el informe SHALL presentar las evaluaciones de calidad junto a las métricas de rendimiento, sin tratar menor latencia como éxito si falla una regla esencial o el esquema.
+3. IF la variante compacta produce una regresión de calidad THEN el informe SHALL identificar el criterio afectado y SHALL considerar el candidato no aceptable aunque mejore la latencia.
+
+### Requisito 5: Privacidad y reproducibilidad
+**Objective:** Como responsable del proyecto, quiero preservar la privacidad del contexto de la traza y poder repetir el análisis, para que el experimento sea seguro y verificable.
+
+#### Acceptance Criteria
+1. WHEN se guardan o muestran resultados THEN el experimento SHALL guardar métricas agregables y metadatos de variante sin exponer el texto privado de entrada, historial o respuesta.
+2. WHEN se repite una ejecución THEN el experimento SHALL identificar la traza de origen, variante, configuración relevante, orden y número de muestra.
+3. IF faltan métricas de uso o de tiempo del backend THEN el informe SHALL señalar explícitamente los campos ausentes y SHALL evitar sustituirlos por valores inferidos.

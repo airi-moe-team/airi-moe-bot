@@ -10,6 +10,7 @@ from airi.domain.dates import new_date_session
 from airi.domain.prompts import (
     GIF_DECISION_PROMPT,
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_COMPACT_CANDIDATE,
     date_context_section,
     identity_tags_prompt_section,
     memories_prompt_section,
@@ -100,3 +101,21 @@ def test_identity_tags_section_is_present():
     section = identity_tags_prompt_section()
     assert "=== ETIQUETAS DE IDENTIDAD Y CONTEXTO ===" in section
     assert "REGLA DE AISLAMIENTO DE PERSONA" in section
+
+
+def test_prompt_sentences_are_separated_after_sharing_personal_opinions():
+    assert "Puedes bromear, discrepar, contar algo tuyo. Sé selectiva" in SYSTEM_PROMPT
+
+
+def test_compact_candidate_defines_identity_without_turning_fiction_into_memory():
+    candidate = SYSTEM_PROMPT_COMPACT_CANDIDATE
+    assert "=== IDENTIDAD NARRATIVA ===" in candidate
+    assert "chica virtual" in candidate
+    assert "personajes imperfectos" in candidate
+    assert "identidad estable" in candidate
+    assert "experiencias confirmadas" in candidate
+    assert "roleplay" in candidate
+    assert "no conviertas una escena ficticia en un recuerdo real" in candidate.lower()
+    assert "no la recites" in candidate
+    assert "tsundere" not in candidate.lower()
+    assert "=== IDENTIDAD NARRATIVA ===" not in SYSTEM_PROMPT

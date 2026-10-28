@@ -12,6 +12,34 @@ import copy
 from airi.domain.relationship_claims import looks_like_romantic_question
 from airi.services.conversation import ConversationService, TurnContext
 
+_SAFE_LLM_CALL_FIELDS = (
+    "purpose",
+    "status",
+    "duration_ms",
+    "finish_reason",
+    "usage",
+    "ttft_ms",
+    "first_content_ms",
+    "server_timings",
+    "reasoning_present",
+    "reasoning_tokens",
+    "reasoning_deltas",
+    "content_deltas",
+    "max_tokens",
+    "thinking_requested_off",
+    "thinking_effective",
+    "error_type",
+)
+
+
+def _safe_llm_calls(trace) -> list[dict]:
+    calls = getattr(trace, "llm_calls", None) or []
+    return [
+        {key: call[key] for key in _SAFE_LLM_CALL_FIELDS if key in call}
+        for call in calls
+        if isinstance(call, dict)
+    ]
+
 
 async def run_scenario(
     scenario,
@@ -21,6 +49,7 @@ async def run_scenario(
     now: float,
     channel_id: int = 0,
     turn_prefix: str = "eval",
+    prompt_variant: str = "current",
 ) -> list[dict]:
     """Ejecuta los turnos de un escenario y devuelve registros evaluables."""
     records: list[dict] = []
@@ -29,6 +58,7 @@ async def run_scenario(
             channel_id=channel_id,
             turn_key=f"{turn_prefix}:{scenario.id}:{index}",
             now=now + index,
+            system_prompt_variant=prompt_variant,
         )
         draft = await service.generate_turn(user, [(user, text)], ctx)
         result = service.apply_turn(draft)
@@ -71,6 +101,7 @@ async def run_scenario(
                 "raw_llm": getattr(trace, "raw_llm", None),
                 "prompt_system": getattr(trace, "prompt_system", ""),
                 "llm_usage": getattr(trace, "llm_usage", None),
+                "llm_calls": _safe_llm_calls(trace),
                 "llm_latency_ms": int(getattr(trace, "llm_latency_ms", 0) or 0),
                 "total_latency_ms": int(getattr(trace, "total_latency_ms", 0) or 0),
                 "memories_after": memories_after,

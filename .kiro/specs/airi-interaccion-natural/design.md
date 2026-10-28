@@ -468,3 +468,43 @@ El diseño estará listo para aprobación cuando:
 5. La comparación candidata no presente regresiones graves.
 6. `spec.json` refleje el estado real de aprobación, sin declarar
    `ready_for_implementation` antes de tiempo.
+
+## Extensión de diseño — identidad narrativa y eficiencia
+
+### Decisión 10 — Identidad narrativa compacta y no recitable (`R13`)
+
+La identidad estable se añadirá como un bloque compacto y versionable en
+`src/airi/domain/prompts.py`, sin reemplazar las reglas existentes de personalidad,
+afinidad, honestidad o memoria. Definirá una premisa virtual ficticia, preferencias con
+motivos y contradicciones moderadas, y separará explícitamente:
+
+1. identidad estable del personaje;
+2. acontecimientos confirmados en conversaciones;
+3. escenas de ficción improvisadas en roleplay.
+
+La identidad es contexto para decidir qué opina Airi, no texto que deba recitar. No se
+guardará la biografía en la memoria del usuario ni se atribuirán acciones ocurridas entre
+turnos si el sistema no las realizó. Se mantiene la decisión de no usar una personalidad
+tsundere. La candidata se evaluará frente al prompt actual antes de considerar cambiar
+el prompt predeterminado.
+
+### Decisión 11 — Rendimiento como experimento independiente (`R14`)
+
+La evaluación narrativa mantendrá constantes modelo, thinking, muestreo, historial,
+contrato de salida y límites. La latencia, tokens, `finish_reason`, truncamiento y
+reparaciones se informarán aparte de la rúbrica narrativa.
+
+Un experimento posterior podrá comparar thinking desactivado y límites de salida
+alternativos, siempre comprobando el contrato activo: `RESPONSE_SCHEMA` en modo normal y
+`SESSION_RESPONSE_SCHEMA` en modo sesión. `stay_active` es obligatorio solo en este
+último modo. No se cambiará configuración de producción por el resultado de una sola
+traza; cualquier perfil deberá mantener JSON válido y no empeorar la calidad esencial.
+
+### Pruebas y trazabilidad añadidas
+
+- Identidad: verificar separación entre premisa, recuerdos confirmados y roleplay; la
+  candidata no recita su historia ni presenta ficción como experiencia real.
+- Rendimiento: informar por separado métricas narrativas y técnicas; verificar el schema
+  según el modo y registrar truncamiento/reparación sin inferir datos ausentes.
+- `R13`: `domain/prompts.py`, evaluación de interacción y pruebas de honestidad/continuidad.
+- `R14`: `services/conversation.py`, observabilidad y runner de evaluación.

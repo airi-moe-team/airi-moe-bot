@@ -1,0 +1,46 @@
+{
+  "feature": "observabilidad-ttft-llama-server",
+  "generated_at": "2026-10-27T01:27:18Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Permitir que las reparaciones desactiven thinking realmente",
+      "severity": "major",
+      "impact": "La instrumentación de E3 confirmó que las reparaciones solicitan thinking desactivado, pero LLM_THINKING_MODE=on fuerza thinking efectivo. Varias reparaciones tardaron entre 81 y 149 segundos y algunas agotaron su límite de salida; el mecanismo de recuperación repite así el mismo coste que intenta evitar.",
+      "recommendation": "Añadir un override explícito y limitado a llamadas de reparación que permita desactivar thinking aunque el modo global sea on. Las llamadas primarias deben seguir obedeciendo la política global. No cambiar prompts, límites globales ni parámetros de llama-server. Mantener metadata solicitada/efectiva y probar modo on, auto y off, streaming y no-streaming, y fallback json_schema a json_object.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "WHEN una reparación de truncamiento, salida vacía, repetición, cierre interrogativo o coherencia solicita desactivar thinking THEN el adaptador SHALL permitir ese override por llamada incluso con LLM_THINKING_MODE=on, sin modificar la política de thinking de la llamada primaria.",
+          "WHEN se aplica el override THEN los metadatos por llamada SHALL registrar el valor solicitado y el efectivo, y las pruebas SHALL verificar que la llamada primaria conserva la política global."
+        ],
+        "design": [
+          "Separar el override per-call de la política global: las llamadas primarias siguen gobernadas por LLM_THINKING_MODE; las llamadas de reparación etiquetadas pueden forzar enable_thinking=false cuando corresponda. LLM_THINKING_MODE=off mantiene thinking apagado.",
+          "Conservar thinking_requested_off y thinking_effective en los metadatos de cada invocación y cubrir la selección de schema estricto y su fallback."
+        ],
+        "tasks": [
+          "Añadir una opción explícita de override per-call al puerto/adaptador LLM y propagarla solo a las llamadas de reparación; no cambiar la llamada primaria.",
+          "Cubrir modos globales on, auto y off para llamada primaria y reparaciones, tanto streaming como no-streaming.",
+          "Cubrir reparaciones de truncamiento y regenerativas, incluyendo el fallback json_schema a json_object y el registro de thinking solicitado/efectivo.",
+          "Ejecutar pruebas unitarias e integración y verificar que no se serializan prompts, mensajes, content ni reasoning. No cambiar el prompt ni administrar llama-server."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ],
+  "owners": {
+    "FB-001": "Implementador y mantenedor de Airi; aprobación de requisitos/diseño/tareas por el usuario"
+  },
+  "open_questions": [
+    "¿Debe el override de thinking aplicarse a todas las reparaciones o solo a las reparaciones tras truncamiento? La recomendación inicial lo aplica a todas las llamadas clasificadas como reparación."
+  ],
+  "next_review": "Revisión humana del requisito, diseño y tareas antes de aplicar la actualización de spec e iniciar implementación TDD."
+}

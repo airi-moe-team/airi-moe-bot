@@ -1,0 +1,53 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-27T05:53:47Z",
+  "items": [
+    {
+      "id": "FB-018",
+      "title": "Añadir identidad narrativa breve de Airi",
+      "severity": "major",
+      "impact": "El prompt contiene reglas de actuación pero no una premisa narrativa y preferencias suficientemente concretas para sostener opiniones y reacciones individuales.",
+      "recommendation": "Añadir una identidad narrativa compacta que distinga premisa ficticia, identidad estable, experiencias confirmadas y roleplay; evitar biografía recitable o recuerdos humanos inventados.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": ["Airi debe expresar una perspectiva estable mediante preferencias y valores concretos, sin recitar su historia de fondo en turnos no relacionados.", "El sistema debe distinguir identidad ficticia estable, experiencias compartidas confirmadas y ficción improvisada, sin convertir la ficción en memoria real."],
+        "design": ["Integrar un bloque compacto de identidad en el prompt, compatible con las reglas vigentes de honestidad, memoria y vínculos.", "No reintroducir la personalidad tsundere descartada previamente."],
+        "tasks": ["Añadir bloque de identidad narrativa y pruebas de presencia, brevedad, separación entre ficción/memoria y ausencia de recitación automática.", "Evaluar los seis escenarios propuestos con la misma configuración en baseline y candidato."]
+      }
+    },
+    {
+      "id": "FB-019",
+      "title": "Corregir concatenación y auditar contrato de salida",
+      "severity": "major",
+      "impact": "En SYSTEM_PROMPT hay instrucciones concatenadas sin separador. La observación sobre stay_active puede ser una diferencia entre esquema normal y esquema de sesión, no necesariamente un error del modelo.",
+      "recommendation": "Corregir la separación textual y cubrirla con tests. Verificar traza, modo y schema efectivo antes de modificar el contrato JSON.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": ["Las instrucciones del system prompt deben conservar una separación legible entre frases y bloques.", "El contrato de salida debe coincidir con el esquema activo para el modo normal o de sesión."],
+        "design": ["Reutilizar la distinción existente entre RESPONSE_SCHEMA y SESSION_RESPONSE_SCHEMA; no eliminar stay_active del modo de sesión."],
+        "tasks": ["Añadir test que detecte la concatenación en el prompt.", "Añadir/ajustar prueba de contrato JSON para el modo identificado en la traza de referencia."]
+      }
+    },
+    {
+      "id": "FB-020",
+      "title": "Separar evaluación de personalidad y latencia",
+      "severity": "major",
+      "impact": "La identidad narrativa no resolverá por sí misma una generación de 4096 tokens truncada ni una latencia elevada; mezclar cambios impediría atribuir resultados.",
+      "recommendation": "Evaluar primero el cambio de prompt con modelo, thinking y límites constantes; en un experimento separado medir thinking desactivado y límites de salida apropiados para el schema, conservando la reparación como fallback.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": ["La evaluación de personalidad y la evaluación de rendimiento deben informar resultados separados y no atribuir al prompt cambios de configuración del modelo."],
+        "design": ["Mantener la comparación de prompt controlada y documentar un segundo experimento para thinking/presupuesto de salida; no cambiar parámetros de producción sin evidencia."],
+        "tasks": ["Registrar finish_reason, tokens, latencia y uso de reparación en ambas evaluaciones.", "Probar perfiles sin thinking y límites de salida alternativos en ejecuciones controladas, sin activar cambios de producción automáticamente."]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"],
+  "owners": {
+    "FB-018": "Implementador; aprobación de requisitos/diseño por el usuario",
+    "FB-019": "Implementador; aprobación de requisitos/diseño por el usuario",
+    "FB-020": "Implementador; aprobación de requisitos/diseño por el usuario"
+  },
+  "follow_up_questions": ["¿Se desea incluir el bloque de identidad narrativa en el prompt de producción tras evaluar el candidato?", "¿Qué traza exacta produjo stay_active y con qué modo/schema?"],
+  "next_review": "Revisar y aprobar requirements.md, design.md y tasks.md actualizados antes de ejecutar tareas de implementación."
+}

@@ -31,6 +31,8 @@ from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
 from airi.services.state import AppState
 
+SESSION_KINDS = {"spectator", "active", "proactive"}
+
 
 class ReplayLLM:
     """LLM que devuelve la respuesta cruda guardada en el evento."""
@@ -71,6 +73,8 @@ class ReplayResult:
     gif_sent: bool | None = None
     memory_saved: str | None = None
     diary_saved: str | None = None
+    conversation_mode: str | None = None
+    stay_active: bool | None = None
     matches_original: bool = False
     reproducible: bool = True
     checks: dict | None = None
@@ -153,7 +157,13 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
     )
     result = await svc.run_turn(
         user, messages,
-        TurnContext(channel_id=0, allow_web=False, correlation_id=ev.correlation_id),
+        TurnContext(
+            channel_id=0,
+            allow_web=False,
+            correlation_id=ev.correlation_id,
+            conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
+            conversation_reason=ev.spectator_reason or "",
+        ),
     )
     # La cita avanza fuera de `run_turn`; reproducimos ese paso con la sesión
     # reconstruida desde el snapshot para comparar `date_event`.
@@ -182,7 +192,13 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
         "grounded": result.grounded == ev.grounded,
         "memory_saved": (result.memory_action if result.memory_saved else None)
         == ev.memory_saved,
+        "session_schema": (
+            ("stay_active" in (llm.calls[0]["kwargs"].get("schema") or {}).get("properties", {}))
+            == (ev.kind in SESSION_KINDS)
+        ) if llm.calls else False,
     }
+    if ev.stay_active is not None:
+        checks["stay_active"] = result.stay_active == ev.stay_active
     # Solo se compara si la traza capturó `date_event` (trazas antiguas no lo
     # tienen; entonces el paso de cita no es verificable).
     if ev.date_event is not None:
@@ -194,6 +210,8 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
         gif_sent=ev.gif_sent,
         memory_saved=ev.memory_saved,
         diary_saved=ev.diary_saved,
+        conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
+        stay_active=result.stay_active,
         matches_original=all(checks.values()),
         reproducible=True,
         checks=checks,
@@ -229,6 +247,8 @@ async def run_live_trace(trace_path, *, repeat=1):
                 TurnContext(
                     channel_id=0, allow_web=False,
                     correlation_id=f"{ev.correlation_id}-live{i + 1}",
+                    conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
+                    conversation_reason=ev.spectator_reason or "",
                 ),
             )
             results.append(result)

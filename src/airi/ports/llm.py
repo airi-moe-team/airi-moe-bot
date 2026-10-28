@@ -12,6 +12,15 @@ class LLMMeta:
 
     finish_reason: str | None = None
     usage: dict | None = field(default_factory=dict)
+    ttft_ms: int | None = None
+    first_content_ms: int | None = None
+    server_timings: dict[str, int | float] | None = None
+    reasoning_present: bool | None = None
+    reasoning_tokens: int | None = None
+    #: Deltas SSE recibidos por canal. Son un proxy del reparto de tokens, no
+    #: un conteo exacto: solo `usage` (si el servidor lo entrega) lo es.
+    reasoning_deltas: int | None = None
+    content_deltas: int | None = None
 
 
 class LLMClient(Protocol):
@@ -25,6 +34,7 @@ class LLMClient(Protocol):
         max_tokens: int | None = None,
         temperature: float | None = None,
         disable_thinking: bool = False,
+        force_disable_thinking: bool = False,
         strict_schema: bool = False,
     ) -> str:
         """Devuelve el texto de la respuesta del modelo.
@@ -41,7 +51,9 @@ class LLMClient(Protocol):
         max_tokens: int | None = None,
         temperature: float | None = None,
         disable_thinking: bool = False,
+        force_disable_thinking: bool = False,
         strict_schema: bool = False,
+        stream: bool = False,
     ) -> tuple[str, LLMMeta]:
         """Igual que `chat` pero además devuelve los metadatos del turno."""
         ...

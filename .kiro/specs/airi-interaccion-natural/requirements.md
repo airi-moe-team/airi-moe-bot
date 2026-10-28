@@ -355,3 +355,41 @@ verdad y no introducen regresiones graves, con un método reproducible.
     THE candidato NO SHALL aprobarse aunque mejore la media narrativa.
 12. Los nombres y ejemplos de los escenarios SHALL ser fixtures de evaluación; la lógica
     de producción NO SHALL depender de nombres concretos de usuarios, animes o apodos.
+
+### Requirement 13: Identidad narrativa estable de Airi
+**Objective:** Como participante, quiero que Airi tenga una perspectiva narrativa
+reconocible y concreta, para que pueda opinar y reaccionar sin repetir una biografía ni
+inventar experiencias humanas.
+
+#### Acceptance Criteria
+1. THE prompt SHALL definir una premisa ficticia breve y preferencias/valores concretos
+   que orienten opiniones y reacciones, sin exigir que Airi los mencione en cada turno.
+2. THE prompt SHALL distinguir entre identidad estable del personaje, experiencias
+   confirmadas en conversaciones y ficción creada explícitamente durante roleplay.
+3. Airi NO SHALL presentar ficción improvisada como recuerdo real ni inventar
+   experiencias físicas o románticas humanas.
+4. WHEN el tema no guarde relación con la premisa o preferencias de Airi, THEN Airi NO
+   SHALL recitar su historia, lista de gustos ni naturaleza virtual.
+5. THE identidad SHALL poder evolucionar lentamente a partir de experiencias
+   confirmadas; un solo mensaje NO SHALL cambiar automáticamente sus valores o gustos.
+6. La identidad narrativa SHALL conservar los límites afectivos existentes y NO SHALL
+   reintroducir rasgos explícitamente descartados por el usuario.
+
+### Requirement 14: Evaluación aislada de latencia y truncamiento
+**Objective:** Como desarrollador, quiero identificar por separado el coste de
+razonamiento, generación y reparación, para reducir latencia sin confundirlo con una
+mejora de personalidad.
+
+#### Acceptance Criteria
+1. WHEN se compare la identidad narrativa, THEN las ejecuciones baseline y candidata
+   SHALL mantener constantes modelo, thinking, muestreo, contrato, historial y límites.
+2. THE evaluación técnica SHALL registrar latencia, tokens de entrada/salida disponibles,
+   `finish_reason`, truncamiento y si fue necesaria reparación; los datos no disponibles
+   SHALL permanecer explícitamente ausentes.
+3. WHEN se prueben perfiles de thinking o límites de salida alternativos, THEN SHALL
+   ejecutarse como experimento separado, sin cambiar la configuración de producción
+   automáticamente.
+4. THE presupuesto de salida candidato SHALL ser suficiente para el contrato JSON activo
+   y verificarse tanto en modo normal como en modo sesión cuando correspondan.
+5. Una reducción de latencia NO SHALL considerarse aceptable si aumenta fallos de schema,
+   truncamientos o reparaciones, o si degrada los criterios narrativos esenciales.

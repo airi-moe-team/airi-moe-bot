@@ -94,6 +94,15 @@ class TurnEvent:
     llm_usage: dict | None = None
     llm_latency_ms: int = 0
     llm_ms: int = 0  # alias legacy de llm_latency_ms
+    # Timings opt-in del transporte streaming/telemetría del servidor.
+    llm_ttft_ms: int | None = None
+    llm_first_content_ms: int | None = None
+    llm_server_timings: dict | None = None
+    llm_reasoning_present: bool | None = None
+    llm_reasoning_tokens: int | None = None
+    #: Una entrada por invocación al modelo (propósito, duración, finish_reason,
+    #: timings). Sin texto de prompt, historial, content ni reasoning.
+    llm_calls: list = field(default_factory=list)
 
     # Parseo
     parsed: dict = field(default_factory=dict)
