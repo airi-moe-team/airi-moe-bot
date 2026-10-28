@@ -195,6 +195,52 @@ IDENTITY_SCENARIOS: tuple[InteractionScenario, ...] = (
     ),
 )
 
+# Escenarios focales para validar la biografía canónica sin mezclar sus
+# resultados con las evaluaciones históricas de identidad o interacción.
+BIOGRAPHY_SCENARIOS: tuple[InteractionScenario, ...] = (
+    InteractionScenario(
+        "pregunta_infancia",
+        "biography_childhood",
+        "Pregunta directa por la infancia; responder con el fragmento pertinente.",
+        ("¿Cómo eras de pequeña?",),
+    ),
+    InteractionScenario(
+        "rechazo_respetuoso",
+        "biography_rejection",
+        "La persona cuenta un rechazo respetuoso; validar sin demonizar ni proyectar.",
+        ("Me gustaba alguien, se lo dije y me respondió con sinceridad que no sentía lo mismo.",),
+    ),
+    InteractionScenario(
+        "apoyo_sin_proyeccion",
+        "biography_support",
+        "La persona se siente poco escuchada; atender su experiencia sin desplazar el foco.",
+        ("En casa siento que no me escuchan cuando intento contar que algo me duele.",),
+    ),
+    InteractionScenario(
+        "charla_videojuegos",
+        "biography_casual",
+        "Charla casual de videojuegos sin introducir la biografía sin motivo.",
+        ("Por fin derroté al jefe que llevaba días atascándome.",),
+    ),
+    InteractionScenario(
+        "cambio_de_tema",
+        "biography_topic_switch",
+        "Cambiar de tema tras compartir una dificultad emocional.",
+        (
+            "Últimamente me cuesta sentir que mis amigos me escuchan.",
+            "Bueno, cambiando de tema: ¿qué personaje de videojuegos te gusta más?",
+        ),
+    ),
+    InteractionScenario(
+        "roleplay_no_canonico",
+        "biography_roleplay_boundary",
+        "Mantener como roleplay un detalle inventado sobre su infancia.",
+        (
+            "En nuestro roleplay, fuimos juntos a tu primera clase de dibujo cuando tenías ocho años. ¿Te acuerdas?",
+        ),
+    ),
+)
+
 
 def _utc_epoch(year: int, month: int, day: int, hour: int, minute: int = 0) -> float:
     return datetime(year, month, day, hour, minute, tzinfo=timezone.utc).timestamp()

@@ -8,6 +8,8 @@
   - Spec: `.kiro/specs/airi-persistencia-fiabilidad-develop/`
 - `airi-relacion-natural-basada-en-evidencia` — Evolución romántica gradual de Airi, motivada por interacciones concretas y sin presión romántica por defecto.
   - Spec: `.kiro/specs/airi-relacion-natural-basada-en-evidencia/`
+- `airi-biografia-canonica` — Integrar el pasado ficticio canónico de Airi en el prompt base, separado de la memoria dinámica por usuario y de su identidad mutable.
+  - Spec: `.kiro/specs/airi-biografia-canonica/`
 
 - `business-config-env` — Hacer configurables mediante variables de entorno, documentadas en `.env` y `.env.example`, los valores editables de configuración de negocio de Airi; mantener en código los defaults de compatibilidad y las constantes estructurales.
   - Spec: `.kiro/specs/business-config-env/`

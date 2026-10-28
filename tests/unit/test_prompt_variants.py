@@ -70,3 +70,13 @@ def test_both_variants_use_current_dynamic_traits_without_static_overrides():
         assert "Mis rasgos (1-5): expresiva 1, timida 5" in prompt
         assert "Eres dulce, expresiva, cariñosa" not in prompt
         assert "Sé dulce, expresiva, cariñosa" not in prompt
+
+
+def test_biography_is_injected_once_and_not_repeated_in_dynamic_state():
+    dynamic_section = self_model_prompt_section({"self": default_self()})
+    for variant in ("current", "compact_candidate"):
+        prompt = build_system_prompt(None, [dynamic_section], variant=variant)
+        assert prompt.count("=== BIOGRAFÍA CANÓNICA FICTICIA ===") == 1
+        assert "Clara" not in dynamic_section
+        assert "Nerea" not in dynamic_section
+        assert "Gael" not in dynamic_section

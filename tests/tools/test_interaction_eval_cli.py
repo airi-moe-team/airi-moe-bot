@@ -124,6 +124,23 @@ def test_live_can_select_identity_scenarios_and_candidate_prompt(
     assert calls["prompt_variant"] == "compact_candidate"
 
 
+def test_live_can_select_biography_scenarios(tmp_path, monkeypatch):
+    from airi.evaluation.interaction import BIOGRAPHY_SCENARIOS
+
+    out = tmp_path / "biography.jsonl"
+    calls = {}
+
+    async def fake_live(**kwargs):
+        calls.update(kwargs)
+        return [_record()]
+
+    monkeypatch.setattr(cli, "generate_live_records", fake_live)
+    assert cli.main([
+        "--live", "--out", str(out), "--scenario-set", "biography",
+    ]) == 0
+    assert calls["scenarios"] == BIOGRAPHY_SCENARIOS
+
+
 def test_live_can_run_temporal_scenarios_with_explicit_ab_toggle(tmp_path, monkeypatch):
     from airi.evaluation.interaction import TEMPORAL_SCENARIOS
 

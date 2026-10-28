@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from airi.evaluation.interaction import (
+    BIOGRAPHY_SCENARIOS,
     IDENTITY_SCENARIOS,
     INTERACTION_SCENARIOS,
     RUBRIC_CRITERIA,
@@ -61,6 +62,21 @@ def test_identity_scenarios_cover_the_six_personality_checks():
         "correccion_identidad",
     ]
     assert all(scenario.turns for scenario in IDENTITY_SCENARIOS)
+
+
+def test_biography_scenarios_cover_canon_use_and_topic_switching():
+    ids = [scenario.id for scenario in BIOGRAPHY_SCENARIOS]
+    assert ids == [
+        "pregunta_infancia",
+        "rechazo_respetuoso",
+        "apoyo_sin_proyeccion",
+        "charla_videojuegos",
+        "cambio_de_tema",
+        "roleplay_no_canonico",
+    ]
+    assert all(scenario.turns for scenario in BIOGRAPHY_SCENARIOS)
+    topic_switch = next(s for s in BIOGRAPHY_SCENARIOS if s.id == "cambio_de_tema")
+    assert len(topic_switch.turns) == 2
 
 
 def test_question_only_replies_and_repeated_closings_are_counted():

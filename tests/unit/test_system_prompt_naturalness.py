@@ -128,3 +128,19 @@ def test_compact_candidate_defines_identity_without_turning_fiction_into_memory(
     assert "no la recites" in candidate
     assert "tsundere" not in candidate.lower()
     assert "=== IDENTIDAD NARRATIVA ===" not in SYSTEM_PROMPT
+
+
+def test_both_personalities_share_fictional_canonical_biography():
+    for prompt in (SYSTEM_PROMPT, SYSTEM_PROMPT_COMPACT_CANDIDATE):
+        lowered = prompt.lower()
+        assert "=== BIOGRAFÍA CANÓNICA FICTICIA ===" in prompt
+        assert "clara" in lowered and "mateo" in lowered
+        assert "nerea" in lowered and "gael" in lowered
+        assert "no son recuerdos reales" in lowered
+        assert "no la recites ni la conviertas en tema de cada conversación" in lowered
+
+
+def test_candidate_does_not_deny_airis_fictional_childhood_or_romantic_past():
+    lowered = SYSTEM_PROMPT_COMPACT_CANDIDATE.lower()
+    assert "no tienes infancia humana" not in lowered
+    assert "no tienes experiencias románticas reales" not in lowered

@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover - dotenv es opcional en el tool
     pass
 
 from airi.evaluation.interaction import (  # noqa: E402
+    BIOGRAPHY_SCENARIOS,
     IDENTITY_SCENARIOS,
     INTERACTION_SCENARIOS,
     TEMPORAL_SCENARIOS,
@@ -101,9 +102,9 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--scenario-set",
-        choices=("standard", "identity", "temporal"),
+        choices=("standard", "identity", "biography", "temporal"),
         default="standard",
-        help="Conjunto de escenarios para --live (standard, identity o temporal)",
+        help="Conjunto para --live (standard, identity, biography o temporal)",
     )
     parser.add_argument(
         "--time-context",
@@ -133,6 +134,8 @@ def main(argv=None) -> int:
                     scenarios=(
                         IDENTITY_SCENARIOS
                         if args.scenario_set == "identity"
+                        else BIOGRAPHY_SCENARIOS
+                        if args.scenario_set == "biography"
                         else TEMPORAL_SCENARIOS
                         if args.scenario_set == "temporal"
                         else INTERACTION_SCENARIOS
