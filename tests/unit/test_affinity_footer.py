@@ -1,4 +1,4 @@
-"""El pie de afinidad solo aparece cuando el turno mueve los puntos."""
+"""El pie de afinidad se muestra siempre que hay usuario; el delta solo si hubo cambio."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ def _ctx(text=BASE):
     return SimpleNamespace(affinity_footer=lambda _user: text)
 
 
-def test_sin_cambio_no_hay_pie():
-    assert affinity_footer_for_change(_ctx(), USER, 0) == ""
+def test_sin_cambio_muestra_el_total():
+    assert affinity_footer_for_change(_ctx(), USER, 0) == BASE
 
 
 def test_subida_muestra_el_delta_explicito():

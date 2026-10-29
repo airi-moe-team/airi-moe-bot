@@ -332,6 +332,7 @@ def test_non_stream_response_preserves_reasoning_presence_and_server_timings():
     assert content == '{"reply":"hola"}'
     assert meta.reasoning_present is True
     assert meta.reasoning_tokens == 4
+    assert meta.reasoning_budget_tokens is None
     assert meta.server_timings == {"prompt_ms": 12.5, "predicted_ms": 30}
     assert meta.ttft_ms is None
 
@@ -524,13 +525,48 @@ def _chat(client, **kwargs):
     return run(client.chat_with_meta([{"role": "user", "content": "hi"}], **kwargs))
 
 
-def test_profile_llama_sends_chat_template_kwargs(monkeypatch):
-    """Perfil `llama`: `disable_thinking` se traduce a chat_template_kwargs."""
+def test_profile_llama_sends_reasoning_budget_and_never_disables(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, temperature=0.5, disable_thinking=True)
-    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
+    _chat(client, temperature=0.5, reasoning_budget_tokens=256)
+    assert session._captured["thinking_budget_tokens"] == 256
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "reasoning_effort" not in session._captured
+
+
+@pytest.mark.parametrize("mode,budget", [("low", 256), ("medium", 1024), ("high", 4096)])
+def test_global_budget_is_recorded_in_response_metadata(monkeypatch, mode, budget):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="http://localhost:8080", session=session, thinking_mode=mode
+    )
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}])
+    )
+
+    assert meta.reasoning_budget_tokens == budget
+
+
+@pytest.mark.parametrize(
+    "mode,budget",
+    [("low", 256), ("medium", 1024), ("high", 4096)],
+)
+def test_output_cap_reserves_tokens_after_reasoning_budget(monkeypatch, mode, budget):
+    session = _make_async_session()
+    client = HttpLlmClient(
+        base_url="http://localhost:8080",
+        session=session,
+        thinking_mode=mode,
+        max_output_tokens=400,
+    )
+
+    _chat(client)
+
+    assert session._captured["thinking_budget_tokens"] == budget
+    assert session._captured["max_tokens"] >= budget + 512
 
 
 def test_profile_openai_omits_chat_template_kwargs(monkeypatch):
@@ -538,20 +574,22 @@ def test_profile_openai_omits_chat_template_kwargs(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
-    _chat(client, temperature=0.5, disable_thinking=True)
+    _chat(client, temperature=0.5, reasoning_budget_tokens=256)
     assert "chat_template_kwargs" not in session._captured
+    assert "thinking_budget_tokens" not in session._captured
 
 
 def test_profile_openai_compatible_omits_chat_template_kwargs(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.groq.com/openai/v1", session=session)
-    _chat(client, disable_thinking=True)
+    _chat(client, reasoning_budget_tokens=256)
     assert "chat_template_kwargs" not in session._captured
+    assert "thinking_budget_tokens" not in session._captured
 
 
 # ---------------------------------------------------------------------------
-# Modo de razonamiento: LLM_THINKING_MODE (auto|on|off)
+# Modo de razonamiento: LLM_THINKING_MODE (auto|on|low|medium|high)
 # ---------------------------------------------------------------------------
 
 
@@ -565,14 +603,15 @@ def test_thinking_mode_default_is_auto(monkeypatch, mode):
     assert client.thinking_mode == "auto"
 
 
-@pytest.mark.parametrize("mode", ["on", "off", "AUTO", " On "])
+@pytest.mark.parametrize("mode", ["on", "low", "medium", "high", "AUTO", " On "])
 def test_reads_llm_thinking_mode_from_env(monkeypatch, mode):
     monkeypatch.setenv("LLM_THINKING_MODE", mode)
     client = HttpLlmClient(base_url="http://localhost:8080", session=_make_session())
-    assert client.thinking_mode == mode.strip().lower()
+    expected = mode.strip().lower()
+    assert client.thinking_mode == expected
 
 
-@pytest.mark.parametrize("value", ["abc", "2"])
+@pytest.mark.parametrize("value", ["abc", "2", "off"])
 def test_invalid_thinking_mode_fallback(monkeypatch, value, caplog):
     monkeypatch.setenv("LLM_THINKING_MODE", value)
     with caplog.at_level(logging.WARNING):
@@ -591,20 +630,24 @@ def test_empty_thinking_mode_is_auto_silently(monkeypatch, value):
     assert client.thinking_mode == "auto"
 
 
-@pytest.mark.parametrize("requested", [True, False])
-def test_thinking_mode_on_forces_reasoning_even_for_quick_turns(monkeypatch, requested):
-    """`on`: nunca se envía chat_template_kwargs, pidan lo que pidan los servicios."""
+@pytest.mark.parametrize("mode", ["on", "low", "medium", "high"])
+def test_budget_modes_keep_reasoning_on_quick_turns(monkeypatch, mode):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
-    monkeypatch.setenv("LLM_THINKING_MODE", "on")
+    monkeypatch.setenv("LLM_THINKING_MODE", mode)
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, disable_thinking=requested)
-    assert "chat_template_kwargs" not in session._captured
+    _chat(client, quick_turn=True)
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
+    expected = {"low": 256, "medium": 1024, "high": 4096}.get(mode)
+    if expected is None:
+        assert "thinking_budget_tokens" not in session._captured
+    else:
+        assert session._captured["thinking_budget_tokens"] == expected
 
 
-@pytest.mark.parametrize("mode", ["on", "auto", "off"])
+@pytest.mark.parametrize("mode", ["on", "auto", "low", "medium", "high"])
 @pytest.mark.parametrize("stream", [False, True])
-def test_explicit_repair_override_disables_thinking_per_call(
+def test_explicit_repair_budget_overrides_global_per_call(
     monkeypatch, mode, stream
 ):
     monkeypatch.setenv("LLM_THINKING_MODE", mode)
@@ -619,15 +662,16 @@ def test_explicit_repair_override_disables_thinking_per_call(
 
     run(client.chat_with_meta(
         [{"role": "user", "content": "repair"}],
-        disable_thinking=True,
-        force_disable_thinking=True,
+        reasoning_budget_tokens=256,
+        quick_turn=True,
         stream=stream,
     ))
 
-    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
+    assert session._captured["thinking_budget_tokens"] == 256
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
 
 
-def test_thinking_override_does_not_disable_primary_in_global_on(monkeypatch):
+def test_on_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
     monkeypatch.setenv("LLM_THINKING_MODE", "on")
     session = _make_async_session()
     client = HttpLlmClient(
@@ -636,13 +680,14 @@ def test_thinking_override_does_not_disable_primary_in_global_on(monkeypatch):
 
     run(client.chat_with_meta(
         [{"role": "user", "content": "primary"}],
-        disable_thinking=False,
+        quick_turn=True,
     ))
 
-    assert "chat_template_kwargs" not in session._captured
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "thinking_budget_tokens" not in session._captured
 
 
-def test_force_disable_thinking_is_not_sent_to_non_llama_profile():
+def test_reasoning_budget_is_not_sent_to_non_llama_profile():
     session = _make_async_session()
     client = HttpLlmClient(
         base_url="http://localhost:7000",
@@ -653,42 +698,50 @@ def test_force_disable_thinking_is_not_sent_to_non_llama_profile():
 
     run(client.chat_with_meta(
         [{"role": "user", "content": "repair"}],
-        disable_thinking=True,
-        force_disable_thinking=True,
+        reasoning_budget_tokens=256,
     ))
 
     assert "chat_template_kwargs" not in session._captured
 
 
-@pytest.mark.parametrize("requested", [True, False])
-def test_thinking_mode_off_disables_reasoning_in_all_turns(monkeypatch, requested):
-    """`off`: chat_template_kwargs siempre presente en el perfil `llama`."""
-    monkeypatch.setenv("LLM_PROVIDER", "llama")
-    monkeypatch.setenv("LLM_THINKING_MODE", "off")
-    session = _make_async_session()
-    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, disable_thinking=requested)
-    assert session._captured["chat_template_kwargs"] == {"enable_thinking": False}
-
-
-def test_thinking_mode_auto_keeps_requested_behavior(monkeypatch):
-    """`auto`: se respeta lo que pida el servicio (comportamiento histórico)."""
+def test_thinking_mode_auto_keeps_reasoning_on_quick_turns_with_low_budget(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     monkeypatch.setenv("LLM_THINKING_MODE", "auto")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, disable_thinking=False)
-    assert "chat_template_kwargs" not in session._captured
+    _chat(client, quick_turn=True)
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
+    assert session._captured["thinking_budget_tokens"] == 256
+
+
+def test_thinking_mode_auto_normal_turn_uses_server_budget(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", "auto")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+    _chat(client, quick_turn=False)
+    assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "thinking_budget_tokens" not in session._captured
+
+
+@pytest.mark.parametrize("budget", [0, -1, True, 1.5])
+def test_invalid_per_call_budget_fails_before_http(monkeypatch, budget):
+    client = HttpLlmClient(
+        base_url="http://localhost:8080", session=_make_async_session(),
+        thinking_mode="auto",
+    )
+    with pytest.raises(ValueError, match="reasoning_budget_tokens"):
+        _chat(client, reasoning_budget_tokens=budget)
 
 
 def test_explicit_thinking_mode_overrides_env(monkeypatch):
-    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    monkeypatch.setenv("LLM_THINKING_MODE", "low")
     client = HttpLlmClient(
         base_url="http://localhost:8080",
         session=_make_session(),
-        thinking_mode="on",
+        thinking_mode="high",
     )
-    assert client.thinking_mode == "on"
+    assert client.thinking_mode == "high"
 
 
 def test_profile_llama_uses_max_tokens_field(monkeypatch):
@@ -876,6 +929,20 @@ def test_streaming_counts_reasoning_and_content_deltas():
 
     assert meta.reasoning_deltas == 3
     assert meta.content_deltas == 2
+
+
+def test_reasoning_budget_is_returned_in_streaming_metadata():
+    session = _make_streaming_session([b"data: [DONE]\n\n"])
+    client = HttpLlmClient(
+        base_url="http://localhost:7000", session=session, thinking_mode="medium"
+    )
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True)
+    )
+
+    assert session._captured["thinking_budget_tokens"] == 1024
+    assert meta.reasoning_budget_tokens == 1024
 
 
 def test_streaming_payload_requests_usage_for_llama_profile():

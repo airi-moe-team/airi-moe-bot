@@ -29,11 +29,10 @@ CALL_FIELDS = {
     "server_timings",
     "reasoning_present",
     "reasoning_tokens",
+    "reasoning_budget_tokens",
     "reasoning_deltas",
     "content_deltas",
     "max_tokens",
-    "thinking_requested_off",
-    "thinking_effective",
     "error_type",
 }
 
@@ -57,6 +56,7 @@ def test_normal_turn_records_one_primary_call():
     call = trace.llm_calls[0]
     assert call["purpose"] == "primary"
     assert call["status"] == "ok"
+    assert call["reasoning_budget_tokens"] is None
     assert call["finish_reason"] == "stop"
     assert isinstance(call["duration_ms"], int)
     assert call["duration_ms"] >= 0
@@ -79,10 +79,10 @@ def test_truncated_first_call_keeps_its_finish_reason_and_repair_purpose():
     ]
     assert trace.llm_calls[0]["finish_reason"] == "length"
     assert trace.llm_calls[1]["finish_reason"] == "stop"
-    assert llm.calls[0]["force_disable_thinking"] is False
-    assert llm.calls[1]["force_disable_thinking"] is True
-    assert trace.llm_calls[0]["thinking_effective"] is True
-    assert trace.llm_calls[1]["thinking_effective"] is False
+    assert llm.calls[0]["reasoning_budget_tokens"] is None
+    assert llm.calls[1]["reasoning_budget_tokens"] == 256
+    assert trace.llm_calls[0]["reasoning_budget_tokens"] is None
+    assert trace.llm_calls[1]["reasoning_budget_tokens"] == 256
     # Compatibilidad: el campo agregado sigue describiendo la respuesta usada.
     assert trace.llm_finish_reason == "stop"
 
@@ -100,7 +100,7 @@ def test_empty_reply_repair_is_recorded_with_its_own_purpose():
     ]
 
 
-def test_all_repair_calls_force_thinking_off_but_primary_follows_global_mode():
+def test_all_repair_calls_use_low_effort_but_primary_follows_global_mode():
     llm = FakeLLM(
         replies=["", llm_json("respuesta")],
         metas=[LLMMeta(finish_reason="stop"), LLMMeta(finish_reason="stop")],
@@ -111,11 +111,11 @@ def test_all_repair_calls_force_thinking_off_but_primary_follows_global_mode():
         "primary",
         "empty_reply_repair",
     ]
-    assert [call["force_disable_thinking"] for call in llm.calls] == [False, True]
-    assert [call["thinking_effective"] for call in trace.llm_calls] == [True, False]
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None, 256]
 
 
-def test_question_close_repair_forces_thinking_off_in_global_on():
+def test_question_close_repair_uses_low_effort_in_global_on():
     llm = FakeLLM(
         replies=[llm_json("¿Qué opinas?"), llm_json("Me parece bien.")],
         metas=[LLMMeta(finish_reason="stop"), LLMMeta(finish_reason="stop")],
@@ -131,8 +131,8 @@ def test_question_close_repair_forces_thinking_off_in_global_on():
         "primary",
         "question_close_repair",
     ]
-    assert [call["force_disable_thinking"] for call in llm.calls] == [False, True]
-    assert [call["thinking_effective"] for call in trace.llm_calls] == [True, False]
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None, 256]
 
 
 def test_repair_override_survives_json_schema_fallback():
@@ -154,39 +154,30 @@ def test_repair_override_survives_json_schema_fallback():
         "empty_reply_repair",
         "empty_reply_repair:json_object_retry",
     ]
-    assert [call["force_disable_thinking"] for call in llm.calls] == [
-        False,
-        True,
-        True,
-    ]
-    assert [call["thinking_effective"] for call in trace.llm_calls] == [
-        True,
-        False,
-        False,
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256, 256]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [
+        None, 256, 256,
     ]
 
 
-def test_primary_thinking_policy_is_not_changed_by_repair_override():
-    """Un turno rápido mantiene thinking on, aunque su reparación lo pueda apagar."""
+def test_primary_budget_policy_is_not_changed_by_repair_override():
+    """Un turno rápido conserva el marcador y las reparaciones solicitan low."""
     llm = FakeLLM(replies=[llm_json("hola")])
     trace = _turn(llm, message="hola", thinking_mode="on")  # corto ⇒ turno rápido
 
-    assert llm.calls[0]["disable_thinking"] is True  # lo que pidió el servicio
-    assert trace.llm_calls[0]["thinking_requested_off"] is True
-    assert trace.llm_calls[0]["thinking_effective"] is True
-    assert llm.calls[0]["force_disable_thinking"] is False
+    assert llm.calls[0]["quick_turn"] is True
+    assert trace.llm_calls[0]["reasoning_budget_tokens"] is None
 
 
-def test_auto_mode_does_not_record_effective_thinking_on_for_quick_turns():
+def test_auto_mode_quick_turn_records_low_budget():
     llm = FakeLLM(replies=[llm_json("hola")])
     trace = _turn(llm, message="hola", thinking_mode="auto")
 
-    assert trace.llm_calls[0]["thinking_requested_off"] is True
-    assert trace.llm_calls[0]["thinking_effective"] is False
-    assert llm.calls[0]["force_disable_thinking"] is False
+    assert trace.llm_calls[0]["reasoning_budget_tokens"] == 256
+    assert llm.calls[0]["quick_turn"] is True
 
 
-def test_every_repair_purpose_uses_per_call_override():
+def test_every_repair_purpose_uses_low_budget_override():
     purposes = (
         "truncation_repair",
         "empty_reply_repair",
@@ -207,13 +198,11 @@ def test_every_repair_purpose_uses_per_call_override():
                 [{"role": "user", "content": "private"}],
                 schema=None,
                 max_tokens=20,
-                disable_thinking=False,
             )
         return llm
 
     llm = asyncio.run(run_repair_calls())
-    assert [call["force_disable_thinking"] for call in llm.calls] == [True] * 5
-    assert all(call["disable_thinking"] is True for call in llm.calls)
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [256] * 5
 
 
 def test_call_metadata_never_contains_private_text():

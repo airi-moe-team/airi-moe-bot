@@ -94,7 +94,7 @@ def _glue(llm_base_url):
 
 
 # ---------------------------------------------------------------------------
-# Perfil llama (default): payload idéntico al comportamiento histórico
+# Perfil llama (default): overrides estructurados usan esfuerzo bajo
 # ---------------------------------------------------------------------------
 
 
@@ -109,7 +109,8 @@ def test_llama_mode_payload_unchanged():
     assert payload["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert "max_completion_tokens" not in payload
     assert payload["temperature"] == 0.7
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["thinking_budget_tokens"] == 256
+    assert payload["chat_template_kwargs"] == {"enable_thinking": True}
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["strict"] is True
     # El flujo completo devuelve el juicio parseado.

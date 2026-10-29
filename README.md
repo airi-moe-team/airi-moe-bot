@@ -127,7 +127,7 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `CHANNEL_ID`: ID del canal autorizado
 - `LLM_PROVIDER`: perfil del proveedor (`llama`, `openai` u `openai-compatible`)
 - `LLM_BASE_URL`: URL base del proveedor (default: http://127.0.0.1:7000)
-- `LLM_THINKING_MODE`: modo global de razonamiento (`auto` — se desactiva en turnos rápidos—, `on` —activo en llamadas principales— u `off` —desactivado—; default: `auto`, solo aplicable con `LLM_PROVIDER=llama`). Las llamadas de reparación pueden apagar thinking por petición para no repetir razonamiento costoso; esto no altera la política de la llamada principal.
+- `LLM_THINKING_MODE`: presupuesto global de razonamiento (`auto` —reasoning siempre activo; turnos rápidos con tope low y normales con default del servidor—, `on` —reasoning activo con default del servidor—, `low` —256 tokens—, `medium` —1.024—, `high` —4.096—; default: `auto`). `off` no se admite y cae a `auto`. Con `LLM_PROVIDER=llama`, los presupuestos se envían por petición mediante `thinking_budget_tokens`; dependen de la versión/template y son topes, no garantías de calidad. Si el servidor se inició con `--reasoning-budget`, puede prevalecer su presupuesto global. Las reparaciones y reflexiones estructuradas usan el tope low. Ninguna llamada apaga reasoning; al fijar un tope se reserva además espacio de salida.
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)
 - `OWNER_ID`: ID del dueño del bot (opcional)
@@ -284,7 +284,10 @@ airi-replay --emit-test ./traces/.../<cid>.json
 
 ### Comparar variantes del system prompt
 
-Con llama-server disponible y thinking activado, el benchmark ejecuta cinco
+Con llama-server disponible, el benchmark permite seleccionar `auto`, `on`,
+`low`, `medium` o `high` mediante `LLM_THINKING_MODE`; el cliente registra el
+presupuesto enviado por llamada por separado de los tokens/evidencia de reasoning
+devueltos, ya que el backend puede ignorar el presupuesto por petición. El benchmark ejecuta cinco
 pares secuenciales por defecto, alterna su orden y guarda/imprime solo métricas
 y checks (no el prompt ni las respuestas). El benchmark usa streaming para
 medir TTFT; el camino normal del bot sigue sin streaming:

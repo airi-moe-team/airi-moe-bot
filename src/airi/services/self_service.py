@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 
 from airi.domain.constants import (
+    LLM_REASONING_BUDGET_LOW_TOKENS,
     SELF_REFLECTION_MAX_TOKENS,
 )
 from airi.domain.llm_output import extract_json_object, parse_self_update
@@ -97,21 +98,21 @@ class SelfService:
                         schema=SELF_REFLECTION_SCHEMA,
                         strict_schema=True,
                         max_tokens=self.max_tokens,
-                        disable_thinking=True,
+                        reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
                     )
                 except Exception:
                     raw, _meta = await self.llm.chat_with_meta(
                         messages,
                         schema=SELF_REFLECTION_SCHEMA,
                         max_tokens=self.max_tokens,
-                        disable_thinking=True,
+                        reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
                     )
             else:
                 raw = await self.llm.chat(
                     messages,
                     schema=SELF_REFLECTION_SCHEMA,
                     max_tokens=self.max_tokens,
-                    disable_thinking=True,
+                    reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
                 )
         except Exception:
             log.info("Reflexión introspectiva no disponible (%s)", trigger)

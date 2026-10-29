@@ -37,7 +37,9 @@ from airi.domain.dates import (
     date_turns_left,
     new_date_session,
 )
+from airi.domain.constants import SELF_TRAITS_ALLOWLIST
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
+from airi.domain.self_model import normalize_self
 from airi.domain.notices import discovery_notice, self_changed_notice
 from airi.domain.text_filters import clean_reply
 from airi.domain.texts import (
@@ -124,17 +126,45 @@ async def send_long_message(channel, content, *, reference=None):
 
 
 def affinity_footer_for_change(ctx, user, affinity_delta):
-    """Pie de afinidad solo cuando el turno movió los puntos.
+    """Pie de afinidad para respuestas a un usuario.
 
-    Evita repetir el mismo "N pts" en cada respuesta: sin cambio no hay pie.
-    Con cambio se añade el delta explícito, p. ej. "· (+1)".
+    Muestra siempre el total acumulado cuando hay usuario (la relación no
+    desaparece entre turnos). Si el turno movió puntos, se añade el delta
+    explícito entre paréntesis, p. ej. "· (+1)". Sin usuario (turnos
+    proactivos/pending) no hay pie.
     """
-    if user is None or not affinity_delta:
+    if user is None:
         return ""
     base = ctx.affinity_footer(user)
     if not base:
         return ""
-    return f"{base} ({int(affinity_delta):+d})"
+    if affinity_delta:
+        return f"{base} ({int(affinity_delta):+d})"
+    return base
+
+
+def traits_summary(ctx):
+    """Resumen compacto de los rasgos actuales de Airi (o \"\" si no hay)."""
+    state = getattr(ctx, "state", None)
+    if state is None:
+        return ""
+    try:
+        model = state.self_model()
+    except Exception:
+        return ""
+    try:
+        normalize_self(model)
+    except Exception:
+        pass
+    traits = (model or {}).get("traits") or {}
+    parts = [
+        f"{name} {int(traits.get(name, 0))}/5"
+        for name in SELF_TRAITS_ALLOWLIST
+        if name in traits
+    ]
+    if not parts:
+        return ""
+    return " · ".join(parts)
 
 
 async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0):
@@ -154,6 +184,14 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0
             title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
             color=embeds.GIF_EMBED_COLOR,
         )
+        # Rasgos de Airi encima de la imagen (Discord pinta los campos antes
+        # que la imagen grande).
+        if user is not None:
+            traits = traits_summary(ctx)
+            if traits:
+                embed.add_field(
+                    name="Rasgos de Airi", value=traits, inline=False
+                )
         footer = affinity_footer_for_change(ctx, user, affinity_delta)
         if footer:
             avatar = getattr(user, "display_avatar", None)
@@ -304,6 +342,7 @@ async def run_user_turn(
                             author,
                             committed.result,
                             reply_target=reply_target,
+                            suppress_affinity=turn_ctx.suppress_affinity,
                         )
                         # Registrar como respondidos todos los mensajes que el
                         # turno cubrió (invariante I2).

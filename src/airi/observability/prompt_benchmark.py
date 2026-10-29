@@ -16,7 +16,7 @@ from typing import Awaitable, Callable, Mapping
 import aiohttp
 
 import airi.env_boot  # noqa: F401 — dotenv antes de cargar settings/adapters.
-from airi.adapters.http_llm import build_llm
+from airi.adapters.http_llm import LLM_THINKING_MODES, build_llm
 from airi.domain.prompts import PromptVariant
 from airi.domain.text_filters import (
     DISCORD_ASSET_LINK_RE,
@@ -65,11 +65,10 @@ CALL_METADATA_FIELDS = (
     "server_timings",
     "reasoning_present",
     "reasoning_tokens",
+    "reasoning_budget_tokens",
     "reasoning_deltas",
     "content_deltas",
     "max_tokens",
-    "thinking_requested_off",
-    "thinking_effective",
     "error_type",
 )
 
@@ -283,11 +282,13 @@ async def run_prompt_benchmark(
     """Ejecuta pares limpios; exige un perfil global de thinking verificable."""
     if pair_count < MIN_PAIRS:
         raise ValueError(f"El benchmark requiere al menos cinco pares (recibido: {pair_count})")
-    if thinking_mode not in ("on", "off"):
-        raise ValueError("thinking_mode debe ser 'on' u 'off'")
+    if thinking_mode not in LLM_THINKING_MODES:
+        raise ValueError(
+            "thinking_mode debe ser 'auto', 'on', 'low', 'medium' o 'high'"
+        )
     if getattr(llm, "thinking_mode", None) != thinking_mode:
         raise ValueError(
-            f"El benchmark exige thinking mode {thinking_mode} efectivo y "
+            f"El benchmark exige thinking mode {thinking_mode} configurado y "
             "verificable en el cliente"
         )
     if max_output_tokens is not None and (
@@ -599,7 +600,7 @@ def main(argv=None) -> int:
     parser.add_argument("trace", help="Ruta a la traza de referencia")
     parser.add_argument("--pairs", type=int, default=MIN_PAIRS)
     parser.add_argument(
-        "--thinking-mode", choices=("on", "off"), default="on",
+        "--thinking-mode", choices=LLM_THINKING_MODES, default="on",
         help="Perfil global fijado para esta corrida (por defecto on)",
     )
     parser.add_argument(

@@ -802,6 +802,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         DATE_SCENE_MAX_TOKENS,
         DATE_SCENES,
         DIARY_REFLECTION_MIN_INTERVAL,
+        LLM_REASONING_BUDGET_LOW_TOKENS,
     )
     from airi.domain.dates import (
         date_expired,
@@ -841,7 +842,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
             schema=schema,
             max_tokens=max_tokens,
             temperature=temperature,
-            disable_thinking=True,
+            reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
             strict_schema=True,
         )
         return text

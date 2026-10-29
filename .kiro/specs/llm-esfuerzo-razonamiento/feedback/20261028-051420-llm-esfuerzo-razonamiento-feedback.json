@@ -1,0 +1,26 @@
+{
+  "feature": "llm-esfuerzo-razonamiento",
+  "generated_at": "2026-10-28T05:14:20Z",
+  "items": [
+    {
+      "id": "FB-LLM-001",
+      "title": "Enviar reasoning_effort mediante chat_template_kwargs",
+      "severity": "major",
+      "impact": "El backend local aceptó por HTTP el campo superior reasoning_effort, pero low/medium/high produjeron finish_reason, completion_tokens y longitud de reasoning idénticos, sin evidencia de que el campo se aplicara. La documentación oficial de llama.cpp describe reasoning_effort como parámetro del template y chat_template_kwargs como la vía para enviar parámetros de template.",
+      "recommendation": "Enviar chat_template_kwargs.reasoning_effort, combinándolo con enable_thinking=false únicamente para auto + quick_turn. Mantener explícito que el backend/modelo puede ignorar el nivel.",
+      "targets": ["design", "tasks"],
+      "updates": {
+        "requirements": [],
+        "design": [
+          "Reemplazar el campo superior del payload por chat_template_kwargs.reasoning_effort; combinar los parámetros de template en el mismo objeto.",
+          "Documentar que la prueba live del campo superior no mostró efecto y que la aplicación del nivel no está garantizada."
+        ],
+        "tasks": [
+          "Ajustar pruebas de payload para esperar chat_template_kwargs.reasoning_effort.",
+          "Verificar el campo de template mediante petición live no destructiva y guardar únicamente métricas no sensibles."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["design", "tasks"]
+}

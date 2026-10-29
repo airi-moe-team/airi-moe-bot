@@ -29,6 +29,9 @@ from airi.domain.constants import (
     AFFINITY_VIEW_SCOPE,
     DATE_HISTORY_MAX,
     DIARY_REFLECTION_MIN_INTERVAL,
+    LLM_REASONING_BUDGET_HIGH_TOKENS,
+    LLM_REASONING_BUDGET_LOW_TOKENS,
+    LLM_REASONING_BUDGET_MEDIUM_TOKENS,
     LLM_SHORT_MAX_TOKENS,
     MAX_HISTORY_MESSAGES,
     QUICK_HISTORY_MESSAGES,
@@ -331,10 +334,10 @@ REPEAT_REPAIR_PROMPT = (
 #: Reintento único cuando la generación agotó el techo de tokens. El caso típico
 #: es que el razonamiento (thinking) se comió todo el presupuesto y no quedó
 #: espacio para el JSON final: la respuesta llega vacía con finish_reason
-#: "length". Se desactiva el razonamiento y se pide ir directo al JSON.
+#: "length". Se solicita esfuerzo bajo y se pide ir directo al JSON.
 TRUNCATED_REPAIR_PROMPT = (
     "Tu generación anterior se agotó razonando y no llegó a escribir la "
-    "respuesta. Responde AHORA sin razonar: ve directo al objeto JSON completo, "
+    "respuesta. Responde AHORA con brevedad: ve directo al objeto JSON completo, "
     "con un \"reply\" breve y suficiente para el último mensaje, y ciérralo. No "
     "escribas texto fuera del JSON."
 )
@@ -1527,7 +1530,8 @@ class ConversationService:
         *,
         schema,
         max_tokens,
-        disable_thinking,
+        reasoning_budget_tokens=None,
+        quick_turn=False,
         stream_llm=False,
     ):
         """Una invocación al modelo, registrada en `calls` con su propósito.
@@ -1536,10 +1540,15 @@ class ConversationService:
         traza refleje cuántas peticiones se hicieron de verdad y por qué.
         """
         stream_kwargs = {"stream": True} if stream_llm else {}
-        # La llamada primaria respeta el modo global; cada reparación tiene
-        # un override acotado a esa petición.
-        force_disable_thinking = purpose != "primary"
-        requested_disable_thinking = bool(disable_thinking or force_disable_thinking)
+        # Cada reparación solicita presupuesto bajo, sin apagar reasoning. El
+        # override queda acotado a esta petición y no cambia el modo global.
+        is_repair = purpose != "primary"
+        requested_reasoning_budget = (
+            LLM_REASONING_BUDGET_LOW_TOKENS
+            if is_repair
+            else reasoning_budget_tokens
+        )
+        requested_quick_turn = bool(quick_turn and not is_repair)
         if not hasattr(self.llm, "chat_with_meta"):
             if stream_llm:
                 raise RuntimeError(
@@ -1551,20 +1560,20 @@ class ConversationService:
                     messages,
                     schema=schema,
                     max_tokens=max_tokens,
-                    disable_thinking=requested_disable_thinking,
-                    force_disable_thinking=force_disable_thinking,
+                    reasoning_budget_tokens=requested_reasoning_budget,
+                    quick_turn=requested_quick_turn,
                 )
             except Exception as exc:
                 self._record_call(
                     calls, purpose, None, started, max_tokens,
-                    requested_disable_thinking, force_disable_thinking,
+                    requested_reasoning_budget, requested_quick_turn,
                     status="failed", error_type=type(exc).__name__,
                 )
                 raise
             meta = LLMMeta()
             self._record_call(
                 calls, purpose, meta, started, max_tokens,
-                requested_disable_thinking, force_disable_thinking
+                requested_reasoning_budget, requested_quick_turn
             )
             return raw, meta
         started = time.perf_counter()
@@ -1576,14 +1585,14 @@ class ConversationService:
                 schema=schema,
                 strict_schema=True,
                 max_tokens=max_tokens,
-                disable_thinking=requested_disable_thinking,
-                force_disable_thinking=force_disable_thinking,
+                reasoning_budget_tokens=requested_reasoning_budget,
+                quick_turn=requested_quick_turn,
                 **stream_kwargs,
             )
         except Exception as exc:
             self._record_call(
                 calls, purpose, None, started, max_tokens,
-                requested_disable_thinking, force_disable_thinking,
+                requested_reasoning_budget, requested_quick_turn,
                 status="failed", error_type=type(exc).__name__,
             )
             if not self._can_retry_without_strict(exc):
@@ -1598,24 +1607,24 @@ class ConversationService:
                 messages,
                 schema=schema,
                 max_tokens=max_tokens,
-                disable_thinking=requested_disable_thinking,
-                force_disable_thinking=force_disable_thinking,
+                reasoning_budget_tokens=requested_reasoning_budget,
+                quick_turn=requested_quick_turn,
                 **stream_kwargs,
             )
             self._record_call(
                 calls, f"{purpose}:json_object_retry", meta, started,
-                max_tokens, requested_disable_thinking, force_disable_thinking,
+                max_tokens, requested_reasoning_budget, requested_quick_turn,
             )
             return raw, meta
         self._record_call(
             calls, purpose, meta, started, max_tokens,
-            requested_disable_thinking, force_disable_thinking
+            requested_reasoning_budget, requested_quick_turn
         )
         return raw, meta
 
     def _record_call(
-        self, calls, purpose, meta, started, max_tokens, disable_thinking,
-        force_disable_thinking=False, *, status="ok", error_type=None,
+        self, calls, purpose, meta, started, max_tokens, reasoning_budget_tokens,
+        quick_turn=False, *, status="ok", error_type=None,
     ):
         """Añade a `calls` solo metadatos: nunca prompt, content ni reasoning."""
         if calls is None:
@@ -1641,34 +1650,35 @@ class ConversationService:
                 "server_timings": getattr(meta, "server_timings", None),
                 "reasoning_present": getattr(meta, "reasoning_present", None),
                 "reasoning_tokens": getattr(meta, "reasoning_tokens", None),
+                "reasoning_budget_tokens": self._reasoning_budget_effective(
+                    reasoning_budget_tokens, quick_turn
+                ),
                 "reasoning_deltas": getattr(meta, "reasoning_deltas", None),
                 "content_deltas": getattr(meta, "content_deltas", None),
                 "max_tokens": (
                     effective_max if isinstance(effective_max, int) else None
                 ),
-                "thinking_requested_off": bool(disable_thinking),
-                "thinking_effective": self._thinking_effective(
-                    disable_thinking, force_disable_thinking
-                ),
                 "error_type": error_type,
             }
         )
 
-    def _thinking_effective(self, disable_thinking, force_disable_thinking=False):
-        """Si el razonamiento quedará activo tras aplicar los overrides.
-
-        Las reparaciones marcadas tienen override local; la llamada primaria
-        continúa obedeciendo `LLM_THINKING_MODE`.
-        """
+    def _reasoning_budget_effective(self, reasoning_budget_tokens, quick_turn=False):
+        """Presupuesto que el cliente resolverá/enviará, no cumplimiento del backend."""
         mode = str(getattr(self.llm, "thinking_mode", "") or "auto").strip().lower()
         provider = str(getattr(self.llm, "provider", "llama") or "llama").lower()
         if provider != "llama":
             return None
-        if mode == "on":
-            return not force_disable_thinking
-        if mode == "off":
-            return False
-        return not (disable_thinking or force_disable_thinking)
+        if reasoning_budget_tokens is not None:
+            return reasoning_budget_tokens
+        if mode == "low":
+            return LLM_REASONING_BUDGET_LOW_TOKENS
+        if mode == "medium":
+            return LLM_REASONING_BUDGET_MEDIUM_TOKENS
+        if mode == "high":
+            return LLM_REASONING_BUDGET_HIGH_TOKENS
+        if mode == "auto" and quick_turn:
+            return LLM_REASONING_BUDGET_LOW_TOKENS
+        return None
 
     async def _generate(
         self,
@@ -1819,7 +1829,7 @@ class ConversationService:
             messages,
             schema=schema,
             max_tokens=request_tokens,
-            disable_thinking=quick,
+            quick_turn=quick,
             stream_llm=stream_llm,
         )
         first_meta = meta
@@ -1835,7 +1845,7 @@ class ConversationService:
         self._log_module("parsing", "activated", parse_ok=output.reply is not None)
         # Corte por techo de tokens: normalmente el razonamiento se comió todo
         # el presupuesto y no quedó espacio para el JSON. Se hace UNA sola
-        # regeneración sin thinking, también en turnos de sesión (antes no
+        # regeneración con esfuerzo bajo, también en turnos de sesión (antes no
         # tenían ninguna red).
         retried_truncation = False
         if (
@@ -1876,7 +1886,6 @@ class ConversationService:
                     close_repair_messages,
                     schema=schema,
                     max_tokens=request_tokens,
-                    disable_thinking=quick,
                     stream_llm=stream_llm,
                 )
                 fixed = parse_model_output(
@@ -1910,7 +1919,6 @@ class ConversationService:
             repair = await self._repair_regenerate(
                 messages, EMPTY_REPLY_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
-                disable_thinking=quick,
                 stream_llm=stream_llm,
                 calls=calls,
                 purpose="empty_reply_repair",
@@ -1922,7 +1930,6 @@ class ConversationService:
             repair = await self._repair_regenerate(
                 messages, REPEAT_REPAIR_PROMPT,
                 delta_max=delta_max, max_tokens=request_tokens,
-                disable_thinking=quick,
                 stream_llm=stream_llm,
                 calls=calls,
                 purpose="repeat_reply_repair",
@@ -1948,7 +1955,6 @@ class ConversationService:
                     repair_messages,
                     schema=schema,
                     max_tokens=request_tokens,
-                    disable_thinking=quick,
                     stream_llm=stream_llm,
                 )
                 repaired = parse_model_output(
@@ -2017,7 +2023,7 @@ class ConversationService:
         repair_messages = [*messages, {"role": "user", "content": note}]
         log.warning(
             "Generación cortada por longitud sin respuesta; se reintenta "
-            "desactivando el razonamiento."
+            "solicitando esfuerzo de razonamiento bajo."
         )
         try:
             raw, meta = await self._chat(
@@ -2026,7 +2032,6 @@ class ConversationService:
                 repair_messages,
                 schema=schema,
                 max_tokens=max_tokens,
-                disable_thinking=True,
                 stream_llm=stream_llm,
             )
         except Exception:
@@ -2051,7 +2056,7 @@ class ConversationService:
         return raw, meta, output, True
 
     async def _repair_regenerate(
-        self, messages, note, *, delta_max, max_tokens, disable_thinking,
+        self, messages, note, *, delta_max, max_tokens,
         stream_llm=False, calls=None, purpose="repair",
     ):
         """Una regeneración de reparación. None si no produce reply utilizable.
@@ -2069,7 +2074,6 @@ class ConversationService:
                 repair_messages,
                 schema=RESPONSE_SCHEMA,
                 max_tokens=max_tokens,
-                disable_thinking=disable_thinking,
                 stream_llm=stream_llm,
             )
             fixed = parse_model_output(

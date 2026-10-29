@@ -89,23 +89,23 @@ def test_benchmark_requires_effective_thinking_on(tmp_path):
     assert llm.calls == []
 
 
-def test_generation_profile_can_turn_thinking_off_and_set_an_output_limit(tmp_path):
+def test_generation_profile_can_set_low_effort_and_output_limit(tmp_path):
     trace = tmp_path / "trace.json"
     make_trace(trace)
-    llm = make_llm(thinking_mode="off")
+    llm = make_llm(thinking_mode="low")
 
     samples = run(run_prompt_benchmark(
         trace,
         llm,
         pair_count=5,
-        thinking_mode="off",
+        thinking_mode="low",
         max_output_tokens=512,
     ))
 
     assert len(samples) == 10
-    assert all(sample.thinking_mode == "off" for sample in samples)
+    assert all(sample.thinking_mode == "low" for sample in samples)
     assert all(sample.max_output_tokens == 512 for sample in samples)
-    assert all(sample.calls[0]["thinking_effective"] is False for sample in samples)
+    assert all(sample.calls[0]["reasoning_budget_tokens"] == 256 for sample in samples)
     assert all(call["max_tokens"] == 512 for call in llm.calls)
 
 
@@ -179,9 +179,9 @@ def test_benchmark_runs_five_clean_alternating_pairs_and_omits_private_text(tmp_
         first = llm.calls[pair * 2]
         second = llm.calls[pair * 2 + 1]
         assert first["messages"][1:] == second["messages"][1:]
-        for key in ("schema", "max_tokens", "disable_thinking", "strict_schema"):
+        for key in ("schema", "max_tokens", "reasoning_budget_tokens", "quick_turn", "strict_schema"):
             assert first[key] == second[key]
-        assert first["disable_thinking"] is False
+        assert first["quick_turn"] is False
         assert first["stream"] is True
 
 

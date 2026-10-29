@@ -23,11 +23,10 @@ _SAFE_LLM_CALL_FIELDS = (
     "server_timings",
     "reasoning_present",
     "reasoning_tokens",
+    "reasoning_budget_tokens",
     "reasoning_deltas",
     "content_deltas",
     "max_tokens",
-    "thinking_requested_off",
-    "thinking_effective",
     "error_type",
 )
 

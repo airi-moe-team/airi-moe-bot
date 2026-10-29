@@ -1,5 +1,7 @@
 # Especificaciones activas (SDD)
 
+- `llm-esfuerzo-razonamiento` — Mantener reasoning siempre activo y limitarlo por presupuestos low/medium/high, con metadatos por llamada.
+  - Spec: `.kiro/specs/llm-esfuerzo-razonamiento/`
 - `observabilidad-ttft-llama-server` — Medir TTFT por streaming y timings del servidor en el benchmark sin cambiar thinking ni afectar el camino normal.
   - Spec: `.kiro/specs/observabilidad-ttft-llama-server/`
 - `experimento-prompt-thinking-latencia` — Comparar el prompt actual con una variante compacta y coherente manteniendo thinking activado, midiendo latencia, tokens y calidad.

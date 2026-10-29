@@ -86,9 +86,14 @@ def test_config_thinking_mode_default_is_auto():
 
 
 def test_config_reads_thinking_mode(monkeypatch):
-    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    monkeypatch.setenv("LLM_THINKING_MODE", "medium")
     cfg = LlmConfig.from_env()
-    assert cfg.thinking_mode == "off"
+    assert cfg.thinking_mode == "medium"
+
+
+def test_config_rejects_off_and_falls_back_to_auto(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "off")
+    assert LlmConfig.from_env().thinking_mode == "auto"
 
 
 def test_config_invalid_thinking_mode_falls_back(monkeypatch):

@@ -115,7 +115,7 @@ def test_propose_scenes_falls_back_on_http_error():
     assert all(scene in DATE_SCENES for scene in scenes)
 
 
-def test_propose_scenes_sends_model_and_disables_thinking():
+def test_propose_scenes_sends_model_and_low_reasoning_budget():
     state, _ = make_state()
     glue = _glue(state)
     session = _FakeSession(json.dumps({"scenes": ["a", "b"]}))
@@ -125,14 +125,14 @@ def test_propose_scenes_sends_model_and_disables_thinking():
     payload = session.payloads[-1]
     expected_model = os.environ.get("LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S")
     assert payload["model"] == expected_model
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["thinking_budget_tokens"] == 256
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["strict"] is True
     assert payload["response_format"]["json_schema"]["name"] == "structured_output"
     assert payload["response_format"]["json_schema"]["schema"] == SCENE_PROPOSAL_SCHEMA
     assert "json_schema" not in payload
-    # Verifica que el límite de tokens de escenas se aplica.
-    assert payload["max_tokens"] == DATE_SCENE_MAX_TOKENS
+    # El límite de reasoning reserva espacio para completar la respuesta JSON.
+    assert payload["max_tokens"] == max(DATE_SCENE_MAX_TOKENS, 256 + 512)
 
 
 # --- judge_gift ------------------------------------------------------------
@@ -185,7 +185,7 @@ def test_judge_gift_clamps_delta_to_the_maximum():
     assert delta <= 8
 
 
-def test_judge_gift_sends_model_and_disables_thinking():
+def test_judge_gift_sends_model_and_low_reasoning_budget():
     state, _ = make_state()
     glue = _glue(state)
     content = json.dumps(
@@ -198,7 +198,7 @@ def test_judge_gift_sends_model_and_disables_thinking():
     payload = session.payloads[-1]
     expected_model = os.environ.get("LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S")
     assert payload["model"] == expected_model
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["thinking_budget_tokens"] == 256
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["strict"] is True
     assert payload["response_format"]["json_schema"]["name"] == "structured_output"

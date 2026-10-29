@@ -305,6 +305,12 @@ AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS = env_int("AIRI_SPECTATOR_PENDING_MAX_AGE
 QUICK_REPLY_MAX_CHARS = env_int("QUICK_REPLY_MAX_CHARS", 60)
 QUICK_HISTORY_MESSAGES = env_int("QUICK_HISTORY_MESSAGES", 6)
 LLM_SHORT_MAX_TOKENS = env_int("LLM_SHORT_MAX_TOKENS", 400)
+# Presupuestos propuestos de razonamiento por nivel. Son topes por petición,
+# no objetivos de consumo ni garantías de calidad.
+LLM_REASONING_BUDGET_LOW_TOKENS = 256
+LLM_REASONING_BUDGET_MEDIUM_TOKENS = 1024
+LLM_REASONING_BUDGET_HIGH_TOKENS = 4096
+LLM_REASONING_OUTPUT_RESERVE_TOKENS = 512
 
 # ============================================================
 # IDENTIDAD DE AIRI (self model)

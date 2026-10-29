@@ -41,6 +41,7 @@ def test_forced_reflection_adds_note_and_applies_guarded_change():
     assert state.self_notes()[-1]["text"] == outcome.discovery
     assert state.self_model()["traits"]["curiosa"] == 5
     assert state.self_model()["last_reflection_at"] == NOW
+    assert llm.calls[0]["reasoning_budget_tokens"] == 256
 
 
 def test_reflection_is_skipped_when_not_due():

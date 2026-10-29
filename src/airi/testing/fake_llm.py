@@ -42,27 +42,26 @@ class FakeLLM:
         self.calls = []  # dicts con messages/schema/max_tokens/temperature/...
 
     async def chat(self, messages, *, schema=None, max_tokens=None,
-                   temperature=None, disable_thinking=False, strict_schema=False,
-                   stream=False, force_disable_thinking=False):
+                   temperature=None, reasoning_budget_tokens=None, quick_turn=False,
+                   strict_schema=False, stream=False):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens,
-            temperature=temperature, disable_thinking=disable_thinking,
+            temperature=temperature, reasoning_budget_tokens=reasoning_budget_tokens,
+            quick_turn=quick_turn,
             strict_schema=strict_schema, stream=stream,
-            force_disable_thinking=force_disable_thinking,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
-                             temperature=None, disable_thinking=False,
-                             strict_schema=False, stream=False,
-                             force_disable_thinking=False):
+                             temperature=None, reasoning_budget_tokens=None,
+                             quick_turn=False, strict_schema=False, stream=False):
         call = {
             "messages": messages,
             "schema": schema,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "disable_thinking": disable_thinking,
-            "force_disable_thinking": force_disable_thinking,
+            "reasoning_budget_tokens": reasoning_budget_tokens,
+            "quick_turn": quick_turn,
             "strict_schema": strict_schema,
         }
         if stream:

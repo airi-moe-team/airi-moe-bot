@@ -1,0 +1,32 @@
+{
+  "feature": "llm-esfuerzo-razonamiento",
+  "generated_at": "2026-10-28T05:21:37Z",
+  "items": [
+    {
+      "id": "FB-LLM-002",
+      "title": "Cambiar a presupuestos por nivel y mantener razonamiento activo",
+      "severity": "major",
+      "impact": "El usuario requiere que low/medium/high representen presupuestos cuantitativos y que reasoning nunca se desactive, incluidos los turnos rápidos. Esto cambia el requisito aprobado de auto y el diseño basado en reasoning_effort.",
+      "recommendation": "Reformular los documentos para mantener reasoning activo en todos los modos. Proponer low=256, medium=1024, high=4096 tokens; auto usa low en turnos rápidos y presupuesto predeterminado sin cap explícito en turnos normales; on usa presupuesto predeterminado sin cap por petición. Reparaciones y reflexiones estructuradas usan low. Verificar que el backend instalado acepta thinking_budget_tokens sin budget CLI que lo anule.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "Ningún modo, turno rápido, reparación o llamada estructurada envía enable_thinking=false.",
+          "Definir los presupuestos propuestos low=256, medium=1024 y high=4096 tokens, sujetos a revisión humana.",
+          "auto mantiene reasoning activo, con presupuesto bajo en turnos rápidos; on usa el default sin cap por petición."
+        ],
+        "design": [
+          "Sustituir reasoning_effort por thinking_budget_tokens por petición.",
+          "Resolver presupuesto según modo y propósito sin apagar reasoning.",
+          "Confirmar el nombre y prioridad del parámetro para la versión del servidor instalada."
+        ],
+        "tasks": [
+          "Actualizar pruebas de payload y metadatos a presupuesto por petición.",
+          "Eliminar la desactivación de reasoning en turnos rápidos y todos los auxiliares.",
+          "Comprobar que max_tokens deja espacio para producir la respuesta después del presupuesto de reasoning."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

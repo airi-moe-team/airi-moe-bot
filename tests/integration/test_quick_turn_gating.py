@@ -44,7 +44,7 @@ def test_short_message_with_other_speaker_recently_uses_full_contract():
     prompt = llm.last_system_prompt
     assert "FORMATO DE SALIDA OBLIGATORIO" in prompt
     assert "TURNO BREVE" not in prompt
-    assert llm.calls[-1]["disable_thinking"] is False
+    assert llm.calls[-1]["quick_turn"] is False
 
 
 def test_short_message_with_reply_to_someone_else_uses_full_contract():

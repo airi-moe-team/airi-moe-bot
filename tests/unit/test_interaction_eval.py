@@ -254,7 +254,8 @@ def test_identity_baseline_and_candidate_keep_the_same_context():
     assert baseline_call["messages"][0] != candidate_call["messages"][0]
     assert baseline_call["schema"] == candidate_call["schema"]
     assert baseline_call["max_tokens"] == candidate_call["max_tokens"]
-    assert baseline_call["disable_thinking"] == candidate_call["disable_thinking"]
+    assert baseline_call["reasoning_budget_tokens"] == candidate_call["reasoning_budget_tokens"]
+    assert baseline_call["quick_turn"] == candidate_call["quick_turn"]
 
 
 def test_memory_snapshots_are_not_mutated_by_later_turns():

@@ -137,8 +137,9 @@ def test_short_turn_uses_compact_contract_and_output_cap():
     assert "FORMATO DE SALIDA OBLIGATORIO" not in prompt
     assert llm.calls[-1]["max_tokens"] == LLM_SHORT_MAX_TOKENS
     assert llm.calls[-1]["strict_schema"] is True
-    # El límite breve no deja sitio al razonamiento: debe desactivarse.
-    assert llm.calls[-1]["disable_thinking"] is True
+    # El servicio marca el turno rápido; `auto` asigna low sin apagar reasoning.
+    assert llm.calls[-1]["quick_turn"] is True
+    assert llm.calls[-1]["reasoning_budget_tokens"] is None
     # El historial compartido conserva etiquetas, con su explicación breve.
     assert "=== ETIQUETAS DE IDENTIDAD ===" in prompt
     assert "No atribuyas a una persona" in prompt
@@ -156,7 +157,7 @@ def test_long_turn_uses_full_contract():
     assert "FORMATO DE SALIDA OBLIGATORIO" in prompt
     assert "TURNO BREVE" not in prompt
     assert llm.calls[-1]["max_tokens"] is None
-    assert llm.calls[-1]["disable_thinking"] is False
+    assert llm.calls[-1]["quick_turn"] is False
 
 
 def test_prompt_variant_changes_only_system_message_not_quick_contract():
@@ -174,9 +175,9 @@ def test_prompt_variant_changes_only_system_message_not_quick_contract():
     current_call, candidate_call = (llm.calls[-1] for llm in llms)
     assert current_call["messages"][0]["content"] != candidate_call["messages"][0]["content"]
     assert current_call["messages"][1:] == candidate_call["messages"][1:]
-    for key in ("schema", "max_tokens", "temperature", "disable_thinking", "strict_schema"):
+    for key in ("schema", "max_tokens", "temperature", "reasoning_budget_tokens", "quick_turn", "strict_schema"):
         assert current_call[key] == candidate_call[key]
-    assert current_call["disable_thinking"] is False
+    assert current_call["quick_turn"] is False
     assert current_call["max_tokens"] is None
     assert all(
         call["messages"][1:] == llms[0].calls[0]["messages"][1:]
@@ -856,7 +857,7 @@ def test_system_prompt_includes_affinity_and_user():
 # ---------------------------------------------------------------------------
 
 
-def test_truncated_generation_retries_without_thinking():
+def test_truncated_generation_retries_with_low_effort():
     state, _ = make_state()
     llm = FakeLLM(
         replies=["", llm_json("Me quedé pensando, pero aquí estoy.")],
@@ -872,8 +873,8 @@ def test_truncated_generation_retries_without_thinking():
     assert result.skipped is False
     assert result.reply == "Me quedé pensando, pero aquí estoy."
     assert len(llm.calls) == 2
-    assert llm.calls[1]["disable_thinking"] is True
-    assert "sin razonar" in llm.calls[1]["messages"][-1]["content"]
+    assert llm.calls[1]["reasoning_budget_tokens"] == 256
+    assert "sin razonar" not in llm.calls[1]["messages"][-1]["content"]
 
 
 def test_normal_turn_ignores_stay_active_false():
@@ -911,7 +912,7 @@ def test_truncated_session_turn_retries_and_keeps_stay_active():
     assert result.reply == "Sigo aquí."
     assert result.stay_active is False
     assert len(llm.calls) == 2
-    assert llm.calls[1]["disable_thinking"] is True
+    assert llm.calls[1]["reasoning_budget_tokens"] == 256
     assert "stay_active" in llm.calls[1]["messages"][-1]["content"]
 
 

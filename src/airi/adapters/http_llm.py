@@ -19,7 +19,14 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from airi.domain.constants import env_flag, env_int
+from airi.domain.constants import (
+    LLM_REASONING_BUDGET_HIGH_TOKENS,
+    LLM_REASONING_BUDGET_LOW_TOKENS,
+    LLM_REASONING_BUDGET_MEDIUM_TOKENS,
+    LLM_REASONING_OUTPUT_RESERVE_TOKENS,
+    env_flag,
+    env_int,
+)
 from airi.ports.llm import LLMMeta
 
 log = logging.getLogger(__name__)
@@ -31,11 +38,13 @@ DEFAULT_BASE_URL = "http://127.0.0.1:7000"
 DEFAULT_MODEL = "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
 #: Perfiles de compatibilidad soportados.
 LLM_PROVIDERS = ("llama", "openai", "openai-compatible")
-#: Modos de razonamiento de `LLM_THINKING_MODE`:
-#: - `auto`: se desactiva solo en los turnos rápidos (comportamiento histórico).
-#: - `on`: razonamiento siempre activo (ignora los pedidos de desactivarlo).
-#: - `off`: razonamiento siempre desactivado.
-LLM_THINKING_MODES = ("auto", "on", "off")
+#: Modos de razonamiento de `LLM_THINKING_MODE`.
+LLM_THINKING_MODES = ("auto", "on", "low", "medium", "high")
+LLM_REASONING_BUDGETS = {
+    "low": LLM_REASONING_BUDGET_LOW_TOKENS,
+    "medium": LLM_REASONING_BUDGET_MEDIUM_TOKENS,
+    "high": LLM_REASONING_BUDGET_HIGH_TOKENS,
+}
 
 _ERROR_DETAIL_LIMIT = 300
 
@@ -411,25 +420,35 @@ class HttpLlmClient:
             return await response.json()
 
     async def chat(self, messages, *, schema=None, max_tokens=None, temperature=None,
-                   disable_thinking: bool = False,
-                   force_disable_thinking: bool = False,
+                   reasoning_budget_tokens: int | None = None,
+                   quick_turn: bool = False,
                    strict_schema: bool = False):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens, temperature=temperature,
-            disable_thinking=disable_thinking,
-            force_disable_thinking=force_disable_thinking,
+            reasoning_budget_tokens=reasoning_budget_tokens,
+            quick_turn=quick_turn,
             strict_schema=strict_schema,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
-                             temperature=None, disable_thinking: bool = False,
-                             force_disable_thinking: bool = False,
-                             strict_schema: bool = False, stream: bool = False):
+                             temperature=None,
+                             reasoning_budget_tokens: int | None = None,
+                             quick_turn: bool = False, strict_schema: bool = False,
+                             stream: bool = False):
+        if reasoning_budget_tokens is not None and (
+            not isinstance(reasoning_budget_tokens, int)
+            or isinstance(reasoning_budget_tokens, bool)
+            or reasoning_budget_tokens <= 0
+        ):
+            raise ValueError(
+                "reasoning_budget_tokens debe ser un entero positivo"
+            )
+        effective_max_tokens = max_tokens or self.max_output_tokens
         payload = {
             "model": self.model,
             "messages": messages,
-            self.max_tokens_field: max_tokens or self.max_output_tokens,
+            self.max_tokens_field: effective_max_tokens,
             "stream": bool(stream),
         }
         if not self.skip_temperature:
@@ -454,28 +473,29 @@ class HttpLlmClient:
                 }
             else:
                 payload["response_format"] = {"type": "json_object"}
-        # Extensión propietaria de llama.cpp/vLLM: fuera del perfil `llama`
-        # OpenAI y compatibles la rechazarían.
-        # `LLM_THINKING_MODE` pisa lo que pida el servicio: `on` nunca apaga el
-        # razonamiento y `off` lo apaga en todos los turnos.
+        # Extensiones específicas de llama.cpp; reasoning siempre queda activo.
+        effective_reasoning_budget = None
         if self.provider == "llama":
-            if self.thinking_mode == "off":
-                disable_thinking = True
-            elif self.thinking_mode == "on":
-                # El modo global manda en llamadas normales. Las reparaciones
-                # clasificadas pueden solicitar un override solo para esta POST.
-                disable_thinking = bool(force_disable_thinking)
-            elif force_disable_thinking:
-                disable_thinking = True
-        if disable_thinking and self.provider == "llama":
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
+            if reasoning_budget_tokens is not None:
+                effective_reasoning_budget = reasoning_budget_tokens
+            elif self.thinking_mode in LLM_REASONING_BUDGETS:
+                effective_reasoning_budget = LLM_REASONING_BUDGETS[self.thinking_mode]
+            elif self.thinking_mode == "auto" and quick_turn:
+                effective_reasoning_budget = LLM_REASONING_BUDGETS["low"]
+            payload["chat_template_kwargs"] = {"enable_thinking": True}
+            if effective_reasoning_budget is not None:
+                payload["thinking_budget_tokens"] = effective_reasoning_budget
+                payload[self.max_tokens_field] = max(
+                    effective_max_tokens,
+                    effective_reasoning_budget + LLM_REASONING_OUTPUT_RESERVE_TOKENS,
+                )
         if stream:
             return await self._chat_with_meta_stream(payload)
         data = await self.post(payload)
         choices = data.get("choices") or []
         if not choices:
             log.error("El servidor no devolvió choices")
-            return "", LLMMeta()
+            return "", LLMMeta(reasoning_budget_tokens=effective_reasoning_budget)
         choice = choices[0]
         message = choice.get("message") or {}
         content = message.get("content")
@@ -490,6 +510,7 @@ class HttpLlmClient:
                 else None
             ),
             reasoning_tokens=_reasoning_token_count(data.get("usage")),
+            reasoning_budget_tokens=effective_reasoning_budget,
         )
         return text, meta
 
@@ -570,4 +591,5 @@ class HttpLlmClient:
             reasoning_tokens=_reasoning_token_count(usage),
             reasoning_deltas=reasoning_deltas,
             content_deltas=content_deltas,
+            reasoning_budget_tokens=payload.get("thinking_budget_tokens"),
         )
