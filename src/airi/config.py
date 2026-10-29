@@ -74,6 +74,8 @@ class Settings:
     # Percepción temporal del prompt y zona IANA opcional (vacío = zona del sistema).
     time_context: bool = True
     timezone: str = ""
+    # Verificación semántica breve del borrador antes de publicarlo.
+    conversation_review: bool = True
 
     @property
     def state_path(self) -> str:
@@ -107,4 +109,5 @@ class Settings:
             ),
             time_context=_env_flag_once("AIRI_TIME_CONTEXT", True),
             timezone=_env_first("AIRI_TIMEZONE", default=""),
+            conversation_review=_env_flag_once("AIRI_CONVERSATION_REVIEW", True),
         )

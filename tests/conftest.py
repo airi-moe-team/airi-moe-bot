@@ -15,3 +15,6 @@ dotenv.load_dotenv = lambda *args, **kwargs: False
 # que la suite no dependa del .env real.
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 os.environ.setdefault("CHANNEL_ID", "1")
+# Las pruebas históricas no deben consumir una respuesta adicional del FakeLLM;
+# los tests específicos de conversation_review habilitan explícitamente el flag.
+os.environ.setdefault("AIRI_CONVERSATION_REVIEW", "false")

@@ -102,6 +102,9 @@ def replay(spec):
         if allow_web and "query" in turn and needs_web_search(text):
             llm.replies.append(turn["query"])
         llm.replies.append(turn["raw_llm"])
+        # Respuestas de llamadas de reparación en el mismo orden en que las
+        # dispara el servicio (parse_repair / quality_repair).
+        llm.replies.extend(turn.get("repair_raw_llm", []))
 
         result = asyncio.run(service.run_turn(
             user, [(user, text)],

@@ -36,9 +36,31 @@ DISCORD_ASSET_URL_RE = re.compile(
 )
 
 
+#: Marcas de plantilla que se escapan del servidor local (ChatML y similares).
+MODEL_ARTIFACT_RE = re.compile(
+    r"<\|(?:im_end|im_start|endoftext)\|>|</s>",
+    re.IGNORECASE,
+)
+#: Prefijo de rol al inicio de una línea. A mitad de frase no se toca.
+ROLE_PREFIX_RE = re.compile(
+    r"^[ \t]*(?:###[ \t]*)?(?:User|Assistant|Human)[ \t]*:[ \t]*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def strip_model_artifacts(text):
+    """Elimina marcas de plantilla y prefijos de rol del texto del modelo."""
+    if not isinstance(text, str):
+        return ""
+    text = ROLE_PREFIX_RE.sub("", text)
+    text = MODEL_ARTIFACT_RE.sub("", text)
+    return text.strip()
+
+
 def clean_reply(text):
     if not isinstance(text, str):
         return ""
+    text = strip_model_artifacts(text)
     text = DISCORD_ASSET_LINK_RE.sub("", text)
     text = DISCORD_CUSTOM_EMOJI_RE.sub("", text)
     text = DISCORD_ASSET_URL_RE.sub("", text)
@@ -72,6 +94,48 @@ def limit_narrative_actions(text, max_actions=1):
     result = re.sub(r" +([,.;!?])", r"\1", result)
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result.strip()
+
+def strip_trailing_question(text: str) -> str:
+    """Recorta la oración interrogativa final.
+
+    Red de seguridad determinista contra el patrón «preguntón» (charla casual
+    que encadena cierres con pregunta): si la respuesta termina en `?`, se
+    elimina esa oración final —span desde el último `¿` de apertura— y el resto
+    se devuelve limpio. Si la pregunta no lleva `¿` o `¿` está al inicio, cae al
+    recorte por delimitadores de oración (., !, ¡, ~, * y salto de línea).
+    Nunca devuelve vacío: si no queda texto fuera de la pregunta, se devuelve
+    la respuesta tal cual.
+    """
+    cleaned = (text or "").rstrip()
+    if not cleaned or not cleaned.endswith("?"):
+        return text
+
+    # 1) Delimitador natural: el último '¿' que abre la oración final.
+    open_idx = cleaned.rfind("¿")
+    if open_idx > 0:
+        remainder = cleaned[:open_idx].rstrip()
+        return remainder if remainder.strip() else text
+
+    # 2) Fallback sin '¿': última oración por delimitadores de cierre.
+    sentence_start = max(
+        cleaned.rfind(ch, 0, -1) for ch in (".", "!", "¡", "\n", "*", "~")
+    )
+    if sentence_start < 0:
+        return text
+    remainder = cleaned[:sentence_start + 1].rstrip()
+    return remainder if remainder.strip() else text
+
+
+def strip_trailing_questions(text: str, *, max_rounds: int = 4) -> str:
+    """Recorta varias preguntas encadenadas al final de una respuesta."""
+    result = text
+    for _ in range(max_rounds):
+        trimmed = strip_trailing_question(result)
+        if trimmed == result:
+            break
+        result = trimmed
+    return result
+
 
 def strip_repetition_loop(text):
     """Trunca la respuesta si detecta un bucle de repetición al final."""

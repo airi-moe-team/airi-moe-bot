@@ -7,6 +7,7 @@ _ENV_NAMES = (
     "TRACE_DIR",
     "AIRI_TRACE_KEEP_LAST",
     "TRACE_KEEP_LAST",
+    "AIRI_CONVERSATION_REVIEW",
 )
 
 
@@ -20,6 +21,13 @@ def test_settings_defaults(monkeypatch):
     settings = Settings.from_env()
     assert settings.trace_dir == ""
     assert settings.trace_keep_last == 500
+    assert settings.conversation_review is True
+
+
+def test_settings_can_disable_conversation_review(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AIRI_CONVERSATION_REVIEW", "false")
+    assert Settings.from_env().conversation_review is False
 
 
 def test_settings_reads_airi_names(monkeypatch):

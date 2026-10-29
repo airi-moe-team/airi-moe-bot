@@ -105,6 +105,11 @@ class TurnEvent:
     #: Una entrada por invocación al modelo (propósito, duración, finish_reason,
     #: timings). Sin texto de prompt, historial, content ni reasoning.
     llm_calls: list = field(default_factory=list)
+    # Revisión semántica y presupuesto de reparaciones.
+    review_on_topic: bool | None = None
+    review_issues: list = field(default_factory=list)
+    review_ms: int | None = None
+    repair_exhausted: bool = False
 
     # Parseo
     parsed: dict = field(default_factory=dict)

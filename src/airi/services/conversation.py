@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import traceback
 import uuid
@@ -48,10 +47,14 @@ from airi.domain.llm_output import (
     ModelOutput,
     assistant_history_content,
     assistant_reply_text,
+    extract_json_object,
     parse_model_output,
     parse_session_output,
 )
-from airi.domain.narrative_claims import disconnect_claim_problem
+from airi.domain.narrative_claims import (
+    disconnect_claim_problem,
+    strip_leaving_claims,
+)
 from airi.domain.notices import (
     level_up_notice,
     meet_notice,
@@ -73,9 +76,19 @@ from airi.domain.text_filters import (
     clean_reply,
     limit_narrative_actions,
     strip_repetition_loop,
+    strip_trailing_questions,
 )
 from airi.domain.time_perception import TimeConfig, build_temporal_context
 from airi.domain.turn_guard import DateFingerprint, fingerprint_of
+from airi.domain.turn_quality import (
+    QualityIssue,
+    ReviewResult,
+    merge_issues,
+    parse_review,
+    quality_issues,
+    reply_repeats_history,
+    token_overlap,
+)
 from airi.domain.web import (
     detect_search_intent,
     recent_topic_terms,
@@ -279,6 +292,67 @@ _STRICT_RETRY_STATUSES = (400, 404, 405, 415, 422, 501)
 _NEGATIVE_AFFINITY_LEVELS = ("Distante", "Molesta", "Enfadada", "Bloqueada")
 
 
+PARSE_REPAIR_PROMPTS = {
+    "truncation": (
+        "La generación anterior se agotó antes de completar la respuesta. "
+        "Responde brevemente, ve directo al objeto JSON completo, incluye un "
+        "reply natural para el último mensaje y cierra el JSON. No añadas texto externo."
+    ),
+    "empty": (
+        "La respuesta anterior llegó vacía o sin reply legible. Devuelve un "
+        "objeto JSON completo con un reply breve, natural y nuevo que reaccione "
+        "al último mensaje. No añadas texto externo."
+    ),
+    "invalid_json": (
+        "La salida anterior no se pudo interpretar como JSON utilizable. "
+        "Devuelve únicamente el objeto JSON completo requerido."
+    ),
+}
+QUALITY_REPAIR_PROMPT = (
+    "Revisa tu borrador según los problemas y evidencias indicados. Corrige "
+    "solo lo necesario, conserva el resto de la respuesta, tu voz y el hilo. "
+    "No menciones esta corrección ni te disculpes por ella. Devuelve únicamente "
+    "el objeto JSON completo del esquema.\n"
+)
+CONVERSATION_REVIEW_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "on_topic": {"type": "boolean"},
+        "right_addressee": {"type": "boolean"},
+        "coherent": {"type": "boolean"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["off_topic", "wrong_addressee", "nonsense", "self_reset"],
+                    },
+                    "impact": {
+                        "type": "string",
+                        "enum": ["breaks_thread", "wrong_person", "incoherent", "self_reset"],
+                    },
+                    "evidence": {"type": "string"},
+                },
+                "required": ["kind", "impact", "evidence"],
+            },
+        },
+    },
+    "required": ["on_topic", "right_addressee", "coherent", "issues"],
+}
+CONVERSATION_REVIEW_SYSTEM_PROMPT = (
+    "Eres un evaluador neutral de coherencia conversacional. No escribas una "
+    "respuesta ni juzgues el estilo. Compara el borrador con el hilo reciente. "
+    "Aprueba por defecto: marca solo fallos claros de tema, destinatario, "
+    "coherencia o reinicio de identidad. Cada issue debe incluir una cita "
+    "literal del borrador; sin cita, no hay issue. Ante la duda, aprueba. "
+    "Devuelve solo el JSON del esquema."
+)
+
+
 def guaranteed_gif(gif_type, level_name):
     """Devuelve siempre una emoción válida; `none` se sustituye por una afín.
 
@@ -295,152 +369,20 @@ def guaranteed_gif(gif_type, level_name):
     return "nope" if level_name in _NEGATIVE_AFFINITY_LEVELS else "happy"
 
 
-DISCONNECT_REPAIR_PROMPT = (
-    "Tu respuesta anterior no fue coherente con tu decisión de marcharte. "
-    "Devuelve de nuevo el objeto JSON completo: si en \"reply\" dices que te "
-    "vas, que te duermes o que te desconectas, \"disconnect.leave\" debe ser "
-    "true con un motivo breve; si te quedas, \"leave\" debe ser false y no "
-    "debes despedirte como si te fueras. No añadas texto fuera del JSON."
-)
-
-QUESTION_CLOSE_REPAIR_PROMPT = (
-    "Estás encadenando cierres con pregunta en una charla casual y suena a "
-    "asistente, no a persona. Devuelve de nuevo el objeto JSON completo (mismo "
-    "esquema, mismas reglas) reescribiendo SOLO el cierre de \"reply\": "
-    "elimina la pregunta del final —también las retóricas tipo \"¿no?\", "
-    "\"¿verdad?\"— y termina con una afirmación, tu opinión o una broma que "
-    "de a la otra persona la opción de responder o no. Si ya había una "
-    "pregunta a mitad del mensaje que aporte algo concreto, tampoco la "
-    "acumules: responde sin interrogar salvo que te falte un dato esencial "
-    "para continuar. No escribas texto fuera del JSON."
-)
-
-EMPTY_REPLY_REPAIR_PROMPT = (
-    "La respuesta llegó vacía o sin \"reply\" legible. Devuelve de nuevo el "
-    "objeto JSON completo con un \"reply\" breve, natural y NUEVO que reaccione "
-    "al último mensaje de la conversación; no sirve responder con \"none\", con "
-    "asteriscos solos ni con cadenas vacías. No escribas texto fuera del JSON."
-)
-
-REPEAT_REPAIR_PROMPT = (
-    "La respuesta repite casi literal un turno anterior del historial y eso "
-    "está prohibido. Devuelve de nuevo el objeto JSON completo con una "
-    "respuesta NUEVA: otra apertura, otro enfoque y otro cierre; reacciona a lo "
-    "que la persona dijo AHORA, no a los turnos viejos. Está prohibido "
-    "reutilizar frases tal cual de respuestas anteriores. No escribas texto "
-    "fuera del JSON."
-)
-
-#: Reintento único cuando la generación agotó el techo de tokens. El caso típico
-#: es que el razonamiento (thinking) se comió todo el presupuesto y no quedó
-#: espacio para el JSON final: la respuesta llega vacía con finish_reason
-#: "length". Se solicita esfuerzo bajo y se pide ir directo al JSON.
-TRUNCATED_REPAIR_PROMPT = (
-    "Tu generación anterior se agotó razonando y no llegó a escribir la "
-    "respuesta. Responde AHORA con brevedad: ve directo al objeto JSON completo, "
-    "con un \"reply\" breve y suficiente para el último mensaje, y ciérralo. No "
-    "escribas texto fuera del JSON."
-)
-TRUNCATED_REPAIR_SESSION_PROMPT = (
-    TRUNCATED_REPAIR_PROMPT
-    + " Incluye también \"stay_active\" como booleano."
-)
-
-#: Longitud mínima (normalizada) para considerar copia literal de un turno.
-REPEAT_PREFIX_MIN = 40
-
-
-def _normalized_reply(text) -> str:
-    """Normaliza una respuesta para compararla contra turnos previos."""
-    t = (text or "").lower()
-    # Las acciones narrativas y la puntuación no cuentan para el parecido.
-    t = re.sub(r"\*[^*]*\*", " ", t)
-    t = re.sub(r"[^\w\s¿?¡!~]", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
-
-
-def reply_repeats_history(
-    text, history, *, min_prefix: int = REPEAT_PREFIX_MIN
-) -> bool:
-    """True si `text` copia el arranque de alguna respuesta anterior de Airi.
-
-    Comparación por prefijo normalizado: detecta el patrón observado en
-    producción (abrir con el mismo enunciado que un turno viejo y variar solo
-    el final). Respuestas muy cortas no se marcan: los saludos pequeños se
-    solapan por naturaleza.
-    """
-    norm = _normalized_reply(text)
-    if len(norm) < min_prefix:
-        return False
-    for msg in history or []:
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
-            continue
-        content = msg.get("content")
-        prev = content
-        if isinstance(content, str) and content.lstrip().startswith("{"):
-            try:
-                data = json.loads(content)
-            except ValueError:
-                data = None
-            if isinstance(data, dict):
-                prev = data.get("reply")
-        prev_norm = _normalized_reply(prev if isinstance(prev, str) else "")
-        if len(prev_norm) < min_prefix:
-            continue
-        if (
-            norm.startswith(prev_norm[:min_prefix])
-            or prev_norm.startswith(norm[:min_prefix])
-        ):
-            return True
-    return False
-
-
-def strip_trailing_question(text: str) -> str:
-    """Recorta la oración interrogativa final.
-
-    Red de seguridad determinista contra el patrón «preguntón» (charla casual
-    que encadena cierres con pregunta): si tras la regeneración la respuesta
-    sigue terminando en `?`, se elimina esa oración final —span desde el último
-    `¿` de apertura— y el resto se devuelve limpio. Si la pregunta no lleva `¿`
-    o `¿` está al inicio, cae al recorte por delimitadores de oración
-    (., !, ¡, ~, * y salto de línea). Nunca devuelve vacío: si no queda texto
-    fuera de la pregunta, se devuelve la respuesta tal cual.
-    """
-    cleaned = (text or "").rstrip()
-    if not cleaned or not cleaned.endswith("?"):
-        return text
-
-    # 1) Delimitador natural: el último '¿' que abre la oración final.
-    open_idx = cleaned.rfind("¿")
-    if open_idx > 0:
-        remainder = cleaned[:open_idx].rstrip()
-        return remainder if remainder.strip() else text
-
-    # 2) Fallback sin '¿': última oración por delimitadores de cierre.
-    sentence_start = max(
-        cleaned.rfind(ch, 0, -1) for ch in (".", "!", "¡", "\n", "*", "~")
-    )
-    if sentence_start < 0:
-        return text
-    remainder = cleaned[:sentence_start + 1].rstrip()
-    return remainder if remainder.strip() else text
-
-
-def strip_trailing_questions(text: str, *, max_rounds: int = 4) -> str:
-    """Recorta varias preguntas encadenadas al final de una respuesta."""
-    result = text
-    for _ in range(max_rounds):
-        trimmed = strip_trailing_question(result)
-        if trimmed == result:
-            break
-        result = trimmed
-    return result
-
-
 def _read_only_memories(memories, user_id) -> list:
     """Vista de memorias que no crea una entrada vacía durante la generación."""
     entries = memories.get(str(user_id)) if isinstance(memories, dict) else None
     return list(entries) if isinstance(entries, list) else []
+
+
+@dataclass(frozen=True)
+class RepairOutcome:
+    raw: str
+    meta: LLMMeta
+    output: ModelOutput
+    stay_active: bool | None = None
+    accepted: bool = True
+    reason: str = ""
 
 
 @dataclass
@@ -568,7 +510,8 @@ class ConversationService:
         # Ámbito de la afinidad visible en el prompt: por defecto, solo la del
         # destinatario del turno (el resto de interlocutores, desconocidos).
         self.affinity_scope = affinity_scope or AFFINITY_VIEW_SCOPE
-        settings = Settings.from_env() if time_config is None else None
+        settings = Settings.from_env()
+        self.conversation_review_enabled = settings.conversation_review
         self.time_config = time_config or TimeConfig(
             enabled=settings.time_context,
             timezone=settings.timezone,
@@ -916,7 +859,10 @@ class ConversationService:
             t0 = _time.perf_counter()
             self._log_module("llm_call", "activated")
             try:
-                system_prompt, raw_llm, meta, output, stay_active, llm_calls = await self._generate(
+                (
+                    system_prompt, raw_llm, meta, output, stay_active, llm_calls,
+                    repair_telemetry,
+                ) = await self._generate(
                     prompt_history, web_context, user, date_session, delta_max,
                     extra_note=extra_note,
                     relationship_view=relationship_view,
@@ -927,6 +873,7 @@ class ConversationService:
                     max_tokens_override=ctx.llm_max_tokens,
                     conversation_mode=getattr(ctx, "conversation_mode", "normal"),
                     conversation_reason=getattr(ctx, "conversation_reason", ""),
+                    turn_kind=getattr(ctx, "kind", "message"),
                     temporal=temporal,
                 )
             except Exception as exc:
@@ -955,6 +902,10 @@ class ConversationService:
             ev.llm_reasoning_present = meta.reasoning_present
             ev.llm_reasoning_tokens = meta.reasoning_tokens
             ev.llm_calls = llm_calls
+            ev.review_on_topic = repair_telemetry["review_on_topic"]
+            ev.review_issues = repair_telemetry["review_issues"]
+            ev.review_ms = repair_telemetry["review_ms"]
+            ev.repair_exhausted = repair_telemetry["repair_exhausted"]
             ev.parse_ok = output.reply is not None
             ev.parsed = {
                 "reply": output.reply,
@@ -971,8 +922,8 @@ class ConversationService:
                 "romantic_update": output.romantic_update,
                 "relationship_action": output.relationship_action,
             }
-            # Sin filtro de duplicados: si el modelo repite, se publica igual.
-            # Solo se cortan bucles internos de palabras dentro de la respuesta.
+            # La repetición literal se filtra antes mediante quality_repair;
+            # aquí solo se cortan bucles degenerados dentro del propio texto.
             answer = strip_repetition_loop(output.reply)
             if not answer:
                 log.info("Se omitió una respuesta duplicada sin contenido nuevo.")
@@ -1533,6 +1484,7 @@ class ConversationService:
         reasoning_budget_tokens=None,
         quick_turn=False,
         stream_llm=False,
+        repair_reason=None,
     ):
         """Una invocación al modelo, registrada en `calls` con su propósito.
 
@@ -1568,12 +1520,14 @@ class ConversationService:
                     calls, purpose, None, started, max_tokens,
                     requested_reasoning_budget, requested_quick_turn,
                     status="failed", error_type=type(exc).__name__,
+                    repair_reason=repair_reason,
                 )
                 raise
             meta = LLMMeta()
             self._record_call(
                 calls, purpose, meta, started, max_tokens,
-                requested_reasoning_budget, requested_quick_turn
+                requested_reasoning_budget, requested_quick_turn,
+                repair_reason=repair_reason,
             )
             return raw, meta
         started = time.perf_counter()
@@ -1594,6 +1548,7 @@ class ConversationService:
                 calls, purpose, None, started, max_tokens,
                 requested_reasoning_budget, requested_quick_turn,
                 status="failed", error_type=type(exc).__name__,
+                repair_reason=repair_reason,
             )
             if not self._can_retry_without_strict(exc):
                 raise
@@ -1614,17 +1569,19 @@ class ConversationService:
             self._record_call(
                 calls, f"{purpose}:json_object_retry", meta, started,
                 max_tokens, requested_reasoning_budget, requested_quick_turn,
+                repair_reason=repair_reason,
             )
             return raw, meta
         self._record_call(
             calls, purpose, meta, started, max_tokens,
-            requested_reasoning_budget, requested_quick_turn
+            requested_reasoning_budget, requested_quick_turn,
+            repair_reason=repair_reason,
         )
         return raw, meta
 
     def _record_call(
         self, calls, purpose, meta, started, max_tokens, reasoning_budget_tokens,
-        quick_turn=False, *, status="ok", error_type=None,
+        quick_turn=False, *, status="ok", error_type=None, repair_reason=None,
     ):
         """Añade a `calls` solo metadatos: nunca prompt, content ni reasoning."""
         if calls is None:
@@ -1635,6 +1592,7 @@ class ConversationService:
         calls.append(
             {
                 "purpose": purpose,
+                "repair_reason": repair_reason,
                 "status": status,
                 "duration_ms": int(
                     round((time.perf_counter() - started) * 1000)
@@ -1696,6 +1654,7 @@ class ConversationService:
         max_tokens_override: int | None = None,
         conversation_mode="normal",
         conversation_reason="",
+        turn_kind="message",
         temporal=None,
     ):
         now = self.clock() if now is None else now
@@ -1823,6 +1782,12 @@ class ConversationService:
             else LLM_SHORT_MAX_TOKENS if quick else None
         )
         calls: list[dict] = []
+        repair_telemetry = {
+            "review_on_topic": None,
+            "review_issues": [],
+            "review_ms": None,
+            "repair_exhausted": False,
+        }
         raw, meta = await self._chat(
             calls,
             "primary",
@@ -1835,145 +1800,146 @@ class ConversationService:
         first_meta = meta
         stay_active = True
         if session_mode:
-            output, stay_active, _valid = parse_session_output(raw, delta_max=delta_max)
+            output, stay_active, session_valid = parse_session_output(raw, delta_max=delta_max)
         else:
+            session_valid = True
             output = parse_model_output(
                 raw,
                 delta_max=delta_max,
-                allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+                allow_raw_fallback=False,
             )
         self._log_module("parsing", "activated", parse_ok=output.reply is not None)
-        # Corte por techo de tokens: normalmente el razonamiento se comió todo
-        # el presupuesto y no quedó espacio para el JSON. Se hace UNA sola
-        # regeneración con esfuerzo bajo, también en turnos de sesión (antes no
-        # tenían ninguna red).
-        retried_truncation = False
+        # Una sola política de parseo cubre truncamiento, reply vacío y JSON inválido.
         if (
-            getattr(meta, "finish_reason", None) == "length"
-            and not (output.reply or "").strip()
+            not session_mode
+            or getattr(meta, "finish_reason", None) == "length"
+            or not session_valid
         ):
-            retried_truncation = True
-            repair = await self._retry_after_truncation(
-                messages,
-                session_mode=session_mode,
+            if getattr(meta, "finish_reason", None) == "length" and not (output.reply or "").strip():
+                parse_symptom = "truncation"
+            elif session_mode and not session_valid:
+                parse_symptom = "invalid_json"
+            elif not (output.reply or "").strip():
+                parsed_raw = extract_json_object(raw) if isinstance(raw, str) else None
+                parse_symptom = (
+                    "empty"
+                    if not isinstance(raw, str) or not raw.strip()
+                    or (isinstance(parsed_raw, dict) and parsed_raw.get("reply") == "")
+                    else "invalid_json"
+                )
+            else:
+                parse_symptom = None
+            if parse_symptom is not None:
+                repaired = await self._repair(
+                    calls,
+                    "parse",
+                    messages=messages,
+                    schema=schema,
+                    delta_max=delta_max,
+                    max_tokens=request_tokens,
+                    session_mode=session_mode,
+                    symptom=parse_symptom,
+                    stream_llm=stream_llm,
+                )
+                if repaired is not None and repaired.accepted:
+                    raw, meta, output = repaired.raw, repaired.meta, repaired.output
+                    if repaired.stay_active is not None:
+                        stay_active = repaired.stay_active
+                    self._log_module("parsing", "activated", parse_ok=True)
+                else:
+                    repair_telemetry["repair_exhausted"] = True
+
+        # Los cierres interrogativos repetidos y las despedidas incoherentes
+        # reciben parche determinista antes de la revisión semántica.
+        previous_question = (
+            not session_mode
+            and not isinstance(date_session, dict)
+            and domain_prompts.last_assistant_reply_ended_with_question(history)
+        )
+        if output.reply and previous_question and output.reply.rstrip().endswith("?"):
+            trimmed = strip_trailing_questions(output.reply)
+            if trimmed != output.reply:
+                output = output._replace(reply=trimmed)
+
+        deterministic_issues = quality_issues(
+            output.reply or "", history,
+            previous_closed_with_question=False,
+        )
+        if output.reply and disconnect_claim_problem(output.reply, bool(output.disconnect)):
+            deterministic_issues.append(
+                QualityIssue(
+                    "disconnect", "incoherent", output.reply, "deterministic"
+                )
+            )
+
+        if output.reply and self._should_review(
+            in_date=isinstance(date_session, dict),
+            quick=quick,
+            kind=turn_kind,
+            reply=output.reply,
+            session_mode=session_mode,
+        ):
+            review_started = time.perf_counter()
+            review = await self._review(
+                calls, history=history, draft=output.reply, stream_llm=stream_llm
+            )
+            repair_telemetry["review_ms"] = int(
+                round((time.perf_counter() - review_started) * 1000)
+            )
+            if review.valid:
+                repair_telemetry["review_on_topic"] = review.on_topic
+                repair_telemetry["review_issues"] = [
+                    {"kind": issue.kind, "impact": issue.impact, "evidence": issue.evidence}
+                    for issue in review.issues
+                ]
+            if calls and calls[-1].get("purpose") == "conversation_review":
+                calls[-1]["review_on_topic"] = (
+                    review.on_topic if review.valid else None
+                )
+                calls[-1]["review_issues"] = repair_telemetry["review_issues"]
+                calls[-1]["review_ms"] = repair_telemetry["review_ms"]
+            if review.valid:
+                deterministic_issues = list(
+                    merge_issues(deterministic_issues, review.issues)
+                )
+
+        repairable = tuple(
+            issue for issue in deterministic_issues
+            if issue.kind not in {"question_close"}
+        )
+        if output.reply and repairable:
+            repaired = await self._repair(
+                calls,
+                "quality",
+                messages=messages,
                 schema=schema,
                 delta_max=delta_max,
                 max_tokens=request_tokens,
+                session_mode=session_mode,
+                issues=repairable,
+                draft=raw if isinstance(raw, str) else "",
                 stream_llm=stream_llm,
-                calls=calls,
             )
-            if repair is not None:
-                raw, meta, output, stay_active = repair
-                self._log_module("parsing", "activated", parse_ok=True)
-        # Red de seguridad anti-interrogatorio: en charla casual, si Airi ya
-        # cerró con pregunta el turno anterior y vuelve a hacerlo, se pide UNA
-        # regeneración sin cierre interrogativo (las citas quedan fuera: ahí la
-        # conversación puede pedir respuestas).
-        if (
-            (not session_mode)
-            and not isinstance(date_session, dict)
-            and domain_prompts.last_assistant_reply_ended_with_question(history)
-            and (output.reply or "").rstrip().endswith("?")
-        ):
-            close_repair_messages = [
-                *messages,
-                {"role": "user", "content": QUESTION_CLOSE_REPAIR_PROMPT},
-            ]
-            try:
-                fixed_raw, fixed_meta = await self._chat(
-                    calls,
-                    "question_close_repair",
-                    close_repair_messages,
-                    schema=schema,
-                    max_tokens=request_tokens,
-                    stream_llm=stream_llm,
-                )
-                fixed = parse_model_output(
-                    fixed_raw,
-                    delta_max=delta_max,
-                    allow_raw_fallback=(
-                        getattr(fixed_meta, "finish_reason", None) != "length"
-                    ),
-                )
-                if (fixed.reply or "").strip():
-                    raw = fixed_raw
-                    meta = fixed_meta
-                    output = fixed
-                    # Última garantía determinista: si aun así cierra con
-                    # pregunta, se recortan las oraciones interrogativas
-                    # finales (puede haber más de una encadenada).
-                    if (output.reply or "").rstrip().endswith("?"):
-                        trimmed = strip_trailing_questions(output.reply)
-                        if trimmed != output.reply:
-                            output = output._replace(reply=trimmed)
-            except Exception:
-                if stream_llm:
-                    raise
-                log.warning("No se pudo reparar el cierre interrogatorio")
+            if repaired is not None and repaired.accepted:
+                raw, meta, output = repaired.raw, repaired.meta, repaired.output
+                if repaired.stay_active is not None:
+                    stay_active = repaired.stay_active
+            else:
+                repair_telemetry["repair_exhausted"] = True
 
-        # Reparaciones de calidad restantes (una regeneración cada una, si
-        # produce material mejor que lo actual):
-        # 1) Respuesta vacía: reintentar con aviso explícito antes de omitir.
-        #    Si ya se reintentó por truncamiento, no se apila otra llamada.
-        if not session_mode and not output.reply and not retried_truncation:
-            repair = await self._repair_regenerate(
-                messages, EMPTY_REPLY_REPAIR_PROMPT,
-                delta_max=delta_max, max_tokens=request_tokens,
-                stream_llm=stream_llm,
-                calls=calls,
-                purpose="empty_reply_repair",
-            )
-            if repair is not None:
-                raw, meta, output = repair
-        # 2) Copia casi literal de un turno anterior: regenerar.
-        elif not session_mode and reply_repeats_history(output.reply, history):
-            repair = await self._repair_regenerate(
-                messages, REPEAT_REPAIR_PROMPT,
-                delta_max=delta_max, max_tokens=request_tokens,
-                stream_llm=stream_llm,
-                calls=calls,
-                purpose="repeat_reply_repair",
-            )
-            if repair is not None:
-                raw, meta, output = repair
-        problem = disconnect_claim_problem(
-            output.reply or "", bool(output.disconnect)
-        )
-        if problem:
-            log.warning("Salida incoherente sobre la marcha: %s", problem)
-            repair_messages = [
-                *messages,
-                {
-                    "role": "user",
-                    "content": f"{DISCONNECT_REPAIR_PROMPT}\n\nProblema: {problem}",
-                },
-            ]
-            try:
-                repaired_raw, repaired_meta = await self._chat(
-                    calls,
-                    "disconnect_repair",
-                    repair_messages,
-                    schema=schema,
-                    max_tokens=request_tokens,
-                    stream_llm=stream_llm,
-                )
-                repaired = parse_model_output(
-                    repaired_raw,
-                    delta_max=delta_max,
-                    allow_raw_fallback=(
-                        getattr(repaired_meta, "finish_reason", None) != "length"
-                    ),
-                )
-                if not disconnect_claim_problem(
-                    repaired.reply or "", bool(repaired.disconnect)
-                ):
-                    raw = repaired_raw
-                    meta = repaired_meta
-                    output = repaired
-            except Exception:
-                if stream_llm:
-                    raise
-                log.warning("No se pudo reparar la coherencia de la marcha")
+        # Última garantía determinista; la marcha se recorta solo si el residuo
+        # es una frase publicable. El fallo de ese recorte se conserva como issue
+        # para el siguiente bloque de agotamiento/telemetría.
+        if output.reply and previous_question and output.reply.rstrip().endswith("?"):
+            trimmed = strip_trailing_questions(output.reply)
+            if trimmed != output.reply:
+                output = output._replace(reply=trimmed)
+        if output.reply and not output.disconnect:
+            stripped, valid_strip = strip_leaving_claims(output.reply)
+            if valid_strip and stripped != output.reply:
+                output = output._replace(reply=stripped)
+            elif not valid_strip:
+                repair_telemetry["repair_exhausted"] = True
 
         if stream_llm:
             # TTFT describe la primera solicitud, aunque haya una regeneración.
@@ -1993,6 +1959,7 @@ class ConversationService:
                 ),
                 True,
                 calls,
+                repair_telemetry,
             )
         # stay_active solo es significativo en modo sesión; en modo normal se
         # conserva el valor por defecto.
@@ -2002,93 +1969,144 @@ class ConversationService:
             limited = limit_narrative_actions(output.reply)
             if limited != output.reply:
                 output = output._replace(reply=limited)
-        return system_prompt, raw if isinstance(raw, str) else None, meta, output, stay_active, calls
-
-    async def _retry_after_truncation(
-        self, messages, *, session_mode, schema, delta_max, max_tokens,
-        stream_llm=False, calls=None,
-    ):
-        """Una regeneración cuando la generación se cortó por longitud.
-
-        El techo de tokens se agotó (normalmente razonando) sin dejar un
-        `reply` utilizable. Se reintenta desactivando el thinking y pidiendo
-        explícitamente una respuesta breve con el JSON completo. Devuelve
-        `(raw, meta, output, stay_active)` o `None` si tampoco hay respuesta.
-        """
-        note = (
-            TRUNCATED_REPAIR_SESSION_PROMPT
-            if session_mode
-            else TRUNCATED_REPAIR_PROMPT
+        return (
+            system_prompt,
+            raw if isinstance(raw, str) else None,
+            meta,
+            output,
+            stay_active,
+            calls,
+            repair_telemetry,
         )
-        repair_messages = [*messages, {"role": "user", "content": note}]
-        log.warning(
-            "Generación cortada por longitud sin respuesta; se reintenta "
-            "solicitando esfuerzo de razonamiento bajo."
+
+    def _should_review(
+        self, *, in_date, quick, kind, reply, session_mode=False
+    ) -> bool:
+        """Decide si el texto es conversacional y merece revisión semántica."""
+        if not self.conversation_review_enabled or not (reply or "").strip():
+            return False
+        if quick or in_date:
+            return False
+        if kind in {"date_action", "scene_select", "command"}:
+            return False
+        # spectator/active/proactive son interacciones conversacionales válidas;
+        # `session_mode` no las excluye, pero el silencio sí se excluyó arriba.
+        return True
+
+    async def _review(self, calls, *, history, draft, stream_llm=False):
+        """Juez corto y sin personalidad; cualquier fallo abre el paso."""
+        if not isinstance(draft, str) or not draft.strip():
+            return ReviewResult(valid=False)
+        lines = []
+        for msg in (history or [])[-10:]:
+            if not isinstance(msg, Mapping):
+                continue
+            role = msg.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            author = msg.get("author_name")
+            if not isinstance(author, str) or not author.strip():
+                author = "Usuario" if role == "user" else "Airi"
+            content = (
+                msg.get("content", "")
+                if role == "user"
+                else assistant_reply_text(msg.get("content", ""))
+            )
+            if not isinstance(content, str) or not content.strip():
+                continue
+            content = " ".join(content.split())[:350]
+            lines.append(f"{author} ({role}): {content}")
+        transcript = "\n".join(lines) or "(sin historial previo)"
+        user_prompt = (
+            "HILO RECIENTE:\n" + transcript + "\n\nBORRADOR:\n" + draft[:700]
         )
         try:
-            raw, meta = await self._chat(
+            raw, _meta = await self._chat(
                 calls,
-                "truncation_repair",
-                repair_messages,
-                schema=schema,
-                max_tokens=max_tokens,
+                "conversation_review",
+                [
+                    {"role": "system", "content": CONVERSATION_REVIEW_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                schema=CONVERSATION_REVIEW_SCHEMA,
+                max_tokens=256,
                 stream_llm=stream_llm,
             )
+            return parse_review(raw, draft=draft)
         except Exception:
-            if stream_llm:
-                raise
-            log.warning("La regeneración tras un corte falló", exc_info=True)
-            return None
-        if session_mode:
-            output, stay_active, valid = parse_session_output(
-                raw, delta_max=delta_max
+            log.warning("La revisión semántica falló; se publica el borrador", exc_info=True)
+            return ReviewResult(valid=False)
+
+    async def _repair(
+        self, calls, policy, *, messages, schema, delta_max, max_tokens,
+        session_mode=False, symptom=None, issues=(), draft=None, stream_llm=False,
+    ):
+        """Ejecuta una política de reparación una vez y valida su resultado."""
+        if policy == "parse":
+            note = PARSE_REPAIR_PROMPTS.get(symptom)
+            if note is None:
+                raise ValueError(f"Síntoma de parseo desconocido: {symptom}")
+            if session_mode:
+                note += " Incluye también `stay_active` como booleano."
+            repair_messages = [*messages, {"role": "user", "content": note}]
+            reason = symptom
+            purpose = "parse_repair"
+        elif policy == "quality":
+            if not isinstance(draft, str) or not issues:
+                raise ValueError("quality_repair requiere borrador e issues")
+            evidence_spans = [issue.evidence for issue in issues if issue.evidence]
+            lines = [
+                f"- {issue.kind} ({issue.impact}): evidencia literal {issue.evidence!r}"
+                for issue in issues
+            ]
+            note = QUALITY_REPAIR_PROMPT + "\n".join(lines)
+            repair_messages = [
+                *messages,
+                {"role": "assistant", "content": draft},
+                {"role": "user", "content": note},
+            ]
+            reason = "+".join(issue.kind for issue in issues)
+            purpose = "quality_repair"
+        else:
+            raise ValueError(f"Política de reparación desconocida: {policy}")
+
+        try:
+            raw, meta = await self._chat(
+                calls, purpose, repair_messages, schema=schema,
+                max_tokens=max_tokens, stream_llm=stream_llm,
+                repair_reason=reason,
             )
-            if not valid or output.reply is None:
+            if session_mode:
+                fixed, stay_active, valid = parse_session_output(raw, delta_max=delta_max)
+                if not valid:
+                    return None
+            else:
+                fixed = parse_model_output(
+                    raw, delta_max=delta_max,
+                    allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+                )
+                stay_active = None
+            if not isinstance(fixed.reply, str) or not fixed.reply.strip():
                 return None
-            return raw, meta, output, stay_active
-        output = parse_model_output(
-            raw,
-            delta_max=delta_max,
-            allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
-        )
-        if not output.reply:
-            return None
-        return raw, meta, output, True
-
-    async def _repair_regenerate(
-        self, messages, note, *, delta_max, max_tokens,
-        stream_llm=False, calls=None, purpose="repair",
-    ):
-        """Una regeneración de reparación. None si no produce reply utilizable.
-
-        Reusa el mensaje completo del turno y añade el aviso correctivo al
-        final. Mantiene el mismo esquema estricto de salida con retry json_object.
-        Devuelve `(raw, meta, ModelOutput)` para que quien llama pueda actualizar
-        también lo que se registra en la traza.
-        """
-        repair_messages = [*messages, {"role": "user", "content": note}]
-        try:
-            raw, meta = await self._chat(
-                calls,
-                purpose,
-                repair_messages,
-                schema=RESPONSE_SCHEMA,
-                max_tokens=max_tokens,
-                stream_llm=stream_llm,
-            )
-            fixed = parse_model_output(
-                raw,
-                delta_max=delta_max,
-                allow_raw_fallback=getattr(meta, "finish_reason", None) != "length",
+            if policy == "quality":
+                old_reply = parse_model_output(draft, delta_max=delta_max).reply or ""
+                new_reply = fixed.reply
+                old_tokens = len(old_reply.split())
+                if len(new_reply.split()) < old_tokens * 0.5:
+                    return None
+                if old_tokens >= 25 and token_overlap(
+                    old_reply, new_reply, ignored=evidence_spans
+                ) < 0.60:
+                    return None
+            return RepairOutcome(
+                raw=raw, meta=meta, output=fixed, stay_active=stay_active,
+                accepted=True, reason=reason,
             )
         except Exception:
             if stream_llm:
                 raise
-            log.warning("La regeneración de reparación falló", exc_info=True)
+            log.warning("La política %s falló (%s)", purpose, reason, exc_info=True)
             return None
-        if fixed.reply and fixed.reply.strip():
-            return raw, meta, fixed
-        return None
 
     def _inference_resolver(self, recipient_id=None):
         """Resolver de afinidad para la vista de inferencia.

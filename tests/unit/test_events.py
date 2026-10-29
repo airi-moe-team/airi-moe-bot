@@ -34,6 +34,26 @@ def test_default_kind_is_message():
     assert ev.date_decision == "continue"
 
 
+def test_review_telemetry_round_trips_and_old_trace_defaults():
+    ev = TurnEvent(
+        review_on_topic=False,
+        review_issues=[{"kind": "off_topic", "evidence": "literal"}],
+        review_ms=123,
+        repair_exhausted=True,
+    )
+    loaded = TurnEvent.from_dict(json.loads(ev.to_json()))
+    assert loaded.review_on_topic is False
+    assert loaded.review_issues == [{"kind": "off_topic", "evidence": "literal"}]
+    assert loaded.review_ms == 123
+    assert loaded.repair_exhausted is True
+
+    old = TurnEvent.from_dict({"correlation_id": "old"})
+    assert old.review_on_topic is None
+    assert old.review_issues == []
+    assert old.review_ms is None
+    assert old.repair_exhausted is False
+
+
 def test_list_fields_are_independent_between_instances():
     a = TurnEvent()
     b = TurnEvent()

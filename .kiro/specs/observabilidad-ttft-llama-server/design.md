@@ -120,7 +120,8 @@ Los timings opt-in se conservarán en campos nuevos opcionales de la traza en me
 
 | Campo | Tipo | Semántica |
 |---|---|---|
-| `purpose` | `str` | `primary`, `truncation_repair`, `question_close_repair`, `empty_reply_repair`, `repeat_reply_repair`, `disconnect_repair`, o el sufijo `:json_object_retry` |
+| `purpose` | `str` | `primary`, `parse_repair`, `quality_repair`, `conversation_review`, o el sufijo `:json_object_retry`; trazas históricas conservan los cinco propósitos anteriores |
+| `repair_reason` | `str \| None` | Causa concreta de `parse_repair`/`quality_repair`; `None` para llamadas que no reparan |
 | `status` | `str` | `ok` o `failed` |
 | `duration_ms` | `int` | Reloj monotónico alrededor de la petición completa |
 | `finish_reason` | `str \| None` | El de esa llamada, no el agregado del turno |

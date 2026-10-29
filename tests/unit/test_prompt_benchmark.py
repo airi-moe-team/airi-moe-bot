@@ -333,10 +333,10 @@ def test_report_attributes_call_count_and_repair_purpose(tmp_path):
     assert repaired.calls[0]["finish_reason"] == "length"
     assert [call["purpose"] for call in repaired.calls] == [
         "primary",
-        "truncation_repair",
+        "parse_repair",
     ]
     assert isinstance(repaired.repair_ms, int) and repaired.repair_ms >= 0
     assert samples[1].call_count == 1
-    assert report["call_purposes"] == {"primary": 10, "truncation_repair": 1}
+    assert report["call_purposes"] == {"primary": 10, "parse_repair": 1}
     assert report["variants"]["current"]["call_count"]["median"] == 1
     assert "Respuesta privada" not in json.dumps(report, ensure_ascii=False)

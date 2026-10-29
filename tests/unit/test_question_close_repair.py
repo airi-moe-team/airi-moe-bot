@@ -7,7 +7,7 @@ conversación puede preguntar).
 """
 
 from airi.domain.prompts import last_assistant_reply_ended_with_question
-from airi.services.conversation import (
+from airi.domain.text_filters import (
     strip_trailing_question,
     strip_trailing_questions,
 )

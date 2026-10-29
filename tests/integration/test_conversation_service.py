@@ -65,14 +65,16 @@ def test_turn_replies_and_applies_affinity():
     assert payload["affinity_delta"] == 2
 
 
-def test_turn_invalid_json_recovers_raw_reply():
+def test_turn_invalid_json_is_repaired_instead_of_publishing_raw_text():
     state, _ = make_state()
-    llm = FakeLLM(replies=["esto no es json pero tiene reply: hola"])
+    llm = FakeLLM(
+        replies=["esto no es json pero tiene reply: hola", llm_json("hola, ya estoy")]
+    )
     svc = make_service(llm, state, notifier=FakeNotifier())
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.reply == "esto no es json pero tiene reply: hola"
+    assert result.reply == "hola, ya estoy"
     assert result.affinity_applied == 0  # sin evento, el candado fuerza 0
 
 
@@ -278,10 +280,10 @@ def test_turn_falls_back_when_strict_schema_unsupported():
 # ---------------------------------------------------------------------------
 
 
-def test_history_stores_plain_fallback_as_json():
-    """Aunque el modelo se salga del JSON, el historial se guarda como JSON."""
+def test_history_stores_parse_repair_as_json():
+    """Una salida sin JSON se repara y se guarda como JSON normalizado."""
     state, _ = make_state()
-    llm = FakeLLM(replies=["hola sin json por parte del modelo"])
+    llm = FakeLLM(replies=["hola sin json por parte del modelo", llm_json("hola reparado")])
     svc = make_service(llm, state, notifier=FakeNotifier())
 
     result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))

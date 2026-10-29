@@ -7,6 +7,7 @@ Lee los eventos persistidos en disco (por defecto `./traces`, configurable con
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import os
 import sys
 
@@ -52,6 +53,52 @@ def cmd_show(args):
     return 1
 
 
+def cmd_repairs(args):
+    """Agrupa reparaciones por motivo y lista las trazas que las originaron."""
+    events = load_events_from_dir(_base_dir(args.dir))
+    if not events:
+        print("No hay trazas en", _base_dir(args.dir))
+        return 1
+    groups = defaultdict(lambda: {"count": 0, "exhausted": 0, "ids": []})
+    legacy_purposes = {
+        "truncation_repair",
+        "empty_reply_repair",
+        "repeat_reply_repair",
+        "question_close_repair",
+        "disconnect_repair",
+    }
+    for event in events:
+        has_repair = False
+        for call in event.llm_calls or []:
+            purpose = call.get("purpose")
+            if purpose not in {"parse_repair", "quality_repair"} | legacy_purposes:
+                continue
+            has_repair = True
+            reason = call.get("repair_reason") or "unknown"
+            group = groups[str(reason)]
+            group["count"] += 1
+            if event.correlation_id not in group["ids"]:
+                group["ids"].append(event.correlation_id)
+            if event.repair_exhausted:
+                group["exhausted"] += 1
+        if event.repair_exhausted and not has_repair:
+            group = groups["unknown"]
+            group["exhausted"] += 1
+            if event.correlation_id not in group["ids"]:
+                group["ids"].append(event.correlation_id)
+    if not groups:
+        print("No hay reparaciones registradas")
+        return 0
+    for reason in sorted(groups):
+        group = groups[reason]
+        ids = ",".join(group["ids"])
+        print(
+            f"{reason}: llamadas={group['count']} agotados={group['exhausted']} "
+            f"correlation_id=[{ids}]"
+        )
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Inspecciona trazas de turnos.")
     parser.add_argument("--dir", default=None,
@@ -65,6 +112,9 @@ def main(argv=None):
     p_show = sub.add_parser("show", help="JSON completo de un correlation_id")
     p_show.add_argument("cid")
     p_show.set_defaults(func=cmd_show)
+
+    p_repairs = sub.add_parser("repairs", help="reparaciones agrupadas por motivo")
+    p_repairs.set_defaults(func=cmd_repairs)
 
     args = parser.parse_args(argv)
     return args.func(args)

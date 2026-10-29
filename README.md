@@ -133,6 +133,7 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `OWNER_ID`: ID del dueño del bot (opcional)
 - `AIRI_TIME_CONTEXT`: percepción temporal en el prompt e historial (`1`, default; `0` desactiva para A/B o rollback)
 - `AIRI_TIMEZONE`: zona horaria IANA opcional (p. ej. `Europe/Madrid`); vacío usa la zona del sistema
+- `AIRI_CONVERSATION_REVIEW`: revisa coherencia del borrador con el hilo antes de publicar (`1`, default; `0` desactiva la llamada de revisión)
 
 ### Percepción temporal
 
@@ -270,6 +271,7 @@ snapshot se consumen del buffer al publicar, así el tema no queda latente.
 ```bash
 airi-trace last 10                    # resumen de los últimos 10 eventos
 airi-trace show <cid>                 # JSON completo de un correlation_id
+airi-trace repairs                    # agrupa reparaciones por motivo e indica sus trazas
 ```
 
 ### Reproducir una traza

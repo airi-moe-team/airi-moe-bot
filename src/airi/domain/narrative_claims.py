@@ -65,6 +65,38 @@ def mentions_leaving(text) -> bool:
     return False
 
 
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+|\n+")
+_TERMINAL_CHARS = (".", "!", "?", "…", "~", "*")
+
+
+def _valid_residue(text: str) -> bool:
+    """True si el texto restante sigue siendo una frase publicable."""
+    if len(text) < 20:
+        return False
+    if not text[0].isupper() and text[0] not in "¡¿*\"'(":
+        return False
+    return text[-1] in _TERMINAL_CHARS
+
+
+def strip_leaving_claims(reply) -> tuple[str, bool]:
+    """Recorta las oraciones donde Airi afirma que se marcha.
+
+    Devuelve ``(texto, valido)``. Si no hay afirmación de marcha devuelve el
+    texto original y ``True``. Si al recortar el residuo queda vacío, corto o
+    sin puntuación terminal, devuelve el original y ``False`` para que el
+    llamador decida (reparación o conservar con ``leave=false``).
+    """
+    text = str(reply or "")
+    if not text.strip() or not mentions_leaving(text):
+        return reply, True
+    parts = _SENTENCE_SPLIT_RE.split(text)
+    kept = [part.strip() for part in parts if part.strip() and not mentions_leaving(part)]
+    residue = " ".join(kept).strip()
+    if not _valid_residue(residue):
+        return reply, False
+    return residue, True
+
+
 def disconnect_claim_problem(reply, leave) -> str | None:
     """Problema de contrato entre lo que dice Airi y lo que decide.
 

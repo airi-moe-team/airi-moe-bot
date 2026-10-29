@@ -20,6 +20,7 @@ PRIVATE_TOKEN = "contenido-privado-de-prueba"
 
 CALL_FIELDS = {
     "purpose",
+    "repair_reason",
     "status",
     "duration_ms",
     "finish_reason",
@@ -75,7 +76,7 @@ def test_truncated_first_call_keeps_its_finish_reason_and_repair_purpose():
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
-        "truncation_repair",
+        "parse_repair",
     ]
     assert trace.llm_calls[0]["finish_reason"] == "length"
     assert trace.llm_calls[1]["finish_reason"] == "stop"
@@ -83,6 +84,7 @@ def test_truncated_first_call_keeps_its_finish_reason_and_repair_purpose():
     assert llm.calls[1]["reasoning_budget_tokens"] == 256
     assert trace.llm_calls[0]["reasoning_budget_tokens"] is None
     assert trace.llm_calls[1]["reasoning_budget_tokens"] == 256
+    assert trace.llm_calls[1]["repair_reason"] == "truncation"
     # Compatibilidad: el campo agregado sigue describiendo la respuesta usada.
     assert trace.llm_finish_reason == "stop"
 
@@ -96,8 +98,9 @@ def test_empty_reply_repair_is_recorded_with_its_own_purpose():
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
-        "empty_reply_repair",
+        "parse_repair",
     ]
+    assert trace.llm_calls[1]["repair_reason"] == "empty"
 
 
 def test_all_repair_calls_use_low_effort_but_primary_follows_global_mode():
@@ -109,16 +112,16 @@ def test_all_repair_calls_use_low_effort_but_primary_follows_global_mode():
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
-        "empty_reply_repair",
+        "parse_repair",
     ]
     assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256]
     assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None, 256]
 
 
-def test_question_close_repair_uses_low_effort_in_global_on():
+def test_question_close_is_repaired_deterministically_without_extra_call():
     llm = FakeLLM(
-        replies=[llm_json("¿Qué opinas?"), llm_json("Me parece bien.")],
-        metas=[LLMMeta(finish_reason="stop"), LLMMeta(finish_reason="stop")],
+        replies=[llm_json("Me parece bien. ¿Qué opinas?")],
+        metas=[LLMMeta(finish_reason="stop")],
     )
     trace = _turn(
         llm,
@@ -127,12 +130,9 @@ def test_question_close_repair_uses_low_effort_in_global_on():
         history=[{"role": "assistant", "content": "¿Qué tal?"}],
     )
 
-    assert [call["purpose"] for call in trace.llm_calls] == [
-        "primary",
-        "question_close_repair",
-    ]
-    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256]
-    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None, 256]
+    assert [call["purpose"] for call in trace.llm_calls] == ["primary"]
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None]
 
 
 def test_repair_override_survives_json_schema_fallback():
@@ -151,8 +151,8 @@ def test_repair_override_survives_json_schema_fallback():
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
-        "empty_reply_repair",
-        "empty_reply_repair:json_object_retry",
+        "parse_repair",
+        "parse_repair:json_object_retry",
     ]
     assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 256, 256]
     assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [
@@ -179,11 +179,8 @@ def test_auto_mode_quick_turn_records_low_budget():
 
 def test_every_repair_purpose_uses_low_budget_override():
     purposes = (
-        "truncation_repair",
-        "empty_reply_repair",
-        "repeat_reply_repair",
-        "question_close_repair",
-        "disconnect_repair",
+        "parse_repair",
+        "quality_repair",
     )
 
     async def run_repair_calls():
@@ -202,7 +199,7 @@ def test_every_repair_purpose_uses_low_budget_override():
         return llm
 
     llm = asyncio.run(run_repair_calls())
-    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [256] * 5
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [256] * 2
 
 
 def test_call_metadata_never_contains_private_text():
