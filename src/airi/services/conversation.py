@@ -2117,6 +2117,10 @@ class ConversationService:
                 log.exception("El hook on_trace falló; se ignora")
 
     def _register_user(self, who, now):
+        # Los usuarios sintéticos (turnos proactivos, mensajes pendientes) no
+        # son personas reales: no deben registrarse ni disparar "Nuevo encuentro".
+        if getattr(who, "bot", False) or getattr(who, "id", None) in (None, 0):
+            return False
         is_new = domain_users.register_activity(
             self.state.users,
             user_id=who.id,
