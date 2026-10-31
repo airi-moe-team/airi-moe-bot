@@ -20,6 +20,8 @@ CONFIG_KEYS = (
     "SELF_TRAIT_MIN",
     "SELF_TRAIT_MAX",
     "SELF_KEY_DAILY_LIMIT",
+    "SELF_REFLECTION_EVERY_N",
+    "SELF_REFLECTION_MIN_INTERVAL",
     "SELF_HISTORY_MAX",
     "DATE_MAX_SECONDS",
 )
@@ -52,6 +54,8 @@ from airi.domain.constants import (
     AFFINITY_LEVELS,
     DATE_SCENES,
     SELF_KEY_DAILY_LIMIT,
+    SELF_REFLECTION_EVERY_N,
+    SELF_REFLECTION_MIN_INTERVAL,
     SELF_BASE_TRAITS,
     SELF_TRAITS_ALLOWLIST,
 )
@@ -63,6 +67,8 @@ print(json.dumps({
     "trait_names": SELF_TRAITS_ALLOWLIST,
     "trait_values": SELF_BASE_TRAITS,
     "daily_limit": SELF_KEY_DAILY_LIMIT,
+    "reflection_every_n": SELF_REFLECTION_EVERY_N,
+    "reflection_min_interval": SELF_REFLECTION_MIN_INTERVAL,
     "seeded_traits": seeded["traits"],
     "allows_custom_trait": is_mutable_key("traits.serena"),
     "date_before_threshold": can_date(AFFINITY_LEVELS[6][0] - 1),
@@ -177,6 +183,17 @@ def test_valid_daily_update_limit_is_loaded():
     config, stderr = _load_config({"SELF_KEY_DAILY_LIMIT": "2"})
 
     assert config["daily_limit"] == 2
+    assert stderr == ""
+
+
+def test_reflection_cadence_is_configurable():
+    config, stderr = _load_config({
+        "SELF_REFLECTION_EVERY_N": "7",
+        "SELF_REFLECTION_MIN_INTERVAL": "900",
+    })
+
+    assert config["reflection_every_n"] == 7
+    assert config["reflection_min_interval"] == 900
     assert stderr == ""
 
 

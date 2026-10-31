@@ -9,6 +9,8 @@ from airi.domain.constants import REPETITION_THRESHOLD
 
 log = logging.getLogger(__name__)
 
+EMOJI_KEYCAP_RE = re.compile(r"[0-9#*]\uFE0F?\u20E3")
+EMOJI_VARIANT_RE = re.compile(r"[\u00A9\u00AE\u2122]\uFE0F")
 EMOJI_RE = re.compile(
     "["
     "\\U0001F1E6-\\U0001F1FF"
@@ -34,6 +36,7 @@ DISCORD_ASSET_URL_RE = re.compile(
     r"https?://(?:www\.)?discord(?:app)?\.com/assets/\S+",
     re.IGNORECASE,
 )
+WHITESPACE_BEFORE_PUNCTUATION_RE = re.compile(r"[ \t]+([,.;:!?])")
 
 
 #: Marcas de plantilla que se escapan del servidor local (ChatML y similares).
@@ -64,8 +67,13 @@ def clean_reply(text):
     text = DISCORD_ASSET_LINK_RE.sub("", text)
     text = DISCORD_CUSTOM_EMOJI_RE.sub("", text)
     text = DISCORD_ASSET_URL_RE.sub("", text)
+    # Keycap emojis include ASCII characters (e.g. 1️⃣), which the Unicode
+    # emoji ranges below do not otherwise recognize.
+    text = EMOJI_KEYCAP_RE.sub("", text)
+    text = EMOJI_VARIANT_RE.sub("", text)
     text = EMOJI_RE.sub("", text)
     text = EMOJI_MODIFIERS_RE.sub("", text)
+    text = WHITESPACE_BEFORE_PUNCTUATION_RE.sub(r"\1", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)

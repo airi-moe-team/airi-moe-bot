@@ -10,6 +10,7 @@ from airi.domain.constants import (
     LLM_REASONING_BUDGET_LOW_TOKENS,
     SELF_REFLECTION_MAX_TOKENS,
 )
+from airi.domain.diary import diary_for_user
 from airi.domain.llm_output import extract_json_object, parse_self_update
 from airi.domain.prompts import SELF_REFLECTION_SCHEMA, self_reflection_prompt
 from airi.domain.self_model import apply_self_update
@@ -61,8 +62,9 @@ class SelfService:
 
     async def reflect(self, user_id, *, now=None, trigger="interaction", force=False):
         now = self._now(now)
+        uid = getattr(user_id, "id", user_id)
         interactions = int(
-            (self.state.users.get(str(user_id)) or {}).get("interactions", 0) or 0
+            (self.state.users.get(str(uid)) or {}).get("interactions", 0) or 0
         )
         if not self.state.should_reflect_self(
             interactions=interactions, now=now, force=force
@@ -74,7 +76,7 @@ class SelfService:
         prompt = self_reflection_prompt(
             model,
             user_name=self.state.display_name(user_id),
-            diary=list(self.state.diary),
+            diary=diary_for_user(self.state.diary, uid, limit=5),
             now=now,
             notes=notes,
             preferences=self.state.world.get("preferences"),
@@ -156,7 +158,7 @@ class SelfService:
                         self.state.self_model(),
                         self_update,
                         now=now,
-                        user_id=user_id,
+                        user_id=uid,
                         source="reflection",
                     )
                     if self_entry:

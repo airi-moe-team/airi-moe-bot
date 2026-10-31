@@ -40,3 +40,24 @@ def test_clean_reply_elimina_prefijos_de_rol_al_inicio_de_linea():
 
 def test_clean_reply_no_toca_el_rol_a_mitad_de_frase():
     assert clean_reply("Le dije a User: hola") == "Le dije a User: hola"
+
+
+def test_clean_reply_elimina_emojis_compuestos_y_banderas():
+    assert clean_reply("Hola 😀 👨‍👩‍👧‍👦 🇪🇸") == "Hola"
+
+
+def test_clean_reply_elimina_emojis_keycap_completos():
+    assert clean_reply("Pulsa 1️⃣ o #️⃣") == "Pulsa o"
+
+
+def test_clean_reply_elimina_simbolos_con_presentacion_emoji():
+    assert clean_reply("©️ ®️ ™️") == ""
+
+
+def test_clean_reply_repara_espacios_antes_de_puntuacion():
+    assert clean_reply("¡Genial 😀 !  Sí!") == "¡Genial! Sí!"
+
+
+def test_clean_reply_es_idempotente_al_limpiar_emojis():
+    once = clean_reply("Hola 😀 👨‍👩‍👧‍👦 🇪🇸 1️⃣!")
+    assert clean_reply(once) == once

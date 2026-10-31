@@ -1,0 +1,47 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-10-31T12:26:18Z",
+  "items": [
+    {
+      "id": "FB-TRAITS-VISIBLE-CHANGES",
+      "title": "Hacer perceptibles y mejor fundamentadas las actualizaciones automáticas de traits",
+      "severity": "major",
+      "impact": "Los traits tienen una única fuente dinámica de intensidad, pero la reflexión rara vez ocurre y su prompt no incorpora el modelo, diario ni notas. Esto reduce las oportunidades de aprendizaje y la base contextual para proponer un cambio que luego se note en la voz.",
+      "recommendation": "Añadir contexto de traits actuales e interacciones relevantes a la reflexión; describir cómo los niveles 1–5 afectan tendencias sin volverlas obligatorias; configurar por defecto reflexión cada 5 interacciones y cooldown mínimo de 30 minutos, conservando evidencia, rate limit diario por trait y naturalidad contextual.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "R9: cuando la reflexión automática evalúe un cambio de trait, SHALL considerar los niveles actuales y evidencia de interacciones recientes; NO SHALL inferir cambios sin evidencia.",
+          "R9: los niveles 1–5 SHALL producir diferencias conductuales observables en tendencias, sin exigir una manifestación en cada turno ni desplazar la intención/contexto.",
+          "R9: el intervalo mínimo y la frecuencia de reflexión automática SHALL ser configurables; defaults propuestos: cada 5 interacciones y 1800 segundos entre reflexiones."
+        ],
+        "design": [
+          "Ampliar self_reflection_prompt para incluir el self model renderizado y un resumen acotado de evidencia reciente (diario/interacciones/notas disponibles), instrucciones explícitas de cuándo emitir self_update y el sentinel cuando no exista cambio justificado.",
+          "Añadir guía cualitativa calibrada para niveles 1–5 al bloque dinámico de personalidad; mantener los límites contextuales y la precedencia de intención.",
+          "Mantener el rate limit por trait y parametrizar la cadencia de reflexión mediante la configuración existente."
+        ],
+        "tasks": [
+          "Añadir primero pruebas para prompt de reflexión con contexto, cadencia configurable y correspondencia entre valor trait y prompt conversacional.",
+          "Implementar contexto de reflexión y guía de intensidad 1–5 sin añadir una llamada LLM por turno.",
+          "Cambiar defaults a 5 interacciones y 1800 segundos; probar que cooldown, evidencia obligatoria y rate limit diario siguen funcionando.",
+          "Ejecutar pruebas unitarias e integración relevantes, y validar que el cambio persistido se refleja en el prompt siguiente."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ],
+  "owners": {
+    "FB-TRAITS-VISIBLE-CHANGES": "Desarrollo; revisión y aprobación de documentos por la persona usuaria"
+  },
+  "questions": [],
+  "next_review": "Revisión humana y aprobación de requirements, design y tasks actualizados antes de iniciar implementación.",
+  "approval_record": "La persona usuaria aprobó la propuesta y la cadencia por defecto el 2026-10-31; requirements/design/tasks se actualizaron y sus aprobaciones se reiniciaron para revisión formal."
+}

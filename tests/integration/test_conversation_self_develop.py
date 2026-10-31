@@ -37,7 +37,9 @@ def test_turn_includes_identity_section_in_prompt():
     state, _ = make_state()
     llm = FakeLLM(replies=[llm_json("hola")])
     run(make_service(llm, state).run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
-    assert "=== TU IDENTIDAD (TU YO ACTUAL) ===" in llm.last_system_prompt
+    assert "=== TU YO ACTUAL ===" in llm.last_system_prompt
+    assert "Guía de intensidad de traits" in llm.last_system_prompt
+    assert "Curiosidad:" in llm.last_system_prompt
 
 
 def test_turn_applies_self_update_and_exposes_result():

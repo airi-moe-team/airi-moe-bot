@@ -48,6 +48,7 @@ from airi.domain.llm_output import (
     extract_json_object,
     parse_model_output,
     parse_session_output,
+    response_schema,
 )
 from airi.domain.narrative_claims import (
     disconnect_claim_problem,
@@ -310,7 +311,11 @@ CONVERSATION_REVIEW_SYSTEM_PROMPT = (
     "Aprueba por defecto: marca solo fallos claros de tema, destinatario, "
     "coherencia o reinicio de identidad. Cada issue debe incluir una cita "
     "literal del borrador; sin cita, no hay issue. Ante la duda, aprueba. "
-    "Devuelve solo el JSON del esquema."
+    "Devuelve solo un objeto JSON con estas claves: "
+    '"on_topic" (boolean), "right_addressee" (boolean), "coherent" (boolean), '
+    '"issues" (array de objetos con "kind" (enum: off_topic, wrong_addressee, '
+    'nonsense, self_reset), "impact" (enum: breaks_thread, wrong_person, '
+    'incoherent, self_reset) y "evidence" (cita literal del borrador)).'
 )
 
 
@@ -1633,7 +1638,10 @@ class ConversationService:
     ):
         now = self.clock() if now is None else now
         session_mode = conversation_mode in ("spectator", "active", "proactive")
-        schema = SESSION_RESPONSE_SCHEMA if session_mode else RESPONSE_SCHEMA
+        from airi.domain.capabilities import TurnCapabilities
+
+        capabilities = TurnCapabilities(date_active=isinstance(date_session, dict))
+        schema = response_schema(capabilities, session_mode)
         state = self.state
         points = state.entry_points(user.id)
         affinity_section = domain_prompts.affinity_prompt_section(
@@ -1726,6 +1734,12 @@ class ConversationService:
             sections.append(
                 f"\n\n=== NOTA INTERNA DEL SISTEMA ===\n{extra_note}\n"
             )
+        from airi.domain.capabilities import TurnCapabilities
+
+        capabilities = TurnCapabilities(date_active=isinstance(date_session, dict))
+        date_section = domain_prompts.date_contract_section(capabilities)
+        if date_section:
+            sections.append(date_section)
         system_prompt = domain_prompts.build_system_prompt(
             web_context, sections, compact=quick, variant=prompt_variant
         )

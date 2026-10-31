@@ -404,10 +404,10 @@ def parse_model_output(
         gif_type = "none"
     if not isinstance(memory_action, str):
         memory_action = "none"
-    memory_action = memory_action.strip()[:400]
+    memory_action = clean_reply(memory_action).strip()[:400]
     if not isinstance(diary_action, str):
         diary_action = "none"
-    diary_action = diary_action.strip()[:400]
+    diary_action = clean_reply(diary_action).strip()[:400]
     # affinity_delta: entero dentro del rango permitido; el resto se ignora.
     if isinstance(delta_raw, bool) or not isinstance(delta_raw, (int, float)):
         delta = 0
@@ -629,3 +629,33 @@ SESSION_RESPONSE_SCHEMA = copy.deepcopy(RESPONSE_SCHEMA)
 SESSION_RESPONSE_SCHEMA["properties"]["stay_active"] = {"type": "boolean"}
 SESSION_RESPONSE_SCHEMA["required"] = list(RESPONSE_SCHEMA["required"]) + ["stay_active"]
 SESSION_RESPONSE_SCHEMA["properties"]["reply"] = {"type": "string"}
+
+# Esquemas sin campos de cita, para turnos normales (sin cita activa).
+_DATE_FIELDS = ("date_decision", "date_reason", "last_chance_result", "date_question")
+
+def _strip_date_fields(schema):
+    schema = copy.deepcopy(schema)
+    for field in _DATE_FIELDS:
+        schema["properties"].pop(field, None)
+    schema["required"] = [f for f in schema["required"] if f not in _DATE_FIELDS]
+    return schema
+
+RESPONSE_SCHEMA_NO_DATE = _strip_date_fields(RESPONSE_SCHEMA)
+SESSION_RESPONSE_SCHEMA_NO_DATE = _strip_date_fields(SESSION_RESPONSE_SCHEMA)
+
+
+from airi.domain.capabilities import TurnCapabilities
+
+
+def response_schema(capabilities: "TurnCapabilities | bool" = False, session_mode: bool = False) -> dict:
+    """Devuelve el schema adecuado según las capacidades activas y el modo sesión.
+
+    Acepta `TurnCapabilities` o un bool (compatibilidad con `in_date`).
+    """
+    if isinstance(capabilities, bool):
+        date_active = capabilities
+    else:
+        date_active = getattr(capabilities, "date_active", False)
+    if session_mode:
+        return SESSION_RESPONSE_SCHEMA if date_active else SESSION_RESPONSE_SCHEMA_NO_DATE
+    return RESPONSE_SCHEMA if date_active else RESPONSE_SCHEMA_NO_DATE

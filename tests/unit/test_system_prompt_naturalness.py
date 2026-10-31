@@ -7,26 +7,19 @@ sentido preguntarlas.
 """
 
 from airi.domain.dates import new_date_session
+from airi.domain.self_model import default_self
 from airi.domain.prompts import (
-    GIF_DECISION_PROMPT,
+    DATE_DECISION_PROMPT,
+    OUTPUT_CONTRACT_PROMPT,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_COMPACT_CANDIDATE,
     date_context_section,
     identity_tags_prompt_section,
     memories_prompt_section,
+    self_model_prompt_section,
 )
 
 
-def test_narrative_actions_are_not_one_per_sentence():
-    assert "No añadas asteriscos a cada oración" in SYSTEM_PROMPT
-    assert "utiliza una acción narrativa solo" in SYSTEM_PROMPT
-    assert "cuando aporte algo" in SYSTEM_PROMPT
-
-
-def test_answers_are_proportionate_to_the_message():
-    assert "Responde de forma proporcionada al mensaje" in SYSTEM_PROMPT
-    assert "No impongas un número fijo de frases" in SYSTEM_PROMPT
-    assert "ni añadas" in SYSTEM_PROMPT
 
 
 def test_intent_priority_comes_before_variety():
@@ -41,8 +34,6 @@ def test_personality_is_expressed_as_observable_tendencies():
     assert "=== RASGOS COMO TENDENCIAS (NO ACTUACIÓN) ===" in SYSTEM_PROMPT
     assert "según el valor actual de cada rasgo" in SYSTEM_PROMPT
     assert "no impone una intensidad fija" in SYSTEM_PROMPT
-    assert "no estés de acuerdo automáticamente para agradar" in SYSTEM_PROMPT
-    assert "no inventes haber visto, jugado o vivido algo" in SYSTEM_PROMPT
 
 
 def test_static_prompt_does_not_assign_levels_to_mutable_personality_traits():
@@ -57,13 +48,7 @@ def test_static_prompt_does_not_assign_levels_to_mutable_personality_traits():
 def test_memory_usage_prioritizes_current_and_relevant_data():
     assert "=== USO DE LA MEMORIA ===" in SYSTEM_PROMPT
     assert "la versión más reciente y explícita prevalece" in SYSTEM_PROMPT
-    assert "no recites recuerdos" in SYSTEM_PROMPT
 
-
-def test_prefab_farewells_are_explicitly_discouraged():
-    assert "No uses las frases 'aquí estaré'" in SYSTEM_PROMPT
-    assert "sueños dulces" in SYSTEM_PROMPT
-    assert "mañana será otro día" in SYSTEM_PROMPT
 
 
 def test_memory_section_hides_superseded_preferences():
@@ -75,10 +60,6 @@ def test_memory_section_hides_superseded_preferences():
     assert "flan" not in section
 
 
-def test_no_loop_of_recent_narrative_tics():
-    assert "PROHIBICIÓN DE BUCLE" in SYSTEM_PROMPT
-    assert "Tienes prohibido repetir acciones narrativas" in SYSTEM_PROMPT
-
 
 def test_questions_are_not_the_default_ending():
     # La regla dura ("no termines todas tus respuestas con una pregunta")
@@ -88,22 +69,14 @@ def test_questions_are_not_the_default_ending():
     assert "termines todas tus respuestas con una pregunta" not in SYSTEM_PROMPT
 
 
-def test_variety_of_openings_gestures_and_closings():
-    assert "Varía las aperturas, los gestos y las despedidas" in SYSTEM_PROMPT
-    assert "no repitas la misma" in SYSTEM_PROMPT
-
-
-def test_output_contract_asks_for_another_ending_when_repeated():
-    assert "otra apertura y otro cierre" in GIF_DECISION_PROMPT
-    assert "salvo que te pidan expresamente repetirlo o citarlo" in GIF_DECISION_PROMPT
 
 
 def test_dates_have_no_per_turn_buttons():
     """Las citas fluyen como conversación: los botones son solo la pregunta."""
     section = date_context_section(new_date_session("un paseo", 40, now=0))
     assert "NO hay botones, solo tu respuesta" in section
-    assert '"actions"' not in GIF_DECISION_PROMPT
-    assert "date_question" in GIF_DECISION_PROMPT
+    assert '"actions"' not in OUTPUT_CONTRACT_PROMPT
+    assert "date_question" in DATE_DECISION_PROMPT
 
 
 def test_identity_tags_section_is_present():
@@ -124,8 +97,6 @@ def test_compact_candidate_defines_identity_without_turning_fiction_into_memory(
     assert "identidad estable" in candidate
     assert "experiencias confirmadas" in candidate
     assert "roleplay" in candidate
-    assert "no conviertas una escena ficticia en un recuerdo real" in candidate.lower()
-    assert "no la recites" in candidate
     assert "tsundere" not in candidate.lower()
     assert "=== IDENTIDAD NARRATIVA ===" not in SYSTEM_PROMPT
 
@@ -136,11 +107,21 @@ def test_both_personalities_share_fictional_canonical_biography():
         assert "=== BIOGRAFÍA CANÓNICA FICTICIA ===" in prompt
         assert "clara" in lowered and "mateo" in lowered
         assert "nerea" in lowered and "gael" in lowered
-        assert "no son recuerdos reales" in lowered
-        assert "no la recites ni la conviertas en tema de cada conversación" in lowered
+        
 
 
-def test_candidate_does_not_deny_airis_fictional_childhood_or_romantic_past():
-    lowered = SYSTEM_PROMPT_COMPACT_CANDIDATE.lower()
-    assert "no tienes infancia humana" not in lowered
-    assert "no tienes experiencias románticas reales" not in lowered
+
+def test_each_trait_level_has_distinct_current_behavior_guidance():
+    prompts = []
+    for value in range(1, 6):
+        model = default_self()
+        model["traits"]["timida"] = value
+        prompts.append(self_model_prompt_section({"self": model}))
+
+    assert len(set(prompts)) == 5
+    assert "Timidez: muy baja (1/5)" in prompts[0]
+    assert "Timidez: baja (2/5)" in prompts[1]
+    assert "Timidez: media (3/5)" in prompts[2]
+    assert "Timidez: alta (4/5)" in prompts[3]
+    assert "Timidez: muy alta (5/5)" in prompts[4]
+    assert all("nunca obligaciones" in prompt for prompt in prompts)

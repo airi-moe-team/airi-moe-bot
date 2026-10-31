@@ -158,13 +158,13 @@ def test_decay_moves_traits_toward_base_after_the_interval():
     assert model["traits"]["curiosa"] == 4
 
 
-def test_reflection_trigger_uses_interactions_and_interval():
+def test_reflection_trigger_uses_new_default_interactions_and_interval():
     model = default_self()
-    assert should_reflect(interactions=10, model=model, now=NOW) is True
-    assert should_reflect(interactions=9, model=model, now=NOW) is False
+    assert should_reflect(interactions=5, model=model, now=NOW) is True
+    assert should_reflect(interactions=4, model=model, now=NOW) is False
     model["last_reflection_at"] = NOW
-    assert should_reflect(interactions=10, model=model, now=NOW + 10) is False
-    assert should_reflect(interactions=10, model=model, now=NOW + 3601) is True
+    assert should_reflect(interactions=5, model=model, now=NOW + 10) is False
+    assert should_reflect(interactions=5, model=model, now=NOW + 1801) is True
 
 
 # ---------------------------------------------------------------------------

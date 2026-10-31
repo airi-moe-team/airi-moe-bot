@@ -329,8 +329,7 @@
 
 ## Extensión de implementación — personalidad gobernada por traits
 
-> Pendiente de revisión y aprobación de requirements, design y tasks. No iniciar
-> implementación hasta que la persona usuaria revise los documentos actualizados.
+> Requirements, design y tasks revisados y aprobados por la persona usuaria el 2026-10-31.
 
 - [x] 19. Eliminar la doble fuente de personalidad entre prompt y traits (`R9`)
   - [x] 19.1 Añadir tests de regresión antes del refactor
@@ -349,3 +348,33 @@
     - Ejecutar tests de naturalidad, self model y variantes de prompt.
     - Ejecutar la suite unitaria aplicable y revisar que no se alteren contratos ajenos.
     - _Requirements: 9.1–9.6_
+
+
+- [x] 20. Hacer perceptible y basada en evidencia la evolución automática de traits (`R9`)
+  - [x] 20.1 Añadir pruebas primero para prompt de reflexión, cadencia y efecto observable
+    - Verificar que la reflexión incluye rasgos actuales y evidencia reciente acotada.
+    - Verificar defaults de 5 interacciones y 1800 segundos, y que la configuración puede
+      sobrescribirlos.
+    - Verificar que cada uno de los cinco niveles produce una guía conductual distinta,
+      incluido un cambio de un punto, sin anular intención ni límites contextuales.
+    - Verificar que errores de LLM/JSON no consumen el reloj, pero una reflexión válida
+      sin cambio sí lo marca.
+    - _Requirements: 9.1, 9.3–9.6, 9.9–9.12_
+  - [x] 20.2 Implementar contexto y guía conductual calibrada
+    - Incluir traits, historial relevante, notas y evidencia reciente disponible en la
+      reflexión sin añadir llamadas LLM por turno.
+    - Describir diferencias de intensidad 1–5 en la guía dinámica de personalidad.
+    - Conservar sentinel, evidencia obligatoria y límites de mutación existentes.
+    - _Requirements: 9.1–9.6, 9.9–9.12_
+  - [x] 20.3 Ajustar cadencia y validar integración
+    - Configurar defaults de 5 interacciones y 1800 segundos mediante las constantes
+      existentes, manteniendo ambos valores configurables.
+    - Ejecutar pruebas unitarias e integración relevantes y comprobar que un trait
+      actualizado aparece en el prompt conversacional siguiente.
+    - _Requirements: 9.9–9.12_
+
+
+> Validación 2026-10-31: 56 pruebas focalizadas de identidad/reflexión/configuración
+> pasan. La suite completa conserva 21 fallos en tests de conversación, temporalidad,
+> relaciones, desconexión, búsqueda web y transcripts; no aparecieron fallos del área de
+> traits. Ruff no pudo ejecutarse: mise no tiene una versión de ruff configurada.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from airi.domain.prompts import (
-    GIF_DECISION_PROMPT,
+    OUTPUT_CONTRACT_PROMPT,
     SYSTEM_PROMPT,
     affinity_prompt_section,
     date_context_section,
@@ -79,10 +79,10 @@ def test_affinity_tones_stop_implying_romance():
 
 
 def test_output_contract_documents_the_new_objects():
-    assert "romantic_update" in GIF_DECISION_PROMPT
-    assert "relationship_action" in GIF_DECISION_PROMPT
-    assert "evidence_refs" in GIF_DECISION_PROMPT
-    assert "No inventes" in GIF_DECISION_PROMPT
+    assert "romantic_update" in OUTPUT_CONTRACT_PROMPT
+    assert "relationship_action" in OUTPUT_CONTRACT_PROMPT
+    assert "evidence_refs" in OUTPUT_CONTRACT_PROMPT
+    assert "No inventes" in OUTPUT_CONTRACT_PROMPT
 
 
 def test_date_context_is_optional_and_never_forced():

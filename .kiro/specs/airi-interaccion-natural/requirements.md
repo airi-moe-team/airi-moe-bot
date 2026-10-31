@@ -267,6 +267,16 @@ basada en decisiones y opiniones concretas, no en adjetivos repetidos.
 8. THE separación existente entre afinidad, etapa romántica y conversación cotidiana
    SHALL conservarse; una opinión o un desacuerdo NO SHALL alterar la afinidad por sí
    solo.
+9. WHEN la reflexión automática evalúe un cambio de trait, THEN SHALL considerar los
+   niveles actuales y evidencia reciente disponible (interacciones, diario, notas o
+   historial de cambios); NO SHALL inferir cambios sin evidencia concreta.
+10. THE escala de traits (1–5) SHALL producir diferencias conductuales observables en
+    intensidad, manteniendo cada rasgo como tendencia; ningún nivel SHALL exigir su
+    manifestación en cada turno ni desplazar la intención o el contexto.
+11. THE frecuencia de reflexión y el intervalo mínimo entre reflexiones SHALL ser
+    configurables; los valores por defecto SHALL ser cada 5 interacciones y 1800 segundos.
+12. WHEN una reflexión no encuentre un cambio genuinamente respaldado por evidencia,
+    THEN SHALL conservar los traits actuales y emitir el sentinel de no actualización.
 
 ### Requirement 10: Memoria consolidada y preferencias vigentes
 **Objective:** Como participante, quiero que Airi recuerde lo importante sin acumular

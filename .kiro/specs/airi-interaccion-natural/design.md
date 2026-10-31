@@ -523,3 +523,25 @@ traza; cualquier perfil deberá mantener JSON válido y no empeorar la calidad e
   según el modo y registrar truncamiento/reparación sin inferir datos ausentes.
 - `R13`: `domain/prompts.py`, evaluación de interacción y pruebas de honestidad/continuidad.
 - `R14`: `services/conversation.py`, observabilidad y runner de evaluación.
+
+
+### Decisión 13 — Evolución de traits visible y basada en evidencia
+
+La reflexión automática recibe contexto suficiente para proponer cambios prudentes:
+traits actuales, historial reciente de cambios, notas de autodescubrimiento y entradas
+recientes y acotadas del diario. El prompt distingue evidencia de inferencia y solicita
+el sentinel neutro cuando no exista un patrón concreto; no se añade una llamada LLM por
+turno. `apply_self_update` conserva la validación de motivo/evidencia, el rate limit
+entre cambios y el límite por trait.
+
+La cadencia se gobierna con `SELF_REFLECTION_EVERY_N` y
+`SELF_REFLECTION_MIN_INTERVAL`, cuyos defaults pasan a 5 interacciones y 1800 segundos.
+La reflexión sigue ejecutándose en segundo plano. Su reloj se marca únicamente cuando
+la llamada de reflexión termina con una respuesta interpretable, para que fallos de
+transporte o JSON inválido no consuman la oportunidad; una respuesta válida sin cambios
+sí marca el reloj para evitar reintentos repetidos sin evidencia nueva.
+
+El bloque de personalidad describe una diferencia conductual concreta para cada uno
+de los cinco valores de cada trait, sin convertirlos en órdenes. Así un cambio de un
+punto (incluido 1→2) modifica la guía efectiva que recibe el LLM. Los tests comprueban
+los cinco niveles y que límites contextuales y prioridad de intención permanecen intactos.

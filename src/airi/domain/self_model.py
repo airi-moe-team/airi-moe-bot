@@ -1,7 +1,7 @@
 """Modelo de identidad de Airi: la banda maleable de su "yo" (puro).
 
-El núcleo inmutable de Airi (nombre, rol, honestidad anti-alucinación, idioma,
-prohibición de emojis y contrato JSON) vive en `SYSTEM_PROMPT` y NO se toca
+El núcleo inmutable de Airi (nombre, rol, honestidad anti-alucinación, idioma y
+contrato JSON) vive en `SYSTEM_PROMPT` y NO se toca
 desde aquí. Este módulo gobierna la banda que Airi sí puede reescribir con
 guardarraíles: auto-concepto, rasgos, valores y manías.
 
