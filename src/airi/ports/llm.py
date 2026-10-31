@@ -24,6 +24,9 @@ class LLMMeta:
     #: un conteo exacto: solo `usage` (si el servidor lo entrega) lo es.
     reasoning_deltas: int | None = None
     content_deltas: int | None = None
+    #: Tool calls normalizadas: ``{"id", "name", "arguments"}``. ``arguments``
+    #: es un dict ya parseado; si el JSON era inválido, queda ``{}``.
+    tool_calls: list[dict] | None = None
 
 
 class LLMClient(Protocol):
@@ -39,11 +42,14 @@ class LLMClient(Protocol):
         reasoning_budget_tokens: int | None = None,
         quick_turn: bool = False,
         strict_schema: bool = False,
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
     ) -> str:
         """Devuelve el texto de la respuesta del modelo.
 
         `reasoning_budget_tokens` limita reasoning solo para esta llamada.
         `quick_turn` permite al adaptador elegir presupuesto sin apagar reasoning.
+        `tools` activa tool calling nativo; no puede combinarse con `schema`.
         """
         ...
 
@@ -58,6 +64,8 @@ class LLMClient(Protocol):
         quick_turn: bool = False,
         strict_schema: bool = False,
         stream: bool = False,
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, LLMMeta]:
         """Igual que `chat` pero además devuelve los metadatos del turno."""
         ...

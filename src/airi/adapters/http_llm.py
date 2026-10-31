@@ -101,6 +101,49 @@ def _reasoning_token_count(usage):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _normalize_tool_calls(message):
+    """Normaliza ``message.tool_calls`` a ``{id, name, arguments}``.
+
+    ``arguments`` llega como string JSON en OpenAI/llama.cpp; se parsea a dict.
+    Si el JSON es inválido se conserva ``{}`` y se registra el descarte.
+    """
+    if not isinstance(message, dict):
+        return None
+    raw_calls = message.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return None
+    normalized = []
+    for call in raw_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except (TypeError, ValueError):
+                log.warning(
+                    "Argumentos de tool call no son JSON válido: %r",
+                    arguments[:200],
+                )
+                arguments = {}
+        elif not isinstance(arguments, dict):
+            arguments = {}
+        normalized.append(
+            {
+                "id": call.get("id"),
+                "name": name,
+                "arguments": arguments,
+            }
+        )
+    return normalized or None
+
+
 def _env_str(*names, default=""):
     """Primer valor de entorno no vacío entre `names` (o `default`)."""
     for name in names:
@@ -422,12 +465,15 @@ class HttpLlmClient:
     async def chat(self, messages, *, schema=None, max_tokens=None, temperature=None,
                    reasoning_budget_tokens: int | None = None,
                    quick_turn: bool = False,
-                   strict_schema: bool = False):
+                   strict_schema: bool = False,
+                   tools=None, tool_choice=None):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens, temperature=temperature,
             reasoning_budget_tokens=reasoning_budget_tokens,
             quick_turn=quick_turn,
             strict_schema=strict_schema,
+            tools=tools,
+            tool_choice=tool_choice,
         )
         return content
 
@@ -435,7 +481,16 @@ class HttpLlmClient:
                              temperature=None,
                              reasoning_budget_tokens: int | None = None,
                              quick_turn: bool = False, strict_schema: bool = False,
-                             stream: bool = False):
+                             stream: bool = False, tools=None, tool_choice=None):
+        if tools and schema is not None:
+            raise ValueError(
+                "tools y response_format no son compatibles en este backend; "
+                "usa dos llamadas (decisión + generación)"
+            )
+        if tools and stream:
+            raise ValueError("tools no está soportado en streaming")
+        if tool_choice is not None and not isinstance(tool_choice, str):
+            raise ValueError("tool_choice debe ser una cadena compatible con el backend")
         if reasoning_budget_tokens is not None and (
             not isinstance(reasoning_budget_tokens, int)
             or isinstance(reasoning_budget_tokens, bool)
@@ -459,6 +514,12 @@ class HttpLlmClient:
             # Sin esto el servidor no manda `usage` en SSE y el conteo de
             # tokens de una corrida en streaming queda desconocido.
             payload["stream_options"] = {"include_usage": True}
+        if tools:
+            payload["tools"] = tools
+            if tool_choice:
+                # llama.cpp solo acepta tool_choice como string ("auto",
+                # "required", "none"); un objeto falla y se ignora.
+                payload["tool_choice"] = tool_choice
         if schema is not None:
             if not self.response_format:
                 log.debug("response_format omitido (LLM_RESPONSE_FORMAT=0)")
@@ -511,6 +572,7 @@ class HttpLlmClient:
             ),
             reasoning_tokens=_reasoning_token_count(data.get("usage")),
             reasoning_budget_tokens=effective_reasoning_budget,
+            tool_calls=_normalize_tool_calls(message),
         )
         return text, meta
 

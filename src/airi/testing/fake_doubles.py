@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+from airi.ports.web_search import WebResult, WebSearchNotes
+
+
+def _notes(result):
+    """Acepta notas, texto libre (tests antiguos) o None."""
+    if result is None or isinstance(result, WebSearchNotes):
+        return result
+    if isinstance(result, str):
+        return WebSearchNotes((WebResult("", result),))
+    if isinstance(result, (list, tuple)):
+        return WebSearchNotes(tuple(result))
+    return result
+
 
 class FakeSearch:
     """Implementa `airi.ports.web_search.WebSearchClient`."""
 
     def __init__(self, result=None):
-        self.result = result
+        self.result = _notes(result)
         self.queries = []
 
     async def search(self, query):

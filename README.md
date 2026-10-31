@@ -27,7 +27,8 @@
 │   │   ├── grounding.py               # filtro anti-alucinación
 │   │   ├── prompts.py                 # prompts + build_system_prompt(ctx)
 │   │   ├── texts.py                   # textos narrativos (cita, confesión, regalos)
-│   │   └── web.py                     # detección de mensajes que piden búsqueda web
+│   │   ├── web.py                     # marcadores léxicos heredados (no disparan búsquedas)
+│   │   └── web_tool.py                # contrato y notas de la herramienta buscar_web
 │   ├── ports/                         # Protocol (LLMClient, WebSearchClient, GifProvider,
 │   │                               # Notifier, Repository)
 │   ├── adapters/                      # http_llm (llama.cpp), brave_search, nekosbest,
@@ -35,6 +36,7 @@
 │   ├── services/                      # Orquestación (solo usan ports)
 │   │   ├── state.py                   # AppState: datos + callbacks de persistencia
 │   │   ├── conversation.py            # ConversationService.run_turn(...) → TurnResult
+│   │   ├── web_search.py               # decisión nativa → Brave → notas conversacionales
 │   │   └── date_service.py            # DateService: turno/cierre de citas
 │   ├── discord_bot/                   # Capa Discord fina
 │   │   ├── client.py                  # on_message: enrutar, debounce, delegar
@@ -89,6 +91,34 @@
 ├── .env / .env.example
 └── .gitignore
 ```
+
+## Búsqueda web conversacional
+
+En los turnos que permiten búsqueda, Airi recibe la herramienta nativa
+`buscar_web` y decide si la invoca. No hay regex ni `tool_choice` forzado para
+disparar búsquedas. La decisión envía `query` y `motivo`; los resultados se
+inyectan como notas breves, sin URLs ni ranking. El grounding heurístico se
+conserva solo como telemetría y no reemplaza la respuesta.
+
+El backend debe soportar OpenAI-style `tools` y ejecutar llama.cpp con
+`--jinja`. En la versión probada, `tools` y `response_format` no deben enviarse
+en la misma petición: Airi decide primero y genera su respuesta estructurada en
+una segunda llamada. `AIRI_WEB_SEARCH=0` deshabilita la herramienta y
+`WEB_SEARCH_DECISION_MAX_TOKENS` limita la llamada de decisión (el alias
+histórico `SEARCH_QUERY_MAX_TOKENS` sigue aceptado).
+
+Para evaluar la decisión y la voz sin depender de Brave:
+
+```bash
+.venv/bin/python tools/web_search_eval.py --live --out eval/web-search.jsonl --judge
+.venv/bin/python tools/web_search_eval.py --run eval/web-search.jsonl --json
+```
+
+El harness usa ocho escenarios y resultados controlados; `--judge` añade una
+revisión semántica local (llamadas extra al LLM). Los registros distinguen
+precisión/recall de búsqueda y criterios de síntesis; las frases exactas no son
+criterio. El endpoint CPU puede seleccionarse con `--base-url` sin modificar la
+configuración de producción.
 
 ## Reglas
 

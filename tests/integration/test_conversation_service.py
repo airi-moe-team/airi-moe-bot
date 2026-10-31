@@ -5,11 +5,10 @@ import json
 
 import pytest
 
-from airi.domain.constants import LLM_SHORT_MAX_TOKENS, SEARCH_QUERY_MAX_TOKENS
+from airi.domain.constants import LLM_SHORT_MAX_TOKENS
 from airi.domain.dates import new_date_session
 from airi.ports.llm import LLMMeta
 from airi.services.conversation import (
-    GROUNDED_FALLBACK_TEXT,
     ConversationService,
     TurnContext,
 )
@@ -438,301 +437,136 @@ def test_turn_negative_reaction_blocks_positive_affinity_and_memory():
 # ---------------------------------------------------------------------------
 
 
-def test_turn_web_search_reformulates_and_uses_context():
+def _search_tool_call(query="precio bitcoin hoy", motivo="me dio curiosidad"):
+    return [{
+        "id": "call-1",
+        "name": "buscar_web",
+        "arguments": {"query": query, "motivo": motivo},
+    }]
+
+
+def test_turn_web_search_is_decided_by_native_tool_call():
     state, _ = make_state()
     notifier = FakeNotifier()
-    search = FakeSearch(result="Fuente 1: BTC\nURL: https://x.test\nResumen: 30k")
-    # Primera respuesta: la consulta reformulada; segunda: el JSON final.
-    llm = FakeLLM(replies=[
-        "precio bitcoin hoy",
-        llm_json("El precio ronda los 30k según he buscado~"),
-    ])
+    search = FakeSearch(result="Bitcoin ronda los 30 mil euros.")
+    llm = FakeLLM(
+        replies=[llm_json("Madre mía, ronda los 30 mil euros~")],
+        tool_calls=[_search_tool_call()],
+    )
     svc = make_service(llm, state, search=search, notifier=notifier)
 
     result = run(svc.run_turn(
-        DAVID, [(DAVID, "búscame en internet el precio de bitcoin")], TurnContext()
+        DAVID, [(DAVID, "¿A cuánto está Bitcoin?")], TurnContext()
     ))
 
-    assert any(
-        getattr(notice, "kind", None) == "web_search"
-        and "buscando información en la web" in getattr(notice, "text", "")
-        for notice in notifier.sent
-    )
     assert search.queries == ["precio bitcoin hoy"]
-    assert "30k" in result.reply
+    assert result.reply == "Madre mía, ronda los 30 mil euros~"
     assert result.grounded is True
-    assert result.web_context is not None
-    # El prompt de la llamada principal incluye el contexto web.
-    assert "=== RESULTADOS DE BÚSQUEDA ===" in llm.last_system_prompt
-    # La primera llamada (reformulación de búsqueda) respeta SEARCH_QUERY_MAX_TOKENS.
-    assert llm.calls[0]["max_tokens"] == SEARCH_QUERY_MAX_TOKENS
+    assert result.trace.web_requested is True
+    assert result.trace.web_motivo == "me dio curiosidad"
+    assert result.trace.web_query == "precio bitcoin hoy"
+    assert "Has buscado porque me dio curiosidad" in llm.last_system_prompt
+    assert "30 mil euros" in llm.last_system_prompt
+    assert "Fuente 1" not in llm.last_system_prompt
+    assert any(getattr(n, "kind", None) == "web_search" for n in notifier.sent)
 
 
-def test_turn_web_search_failure_sets_honest_context():
+def test_turn_no_search_when_model_declines_even_for_explicit_words():
     state, _ = make_state()
-    search = FakeSearch(result=None)
-    llm = FakeLLM(replies=[
-        "precio bitcoin hoy",
-        llm_json("No he encontrado información fiable sobre eso en la web"),
-    ])
+    search = FakeSearch(result="no debe usarse")
+    llm = FakeLLM(replies=[llm_json("Te entiendo~")])
     svc = make_service(llm, state, search=search, notifier=FakeNotifier())
 
     result = run(svc.run_turn(
-        DAVID, [(DAVID, "búscame en internet el precio de bitcoin")], TurnContext()
+        DAVID, [(DAVID, "búscalo en internet, era una broma")], TurnContext()
     ))
 
-    assert "falló o no devolvió resultados" in result.web_context
+    assert search.queries == []
+    assert result.trace.web_requested is False
+    assert result.web_context is None
+    assert len(llm.calls) == 1
+    assert len(llm.decision_calls) == 1
+    assert llm.decision_calls[0]["tools"]
 
 
-def test_turn_ungrounded_reply_is_replaced():
-    state, _ = make_state()
-    search = FakeSearch(result="Fuente 1: Anime\nURL: https://x.test\nResumen: noticias")
-    llm = FakeLLM(replies=[
-        "busqueda anime",
-        llm_json(
-            "Estrenan el 4 de enero, luego el 5 de febrero y el 6 de marzo "
-            "la tercera parte",
-            affinity_delta=5,
-            affinity_event="noticia increíble",
-            gif="happy",
-        ),
-    ])
-    svc = make_service(llm, state, search=search, gifs=FakeGif(),
-                       notifier=FakeNotifier())
-
-    result = run(svc.run_turn(
-        DAVID, [(DAVID, "búscame en internet noticias del anime")], TurnContext()
-    ))
-
-    assert result.grounded is False
-    assert result.reply == GROUNDED_FALLBACK_TEXT
-    # La afinidad se anula, pero el turno conserva su GIF obligatorio.
-    assert result.affinity_delta == 0
-    assert result.gif == "happy"
-    assert result.gif_bytes == b"GIF89a-fake"
-    assert state.entry_points(42) == 0
-
-
-def test_turn_no_web_when_disabled():
+def test_turn_no_search_when_web_disabled():
     state, _ = make_state()
     search = FakeSearch(result="nunca debería usarse")
     llm = FakeLLM(replies=[llm_json("hola")])
     svc = make_service(llm, state, search=search, notifier=FakeNotifier())
 
     result = run(svc.run_turn(
-        DAVID, [(DAVID, "búscame en internet algo")], TurnContext(allow_web=False)
+        DAVID, [(DAVID, "¿A cuánto está BTC?")], TurnContext(allow_web=False)
     ))
 
     assert search.queries == []
+    assert len(llm.calls) == 1
     assert result.web_context is None
-    assert "=== RESULTADOS DE BÚSQUEDA ===" not in llm.last_system_prompt
 
 
-def _history_entry(role, content):
-    if role == "assistant":
-        return {"role": "assistant", "content": json.dumps({"reply": content})}
-    return {
-        "role": "user",
-        "content": content,
-        "author_id": str(DAVID.id),
-        "author_name": DAVID.display_name,
-    }
-
-
-def test_turn_search_on_correction_uses_conversation_context():
-    history = [
-        _history_entry("user", "que personaje mas te gusta de esa serie?"),
-        _history_entry("assistant", "¡Frieren, sin duda!"),
-        _history_entry("user", "Eisen no era el enano?"),
-        _history_entry("assistant", "Eisen es el elfo, el enano es Stark"),
-    ]
-    state, _ = make_state(histories={0: history})
-    search = FakeSearch(
-        result=(
-            "Fuente 1: Frieren\nURL: https://x.test\n"
-            "Resumen: Eisen es el enano y Stark el guerrero humano"
-        )
-    )
-    llm = FakeLLM(replies=[
-        "Frieren personajes Eisen Stark enano elfo",
-        llm_json("Eisen es el enano y Stark el humano~"),
-    ])
+@pytest.mark.parametrize(
+    "kind,mode", [("active", "active"), ("spectator", "spectator"),
+                  ("proactive", "proactive")]
+)
+def test_turns_in_conversation_sessions_do_not_offer_web(kind, mode):
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("te contesto sin buscar")])
+    search = FakeSearch(result="nunca debería usarse")
     svc = make_service(llm, state, search=search, notifier=FakeNotifier())
 
     result = run(svc.run_turn(
         DAVID,
-        [(DAVID, "uhm creo que te estas confundiendo puedes buscarlo por inernet")],
-        TurnContext(channel_id=0),
+        [(DAVID, "¿Cuál es el dato actual?")],
+        TurnContext(kind=kind, conversation_mode=mode),
     ))
 
-    assert search.queries == ["Frieren personajes Eisen Stark enano elfo"]
-    query_prompt = llm.calls[0]["messages"][1]["content"]
-    assert "Eisen" in query_prompt
-    assert "Stark" in query_prompt
-    assert result.web_context is not None
+    assert not llm.decision_calls
+    assert not search.queries
+    assert result.trace.allow_web is False
 
 
-def test_turn_search_query_ancla_un_tema_que_ya_salio_del_historial():
-    """El tema de un turn_record antiguo debe seguir anclando la búsqueda."""
-    state, _ = make_state(
-        histories={
-            0: [
-                _history_entry("user", "qué opinas de los animes?"),
-                _history_entry("assistant", "Me entretienen bastante~"),
-                _history_entry("user", "Stark era el héroe, no?"),
-                _history_entry("assistant", "Sí, Stark es el héroe."),
-            ]
-        }
+def test_ungrounded_web_reply_is_preserved_and_only_recorded():
+    state, _ = make_state()
+    search = FakeSearch(result="Las noticias hablan de una nueva temporada.")
+    answer = (
+        "Estrenan el 4 de enero, luego el 5 de febrero y el 6 de marzo "
+        "la tercera parte"
     )
-    state.turn_records["0:123"] = {
-        "channel_id": "0",
-        "reply_text": "Estábamos hablando de Frieren y de su héroe.",
-        "updated_at": NOW - 1_000,
-    }
-    search = FakeSearch(
-        result=(
-            "Fuente 1: Re:Zero\nURL: https://x.test\n"
-            "Resumen: otro anime con otro protagonista"
-        )
+    llm = FakeLLM(
+        replies=[llm_json(answer, affinity_delta=5,
+                          affinity_event="noticia increíble", gif="happy")],
+        tool_calls=[_search_tool_call("noticias anime", "quería comprobarlo")],
     )
-    llm = FakeLLM(replies=[
-        "cuál es el héroe correcto del anime",
-        llm_json("¿Podrías decirme cuál es el héroe correcto?"),
-    ])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+    svc = make_service(llm, state, search=search, gifs=FakeGif(),
+                       notifier=FakeNotifier())
 
     result = run(svc.run_turn(
-        DAVID,
-        [(DAVID, "otra vez te equivocas, el héroe no es el correcto")],
-        TurnContext(channel_id=0),
+        DAVID, [(DAVID, "¿Qué noticias hay del anime?")], TurnContext()
     ))
 
-    query_prompt = llm.calls[0]["messages"][1]["content"]
-    assert "Frieren" in query_prompt
-    assert result.reply == GROUNDED_FALLBACK_TEXT
     assert result.grounded is False
-    assert result.trace.web_relevant is False
-    assert result.trace.search_query == "cuál es el héroe correcto del anime"
+    assert result.reply == answer
+    assert result.trace.web_grounded is False
+    assert result.affinity_applied == 5  # grounding no modifica el resultado
+    assert result.gif == "happy"
 
 
-def test_turn_explicit_search_no_usa_el_tema_viejo_como_gate():
-    """Un tema nuevo explícito no debe compararse con el ancla anterior."""
-    history = [
-        _history_entry("assistant", "Frieren y Stark son geniales."),
-    ]
-    state, _ = make_state(histories={0: history})
-    state.turn_records["0:123"] = {
-        "channel_id": "0",
-        "reply_text": "Frieren y Stark son geniales.",
-        "updated_at": NOW - 1_000,
-    }
-    search = FakeSearch(
-        result=(
-            "Fuente 1: BTC\nURL: https://x.test\n"
-            "Resumen: el precio ronda los 30k"
-        )
-    )
-    llm = FakeLLM(replies=[
-        "precio bitcoin hoy",
-        llm_json("El precio ronda los 30k según he buscado~"),
-    ])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
-
-    result = run(svc.run_turn(
-        DAVID,
-        [(DAVID, "búscame en internet el precio de bitcoin")],
-        TurnContext(channel_id=0),
-    ))
-
-    assert result.reply != GROUNDED_FALLBACK_TEXT
-    assert result.grounded is True
-    assert result.trace.web_relevant is True
-
-
-def test_turn_correction_prioriza_al_usuario_y_guarda_memoria():
-    history = [
-        _history_entry("assistant", "El héroe de esa serie es Stark."),
-    ]
-    state, _ = make_state(histories={0: history})
-    search = FakeSearch(
-        result=(
-            "Fuente 1: Frieren\nURL: https://x.test\n"
-            "Resumen: el héroe que amaba Frieren era Himmel"
-        )
-    )
-    llm = FakeLLM(replies=[
-        "Frieren héroe Himmel",
-        llm_json("Tienes razón, el héroe era Himmel~"),
-    ])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
-
-    result = run(svc.run_turn(
-        DAVID,
-        [(DAVID, "te equivocas, el héroe de Frieren no es Stark")],
-        TurnContext(channel_id=0),
-    ))
-
-    assert "CORRECCIÓN DEL USUARIO (PRIORIDAD)" in llm.last_system_prompt
-    assert "El héroe de esa serie es Stark" in llm.last_system_prompt
-    assert result.memory_saved is True
-    memories = [entry["text"] for entry in state.user_memories(DAVID.id)]
-    assert any("corrigió" in text and "Frieren" in text for text in memories)
-
-
-def test_turn_search_on_uncertainty_confirmation():
-    history = [
-        _history_entry(
-            "assistant",
-            "En realidad no estoy 100% segura... creo que se llamaba Eisen",
-        ),
-    ]
-    state, _ = make_state(histories={0: history})
-    search = FakeSearch(
-        result=(
-            "Fuente 1: Frieren\nURL: https://x.test\n"
-            "Resumen: el héroe que amaba Frieren era Himmel"
-        )
-    )
-    llm = FakeLLM(replies=[
-        "Frieren nombre del heroe que amaba Frieren",
-        llm_json("¡Himmel! Ese era el héroe~"),
-    ])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
-
-    result = run(svc.run_turn(
-        DAVID, [(DAVID, "sabes su nombre?")], TurnContext(channel_id=0)
-    ))
-
-    assert search.queries == ["Frieren nombre del heroe que amaba Frieren"]
-    assert result.web_context is not None
-
-
-def test_turn_no_search_on_plain_chat():
+def test_search_failure_does_not_replace_model_reply():
     state, _ = make_state()
-    search = FakeSearch(result="nunca debería usarse")
-    llm = FakeLLM(replies=[llm_json("¡Frieren es una serie preciosa!")])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+    llm = FakeLLM(
+        replies=[llm_json("Uf, no encontré nada claro; qué raro~")],
+        tool_calls=[_search_tool_call()],
+    )
+    svc = make_service(llm, state, search=FakeSearch(result=None),
+                       notifier=FakeNotifier())
 
     result = run(svc.run_turn(
-        DAVID, [(DAVID, "me gusta Frieren")], TurnContext(channel_id=0)
+        DAVID, [(DAVID, "¿Cuál es el precio actual de BTC?")], TurnContext()
     ))
 
-    assert search.queries == []
-    assert result.web_context is None
-
-
-def test_turn_ignores_speaker_name_as_factual_marker():
-    state, _ = make_state()
-    search = FakeSearch(result="nunca debería usarse")
-    llm = FakeLLM(replies=[llm_json("Je, qué cosas dices~")])
-    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
-
-    result = run(svc.run_turn(
-        DAVID, [(DAVID, "David no era el enano?")], TurnContext(channel_id=0)
-    ))
-
-    assert search.queries == []
-    assert result.web_context is None
+    assert result.reply == "Uf, no encontré nada claro; qué raro~"
+    assert result.trace.web_requested is True
+    assert result.trace.web_grounded is False
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ _ENV_NAMES = (
     "AIRI_TRACE_KEEP_LAST",
     "TRACE_KEEP_LAST",
     "AIRI_CONVERSATION_REVIEW",
+    "AIRI_WEB_SEARCH",
 )
 
 
@@ -28,6 +29,12 @@ def test_settings_can_disable_conversation_review(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("AIRI_CONVERSATION_REVIEW", "false")
     assert Settings.from_env().conversation_review is False
+
+
+def test_settings_can_disable_web_search(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AIRI_WEB_SEARCH", "false")
+    assert Settings.from_env().web_search is False
 
 
 def test_settings_reads_airi_names(monkeypatch):

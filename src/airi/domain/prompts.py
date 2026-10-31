@@ -551,17 +551,24 @@ COMPACT_OUTPUT_PROMPT = (
     "No escribas nada fuera del JSON.\n"
 )
 
-SEARCH_QUERY_PROMPT = (
-    "Reformula el mensaje del usuario en una consulta de búsqueda web breve, "
-    "clara y objetiva, en el idioma más adecuado para encontrar la información "
-    "(normalmente español o inglés). Elimina saludos, nombres propios del bot, "
-    "muletillas y peticiones conversacionales. Conserva el sentido completo de "
-    "lo que el usuario quiere saber. Si se incluye contexto de la conversación, "
-    "úsalo para resolver pronombres e incluir los nombres propios y las "
-    "entidades en disputa (personajes, obras, fechas, etc.); si el usuario "
-    "corrige un dato, la consulta debe permitir verificarlo. Devuelve SOLO la "
-    "consulta, sin comillas, sin explicaciones, sin prefijos como 'query:' ni "
-    "viñetas."
+WEB_SEARCH_DECISION_PROMPT = (
+    "Eres Airi: una chica cercana, curiosa y algo tímida. Tienes una "
+    "herramienta para comprobar cosas en internet.\n"
+    "Úsala cuando:\n"
+    "- la persona te pida buscar, comprobar o verificar algo;\n"
+    "- haya un dato concreto del mundo real que no sepas con certeza o del "
+    "que dudes (nombre, fecha, precio, versión, noticia);\n"
+    "- la conversación deje una curiosidad factual abierta, especialmente "
+    "sobre algo reciente, y quieras averiguar qué ocurrió;\n"
+    "- la persona pregunte por noticias o novedades recientes: tu conocimiento "
+    "puede estar desactualizado, así que comprueba la información vigente;\n"
+    "- el dato importe para la conversación y merezca la pena comprobarlo.\n"
+    "No la uses para opiniones, gustos, sentimientos, recuerdos personales, "
+    "bromas ni para algo que ya esté en la conversación.\n"
+    "Si no necesitas buscar, termina esta decisión sin invocar la herramienta.\n"
+    "La query debe ser breve, objetiva, en el idioma más útil y con las "
+    "entidades del contexto. El motivo debe ser una frase corta en primera "
+    "persona."
 )
 
 # Instrucción de tono asociada a cada nivel de afinidad (arco romántico).
@@ -666,32 +673,13 @@ SCENE_PROPOSAL_SCHEMA = {
 # CONSTRUCCIÓN DEL SYSTEM PROMPT (pura: estado → string)
 # ============================================================
 
-WEB_SEARCH_HEADER = (
-    "=== MODO BÚSQUEDA WEB ACTIVO ===\n"
-    "Tienes resultados de búsqueda reales abajo. REGLAS ABSOLUTAS:\n"
-    "1. SOLO puedes usar información que aparezca literalmente en los "
-    "RESULTADOS.\n"
-    "2. Si un dato (título, fecha, nombre, precio) NO está en los "
-    "RESULTADOS, NO lo menciones. No lo completes con conocimiento previo, "
-    "no lo aproximes, no lo inventes.\n"
-    "3. Si los RESULTADOS no responden a la pregunta, di exactamente: "
-    "'No he encontrado información fiable sobre eso en la web'. "
-    "=== RESULTADOS DE BÚSQUEDA ===\n"
-)
-
-WEB_SEARCH_FOOTER = (
-    "\n\n=== FIN DE RESULTADOS ===\n\n"
-    "A partir de aquí, responde como Airi usando SOLO los datos de arriba.\n\n"
-)
-
-
 FACTUAL_HONESTY_PROMPT = (
     "\n\n=== HONESTIDAD FACTUAL ===\n"
     "Si te preguntan por un dato concreto del mundo real (nombre de personaje, "
     "obra, fecha, persona, precio o versión) que no aparece en el historial, en "
-    "tus memorias ni en los resultados de búsqueda disponibles, NO lo inventes. "
-    "Di que no estás segura y ofrece buscarlo o pide que te lo recuerden. "
-    "No apliques esta regla a opiniones, gustos ni sentimientos.\n"
+    "tus memorias ni en las notas de una búsqueda, no lo inventes. Di que no "
+    "estás segura o que no lo sabes. No apliques esta regla a opiniones, "
+    "gustos ni sentimientos.\n"
     "Tus respuestas anteriores no son una fuente de verdad: pueden contener "
     "errores. Si el usuario te corrige, su corrección prevalece sobre lo que "
     "tú hayas dicho antes y no debes repetir la afirmación corregida.\n"
@@ -719,7 +707,7 @@ def build_system_prompt(
     else:
         raise ValueError(f"Variante de system prompt desconocida: {variant!r}")
     if web_context:
-        base = WEB_SEARCH_HEADER + str(web_context) + WEB_SEARCH_FOOTER + personality
+        base = str(web_context) + personality
     else:
         base = personality
     base += FACTUAL_HONESTY_PROMPT

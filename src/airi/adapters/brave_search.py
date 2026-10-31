@@ -1,15 +1,32 @@
-"""Búsqueda web con Brave Search API."""
+"""Búsqueda web con Brave Search API.
+
+Devuelve notas estructuradas, sin URLs ni ranking: la presentación al modelo
+es responsabilidad de ``airi.domain.web_tool``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import aiohttp
+
+from airi.ports.web_search import WebResult, WebSearchNotes
 
 log = logging.getLogger(__name__)
 
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+
+_URL = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _clean(text, limit):
+    text = _URL.sub("", str(text or ""))
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
 
 
 class BraveSearchClient:
@@ -79,37 +96,34 @@ class BraveSearchClient:
 
         web_results = (data.get("web") or {}).get("results") or []
         log.info("Brave devolvió %d resultados", len(web_results))
-        if not web_results:
-            return None
 
-        formatted = []
-        for index, result in enumerate(web_results, start=1):
-            title = (result.get("title") or "").strip()
-            url = (result.get("url") or "").strip()
-            description = (result.get("description") or "").strip()
+        results = []
+        for result in web_results:
+            if not isinstance(result, dict):
+                continue
+            title = _clean(result.get("title"), 200)
+            description = _clean(result.get("description"), 500)
             extra = result.get("extra_snippets") or []
             if extra:
-                description += " " + " ".join(
-                    s.strip() for s in extra if isinstance(s, str)
+                description = _clean(
+                    description
+                    + " "
+                    + " ".join(s for s in extra if isinstance(s, str)),
+                    700,
                 )
-
-            if not url or not (title or description):
+            if not title and not description:
                 continue
+            results.append(WebResult(title=title, snippet=description))
+            if len(results) >= self.max_results:
+                break
 
-            formatted.append(
-                f"Fuente {index}: {title or 'Sin título'}\n"
-                f"URL: {url}\n"
-                f"Resumen: {description or 'Sin resumen disponible'}"
-            )
-
-        if not formatted:
+        if not results:
             log.warning("Brave devolvió resultados pero todos fueron descartados")
-            return None
+            return WebSearchNotes(())
 
         log.info(
-            "Contexto web listo (%d fuentes, %d caracteres). Primeras 300:\\n%s",
-            len(formatted),
-            len("\n\n".join(formatted)),
-            "\n\n".join(formatted)[:300],
+            "Notas web listas (%d resultados). Primeras 300:\n%s",
+            len(results),
+            "\n".join(f"{r.title}: {r.snippet}" for r in results)[:300],
         )
-        return "\n\n".join(formatted)
+        return WebSearchNotes(tuple(results))

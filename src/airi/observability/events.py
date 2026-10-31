@@ -89,6 +89,16 @@ class TurnEvent:
     search_query: str | None = None
     web_context: str | None = None
     web_relevant: bool | None = None
+    # Decisión de búsqueda por tool calling (nunca por regex).
+    web_requested: bool = False
+    web_motivo: str | None = None
+    web_tool_backend: str | None = None
+    web_decision_ms: int = 0
+    web_search_ms: int = 0
+    web_grounded: bool | None = None
+    web_notice_sent: bool = False
+    web_error: str | None = None
+    web_note_years: list = field(default_factory=list)
 
     # Respuesta del LLM
     raw_llm: str | None = None

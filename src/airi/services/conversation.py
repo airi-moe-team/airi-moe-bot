@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 import traceback
 import uuid
@@ -35,7 +34,6 @@ from airi.domain.constants import (
     MAX_HISTORY_MESSAGES,
     QUICK_HISTORY_MESSAGES,
     QUICK_REPLY_MAX_CHARS,
-    SEARCH_QUERY_MAX_TOKENS,
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.gifs import ALLOWED_GIF_TYPES
@@ -62,9 +60,7 @@ from airi.domain.notices import (
     relationship_confirmed_notice,
     relationship_proposed_notice,
     self_changed_notice,
-    web_search_notice,
 )
-from airi.domain.prompts import SEARCH_QUERY_PROMPT
 from airi.domain.reactions import is_negative_reaction
 from airi.domain.relationship_claims import (
     relationship_claim_problem,
@@ -86,14 +82,11 @@ from airi.domain.turn_quality import (
     merge_issues,
     parse_review,
     quality_issues,
-    reply_repeats_history,
+    reply_repeats_history,  # noqa: F401 - reexported for compatibility/tests
     token_overlap,
 )
-from airi.domain.web import (
-    detect_search_intent,
-    recent_topic_terms,
-    web_results_relevant,
-)
+from airi.domain.web import detect_search_intent, recent_topic_terms
+from airi.domain.web_tool import note_years
 from airi.logging_setup import (
     get_logger,
     reset_correlation_id,
@@ -106,17 +99,11 @@ from airi.observability.trace_store import TraceStore
 from airi.ports.llm import LLMMeta
 from airi.services.relationships import RelationshipService
 from airi.services.state import AppState
+from airi.services.web_search import WebSearchOutcome, WebSearchService
 
 log = get_logger(__name__)
 
-# Contexto que recibe el modelo cuando la búsqueda web no da resultados.
-SEARCH_FAILED_CONTEXT = (
-    "La búsqueda web falló o no devolvió resultados. "
-    "No afirmes que buscaste con éxito ni inventes datos "
-    "actuales. Comunica esta limitación con naturalidad."
-)
-
-# Ventana de conversación que se envía al reformulador de la query. Sin ella,
+# Ventana de conversación que se ofrece a la decisión de búsqueda. Sin ella,
 # una corrección como "puedes buscarlo" no contiene las entidades en disputa.
 SEARCH_CONTEXT_MESSAGES = 10
 SEARCH_CONTEXT_ENTRY_MAX_CHARS = 300
@@ -232,32 +219,6 @@ def _recent_topic_terms_for_turn(
         texts, exclude_names=exclude_names, limit=limit
     )
 
-
-_SEARCH_FAILURE_MARKERS = (
-    "no he encontrado",
-    "no encontre",
-    "no pude encontrar",
-    "no pude buscar",
-    "no he podido",
-    "no tengo informacion",
-    "no dispongo de",
-    "no me ha sido posible",
-)
-
-
-def _acknowledges_search_failure(reply):
-    """True si la respuesta ya comunica honestamente el fallo de búsqueda."""
-    normalized = " ".join((reply or "").casefold().split())
-    return any(marker in normalized for marker in _SEARCH_FAILURE_MARKERS)
-
-
-# Respuesta honesta cuando el grounded-check detecta datos inventados.
-GROUNDED_FALLBACK_TEXT = (
-    "Mmm... he mirado en la web, pero no he encontrado una "
-    "información fiable sobre eso. Prefiero no inventarme datos. "
-    "¿Quieres que busque con otras palabras, o me das más pistas "
-    "sobre qué fuente prefieres consultar?"
-)
 
 # Palabras que piden contexto o efectos que el turno rápido no cubre: si
 # aparecen, se usa el prompt completo aunque el mensaje sea corto.
@@ -512,6 +473,10 @@ class ConversationService:
         self.affinity_scope = affinity_scope or AFFINITY_VIEW_SCOPE
         settings = Settings.from_env()
         self.conversation_review_enabled = settings.conversation_review
+        self.web_search_enabled = settings.web_search
+        self.web_search = WebSearchService(
+            llm=llm, search=search, notifier=notifier
+        )
         self.time_config = time_config or TimeConfig(
             enabled=settings.time_context,
             timezone=settings.timezone,
@@ -618,6 +583,14 @@ class ConversationService:
             # ella se usa el historial público del canal.
             date_session = self.state.dates.get(str(uid))
             in_date = isinstance(date_session, dict)
+            web_allowed = (
+                ctx.allow_web
+                and not in_date
+                and ctx.kind not in {"spectator", "active", "proactive"}
+                and getattr(ctx, "conversation_mode", "normal")
+                not in {"spectator", "active", "proactive"}
+            )
+            ev.allow_web = web_allowed
             if in_date:
                 history = list(date_session.get("history") or [])
             else:
@@ -715,22 +688,28 @@ class ConversationService:
                 "Airi",
                 getattr(user, "display_name", ""),
             )
-            topic_terms = _recent_topic_terms_for_turn(
-                self.state,
-                ctx.channel_id,
+            # El detector léxico ya no decide búsquedas: solo alimenta la
+            # memoria de correcciones. La búsqueda la decide el modelo con
+            # tool calling; aquí no se usa para disparar nada.
+            search_intent = detect_search_intent(
+                merged_text,
                 history=prior_history,
                 snapshot=ctx.spectator_snapshot,
-                current_text=merged_text,
                 exclude_names=exclude_names,
             )
-            negative_reaction = is_negative_reaction(merged_text)
-            if ctx.allow_web:
-                search_intent = detect_search_intent(
-                    merged_text,
+            if search_intent != "correction":
+                search_intent = None
+            topic_terms = ()
+            if search_intent:
+                topic_terms = _recent_topic_terms_for_turn(
+                    self.state,
+                    ctx.channel_id,
                     history=prior_history,
                     snapshot=ctx.spectator_snapshot,
+                    current_text=merged_text,
                     exclude_names=exclude_names,
                 )
+            negative_reaction = is_negative_reaction(merged_text)
 
             extra_note = ctx.extra_note
             preference_correction = (
@@ -783,66 +762,67 @@ class ConversationService:
                     part for part in (extra_note, correction_note) if part
                 )
 
-            if search_intent:
-                if self.notifier is not None:
-                    await self.notifier.send(web_search_notice())
+            web_outcome = WebSearchOutcome()
+            if web_allowed and self.web_search_enabled:
                 t0 = _time.perf_counter()
-                self._log_module("web_search", "activated", reason=search_intent)
-                try:
-                    search_query = await self._build_search_query(
-                        merged_text,
-                        context=_search_query_context(
-                            prior_history, ctx.spectator_snapshot
-                        ),
-                        topic_terms=topic_terms,
-                    )
-                    if self.search is not None:
-                        web_context = await self.search.search(search_query)
-                except Exception as exc:
+                self._log_module("web_search", "activated")
+                web_outcome = await self.web_search.run(
+                    current_text=merged_text,
+                    context=_search_query_context(
+                        prior_history, ctx.spectator_snapshot
+                    ),
+                )
+                timings["search_ms"] = int((_time.perf_counter() - t0) * 1000)
+                if web_outcome.error:
                     self._log_module(
                         "web_search",
                         "failed",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
+                        error_message=web_outcome.error,
                     )
-                    raise
-                self._log_module(
-                    "web_search",
-                    "activated",
-                    duration_ms=int((_time.perf_counter() - t0) * 1000),
-                    reason=search_intent,
-                )
-                if not web_context or not str(web_context).strip():
-                    log.warning("La búsqueda web no devolvió resultados")
-                    web_context = SEARCH_FAILED_CONTEXT
-                    search_failed = True
-                elif not web_results_relevant(
-                    web_context,
-                    search_query,
-                    # En una búsqueda explícita el usuario puede estar
-                    # introduciendo un tema nuevo: no lo comparemos con el
-                    # ancla vieja. La query sigue validándose por sus propias
-                    # entidades propias.
-                    () if search_intent == "explicit" else topic_terms,
-                    exclude_names=exclude_names,
-                ):
-                    log.warning(
-                        "Los resultados web no cubren el tema de la consulta; "
-                        "se descartan para no responder con datos ajenos."
+                elif web_outcome.requested:
+                    self._log_module(
+                        "web_search",
+                        "activated",
+                        reason="tool_call",
+                        query=web_outcome.request.query,
+                        results=bool(
+                            web_outcome.notes and not web_outcome.notes.is_empty
+                        ),
                     )
+                else:
                     self._log_module(
                         "web_search",
                         "skipped",
-                        reason_code="irrelevant_results",
+                        reason_code="model_declined",
                     )
-                    web_context = SEARCH_FAILED_CONTEXT
-                    search_failed = True
-                timings["search_ms"] = int((_time.perf_counter() - t0) * 1000)
+            web_context = web_outcome.prompt_block
+            search_query = (
+                web_outcome.request.query if web_outcome.request else None
+            )
+            search_failed = (
+                web_outcome.failed if web_outcome.requested else False
+            )
             ev.search_query = search_query
             ev.web_query = search_query
             ev.web_context = web_context
             ev.web_relevant = (
-                None if search_query is None else not search_failed
+                None if not web_outcome.requested else not web_outcome.failed
+            )
+            ev.web_requested = web_outcome.requested
+            ev.web_motivo = (
+                web_outcome.request.motivo if web_outcome.request else None
+            )
+            ev.web_tool_backend = (
+                "native" if web_allowed and self.web_search_enabled else None
+            )
+            ev.web_decision_ms = web_outcome.decision_ms
+            ev.web_search_ms = web_outcome.search_ms
+            ev.web_notice_sent = web_outcome.notice_sent
+            ev.web_error = web_outcome.error
+            ev.web_note_years = (
+                list(note_years(web_outcome.notes))
+                if web_outcome.notes is not None
+                else []
             )
 
             delta_max = self.date_delta_max if in_date else AFFINITY_DELTA_MAX
@@ -952,33 +932,27 @@ class ConversationService:
                     negative_reaction=negative_reaction,
                 )
 
-            # Si la búsqueda no dio resultados o no cubría el tema, la
-            # respuesta debe reconocerlo. Si el modelo no lo hace, se sustituye
-            # por el mensaje honesto: es preferible a inventar o pedirle al
-            # usuario el dato que acabamos de buscar.
+            # El grounding es una señal de observabilidad, no un juez: ya no
+            # sustituye la respuesta ni le impone una frase a Airi.
             grounded = True
-            if search_failed and not _acknowledges_search_failure(answer):
-                log.warning(
-                    "La búsqueda web falló o fue irrelevante y la respuesta no "
-                    "lo reconocía; se reemplaza por un mensaje honesto."
-                )
-                answer = GROUNDED_FALLBACK_TEXT
-                output = ModelOutput(
-                    answer, "none", "none", "none", 0, "continue", "none", "none",
-                )
-                grounded = False
-            elif web_context and not reply_seems_grounded(answer, web_context):
-                log.warning(
-                    "La respuesta contenía datos no presentes en las fuentes; "
-                    "se reemplaza por un mensaje honesto."
-                )
-                answer = GROUNDED_FALLBACK_TEXT
-                output = ModelOutput(
-                    answer, "none", "none", "none", 0, "continue", "none", "none",
-                )
-                grounded = False
+            if web_outcome.requested:
+                if search_failed:
+                    grounded = False
+                elif web_context:
+                    grounded = reply_seems_grounded(answer, web_context)
+                if not grounded:
+                    log.info(
+                        "Grounding marcó la respuesta como no fundamentada; "
+                        "se conserva la voz del modelo y queda en traza."
+                    )
             ev.grounded = grounded
-            self._log_module("grounding", "activated", grounded=grounded)
+            ev.web_grounded = grounded if web_outcome.requested else None
+            self._log_module(
+                "grounding",
+                "activated",
+                grounded=grounded,
+                telemetry_only=web_outcome.requested,
+            )
             ev.final_reply = answer
             # Cada turno lleva GIF: si el modelo devolvió "none" (o un tipo
             # inválido), se sustituye por una emoción coherente con la afinidad.
@@ -2141,47 +2115,6 @@ class ConversationService:
                 ctx.on_trace(trace)
             except Exception:
                 log.exception("El hook on_trace falló; se ignora")
-
-    async def _build_search_query(
-        self, user_message, *, context="", topic_terms=()
-    ):
-        prompt_user = user_message
-        context_parts = []
-        if topic_terms:
-            context_parts.append(
-                "Entidades y temas recientes (solo para anclar la consulta; "
-                "no son hechos verificados):\n"
-                + ", ".join(topic_terms)
-            )
-        if context:
-            context_parts.append(
-                "Contexto reciente de la conversación:\n" + context
-            )
-        if context_parts:
-            prompt_user = (
-                "\n\n".join(context_parts)
-                + "\n\nMensaje que hay que convertir en consulta:\n"
-                + user_message
-            )
-        try:
-            content = await self.llm.chat(
-                [
-                    {"role": "system", "content": SEARCH_QUERY_PROMPT},
-                    {"role": "user", "content": prompt_user},
-                ],
-                max_tokens=SEARCH_QUERY_MAX_TOKENS,
-                temperature=0.2,
-            )
-            query = content.strip().strip('"').strip("'").strip()
-            if query:
-                query = query.splitlines()[0].strip()
-            query = query[:300]
-            return query or user_message
-        except Exception:
-            log.exception(
-                "No se pudo reformular la consulta; se usará el mensaje original"
-            )
-            return user_message
 
     def _register_user(self, who, now):
         is_new = domain_users.register_activity(

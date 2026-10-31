@@ -76,6 +76,9 @@ class Settings:
     timezone: str = ""
     # Verificación semántica breve del borrador antes de publicarlo.
     conversation_review: bool = True
+    # Habilita la herramienta de búsqueda web (la decisión sigue siendo del
+    # modelo; esto solo permite apagarla por completo).
+    web_search: bool = True
 
     @property
     def state_path(self) -> str:
@@ -110,4 +113,5 @@ class Settings:
             time_context=_env_flag_once("AIRI_TIME_CONTEXT", True),
             timezone=_env_first("AIRI_TIMEZONE", default=""),
             conversation_review=_env_flag_once("AIRI_CONVERSATION_REVIEW", True),
+            web_search=_env_flag_once("AIRI_WEB_SEARCH", True),
         )

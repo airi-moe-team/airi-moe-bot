@@ -138,6 +138,9 @@ def test_question_close_is_repaired_deterministically_without_extra_call():
 def test_repair_override_survives_json_schema_fallback():
     class StrictRepairFallbackLLM(FakeLLM):
         async def chat_with_meta(self, messages, **kwargs):
+            if kwargs.get("tools"):
+                self.decision_calls.append({"messages": messages, **kwargs})
+                return "NO_SEARCH", LLMMeta(finish_reason="stop")
             call = {"messages": messages, **kwargs}
             self.calls.append(call)
             if len(self.calls) == 1:

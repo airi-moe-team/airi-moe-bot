@@ -313,6 +313,56 @@ def test_chat_with_meta_is_non_streaming_by_default():
     assert session._captured["stream"] is False
 
 
+def test_native_tool_calls_are_sent_and_parsed():
+    session = _make_async_session({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "buscar_web",
+                        "arguments": '{"query":"precio bitcoin","motivo":"curiosidad"}',
+                    },
+                }],
+            },
+        }],
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+    tools = [{"type": "function", "function": {"name": "buscar_web"}}]
+
+    content, meta = run(client.chat_with_meta(
+        [{"role": "user", "content": "precio BTC"}],
+        tools=tools,
+        tool_choice="auto",
+    ))
+
+    assert content == ""
+    assert session._captured["tools"] == tools
+    assert session._captured["tool_choice"] == "auto"
+    assert "response_format" not in session._captured
+    assert meta.finish_reason == "tool_calls"
+    assert meta.tool_calls == [{
+        "id": "call-1",
+        "name": "buscar_web",
+        "arguments": {"query": "precio bitcoin", "motivo": "curiosidad"},
+    }]
+
+
+def test_native_tools_reject_schema_and_streaming():
+    client = HttpLlmClient(
+        base_url="http://localhost:7000", session=_make_async_session()
+    )
+    messages = [{"role": "user", "content": "hola"}]
+
+    with pytest.raises(ValueError, match="tools y response_format"):
+        run(client.chat_with_meta(messages, tools=[{}], schema={"type": "object"}))
+    with pytest.raises(ValueError, match="tools no está soportado en streaming"):
+        run(client.chat_with_meta(messages, tools=[{}], stream=True))
+
+
 def test_non_stream_response_preserves_reasoning_presence_and_server_timings():
     session = _make_async_session({
         "choices": [{"message": {

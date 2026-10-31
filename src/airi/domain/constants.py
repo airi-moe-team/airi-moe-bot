@@ -267,7 +267,12 @@ MAX_RECENT_GIFTS = env_int("MAX_RECENT_GIFTS", 3)
 # ============================================================
 
 DATE_SCENE_MAX_TOKENS = env_int("DATE_SCENE_MAX_TOKENS", 300)  # Citas UI generadas.
-SEARCH_QUERY_MAX_TOKENS = env_int("SEARCH_QUERY_MAX_TOKENS", 64)  # Reformulación búsqueda.
+# Tope de la llamada de decisión de búsqueda (tool call + argumentos).
+# Conserva el alias histórico SEARCH_QUERY_MAX_TOKENS.
+SEARCH_QUERY_MAX_TOKENS = env_int(
+    "WEB_SEARCH_DECISION_MAX_TOKENS",
+    env_int("SEARCH_QUERY_MAX_TOKENS", 128),
+)
 DATE_ACTION_LABEL_MAX = env_int("DATE_ACTION_LABEL_MAX", 80)
 DATE_SCENE_MAX = env_int("DATE_SCENE_MAX", 4)
 REPETITION_THRESHOLD = env_int("REPETITION_THRESHOLD", 4)

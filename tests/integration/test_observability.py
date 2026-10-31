@@ -74,8 +74,13 @@ def test_run_turn_generates_cid_when_missing():
 
 def test_run_turn_trace_captures_search_and_grounding():
     state, _ = make_state()
-    search = FakeSearch(result="Fuente 1: BTC\nURL: https://x\nResumen: 30k")
-    llm = FakeLLM(replies=["precio bitcoin", llm_json("ronda los 30k")])
+    search = FakeSearch(result="Bitcoin ronda los 30k")
+    llm = FakeLLM(
+        replies=[llm_json("ronda los 30k")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "precio bitcoin", "motivo": "quería comprobarlo",
+        }}]],
+    )
     svc = make_service(llm, state, search=search, notifier=FakeNotifier())
 
     result = run(svc.run_turn(
@@ -87,6 +92,8 @@ def test_run_turn_trace_captures_search_and_grounding():
     assert result.trace.web_context is not None
     assert result.trace.web_relevant is True
     assert result.trace.grounded is True
+    assert result.trace.web_requested is True
+    assert result.trace.web_motivo == "quería comprobarlo"
     assert result.trace.timings_ms["search_ms"] >= 0
 
 

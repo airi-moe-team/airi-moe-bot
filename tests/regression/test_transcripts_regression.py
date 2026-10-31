@@ -23,7 +23,6 @@ import pytest
 
 from airi.domain.affinity import affinity_level, default_entry, entry_points
 from airi.domain.dates import new_date_session
-from airi.domain.web import needs_web_search
 from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
 from airi.testing import FakeGif, FakeLLM, FakeNotifier, FakeSearch, FakeUser, make_state
@@ -99,8 +98,14 @@ def replay(spec):
     results = []
     for turn in spec["turns"]:
         text = turn["text"]
-        if allow_web and "query" in turn and needs_web_search(text):
-            llm.replies.append(turn["query"])
+        if allow_web and "query" in turn:
+            llm.tool_calls.append([{
+                "name": "buscar_web",
+                "arguments": {
+                    "query": turn["query"],
+                    "motivo": "quería comprobar ese dato",
+                },
+            }])
         llm.replies.append(turn["raw_llm"])
         # Respuestas de llamadas de reparación en el mismo orden en que las
         # dispara el servicio (parse_repair / quality_repair).

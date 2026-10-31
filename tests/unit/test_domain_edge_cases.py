@@ -279,21 +279,15 @@ def test_model_without_reply_marks_skipped():
     assert result.trace.raw_llm == "{}"
 
 
-class ExplodingLLM(FakeLLM):
-    """Falla solo al reformular la búsqueda (llamada sin `json_schema`)."""
-
-    async def chat(self, messages, **kwargs):
-        if "schema" not in kwargs:
-            import aiohttp
-
-            raise aiohttp.ClientError("sin red")
-        return await super().chat(messages, **kwargs)
-
-
-def test_search_query_failure_falls_back_to_original():
+def test_tool_call_supplies_query_without_reformulation_call():
     state, _ = make_state()
-    search = FakeSearch(result=None)
-    llm = ExplodingLLM(replies=[llm_json("no pude buscar bien")])
+    search = FakeSearch(result="precio del oro")
+    llm = FakeLLM(
+        replies=[llm_json("Ya lo miré~")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "precio actual del oro", "motivo": "quería comprobarlo",
+        }}]],
+    )
     svc = ConversationService(
         llm=llm, state=state, search=search, notifier=FakeNotifier(),
         clock=lambda: NOW,
@@ -301,9 +295,8 @@ def test_search_query_failure_falls_back_to_original():
     result = run(svc.run_turn(
         DAVID, [(DAVID, "búscame en internet el precio del oro")], TurnContext(),
     ))
-    # La consulta original se usa tal cual y el turno continúa.
-    assert search.queries == ["búscame en internet el precio del oro"]
-    assert result.reply == "no pude buscar bien"
+    assert search.queries == ["precio actual del oro"]
+    assert result.reply == "Ya lo miré~"
 
 
 def test_reflection_cooldown_blocks_second_one():
@@ -417,7 +410,6 @@ def test_date_service_time_fallback_without_clock():
     ))
     assert event == "continue"
     assert session["started_at"] > 0
-
 
 
 

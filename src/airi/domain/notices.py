@@ -91,5 +91,5 @@ def relationship_confirmed_notice(display_name, *, user_id=None):
 def web_search_notice():
     return Notice(
         "web_search",
-        "Un momentito, estoy buscando información en la web...",
+        "Airi está mirando una cosa...",
     )
