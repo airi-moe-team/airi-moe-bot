@@ -61,6 +61,7 @@ class BotContext:
     send_long_message: Callable[..., Any] = _anoop
     send_gif_bytes: Callable[..., Any] = _anoop
     judge_gift: Callable[..., Any] = _anoop
+    evaluate_date_invitation: Callable[..., Any] = _anoop
     propose_scenes: Callable[..., Any] = _anoop
     reset_conversation: Callable[..., Any] = _noop
     affinity_footer: Callable[..., str] = lambda user: ""

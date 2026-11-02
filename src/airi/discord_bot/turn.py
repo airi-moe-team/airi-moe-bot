@@ -23,7 +23,7 @@ from airi.adapters.http_llm import health_check
 from airi.discord_bot import embeds
 from airi.discord_bot.persistence import async_state_transaction, state_transaction
 from airi.discord_bot.views import date as date_views
-from airi.domain.affinity import can_date, entry_points
+from airi.domain.affinity import entry_points, is_winner
 from airi.domain.constants import (
     DATE_COOLDOWN,
     DATE_QUESTION_MIN_SECONDS,
@@ -846,15 +846,17 @@ async def handle_scene_choice(ctx, interaction, scene):
             ephemeral=True,
         )
         return
-    entry = state.affinity_entry(uid)
-    points = entry_points(entry)
-    if not can_date(points):
+    world = state.world
+    if world.get("winner_id") and not is_winner(world, uid):
         await interaction.followup.send(
-            "Ehh... *se rasca la mejilla* todavía no te conozco lo suficiente "
-            "para una cita. Llega a ser mi **amiga** y te diré que sí, ¿vale?",
+            f"Ehh... lo siento, pero ya tengo novio: "
+            f"**{state.display_name(world['winner_id'])}**. "
+            "Podemos quedar como amigos, ¿vale?",
             ephemeral=True,
         )
         return
+    entry = state.affinity_entry(uid)
+    points = entry_points(entry)
     now = time.time()
     last_date = float(entry.get("last_date", 0.0) or 0.0)
     if now - last_date < DATE_COOLDOWN:

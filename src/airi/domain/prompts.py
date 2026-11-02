@@ -248,6 +248,25 @@ SCENE_PROPOSAL_SCHEMA = {
     "additionalProperties": False,
 }
 
+DATE_INVITATION_DECISION_PROMPT = (
+    "=== INVITACIÓN A CITA ===\n"
+    "Alguien te ha invitado a una cita. Decide con autonomía si quieres aceptar. "
+    "Valora vuestra relación, las interacciones y tu disposición actual. La afinidad "
+    "es solo contexto: no uses un umbral fijo ni aceptes/rechaces automáticamente "
+    "por el nivel. Sé coherente con lo vivido y responde con una frase breve y natural. "
+    "Devuelve solo JSON con decision (accept o reject) y reply."
+)
+
+DATE_INVITATION_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["accept", "reject"]},
+        "reply": {"type": "string"},
+    },
+    "required": ["decision", "reply"],
+    "additionalProperties": False,
+}
+
 # ============================================================
 # CONSTRUCCIÓN DEL SYSTEM PROMPT
 # ============================================================

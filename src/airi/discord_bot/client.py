@@ -811,9 +811,12 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         question_option,
         roll_question,
     )
+    from airi.domain.date_invitation import parse_date_invitation_decision
     from airi.domain.diary import add_diary_entry, new_diary_entry
     from airi.domain.llm_output import extract_json_object, parse_scene_list
     from airi.domain.prompts import (
+        DATE_INVITATION_DECISION_PROMPT,
+        DATE_INVITATION_DECISION_SCHEMA,
         GIFT_JUDGE_PROMPT,
         GIFT_JUDGE_SCHEMA,
         SCENE_PROPOSAL_PROMPT,
@@ -881,6 +884,65 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         except Exception:
             log.exception("Error proponiendo escenas; uso escenas de reserva")
         return fallback_scenes()
+
+    async def evaluate_date_invitation(session, user):
+        """Decide si Airi acepta; errores o payloads inválidos fallan cerrados."""
+        uid = user.id if user is not None else None
+        display = state.display_name(uid) if uid is not None else "Alguien"
+        points = state.entry_points(uid) if uid is not None else 0
+        level_name = affinity_level(points)[0]
+        affinity_desc = affinity_prompt_section(points, level_name, display)
+        relationship_desc = relationship_status_section(
+            state.world,
+            state.users,
+            user_id=uid,
+            display_name=display,
+            now=time.time(),
+        )
+        romantic_view = relationships.view(
+            uid,
+            turn_key=(
+                f"date-invitation:{uid}:{int(time.time())}" if uid is not None else None
+            ),
+            channel_id=0,
+        )
+        romantic_view["allowed_refs"] = []
+        romantic_desc = (
+            romantic_relationship_section(romantic_view, display)
+            if uid is not None else ""
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    SYSTEM_PROMPT
+                    + affinity_desc
+                    + relationship_desc
+                    + romantic_desc
+                    + DATE_INVITATION_DECISION_PROMPT
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"{display} te invita a una cita. Decide si quieres aceptar.",
+            },
+        ]
+        try:
+            raw = await request_llama(
+                session,
+                messages,
+                schema=DATE_INVITATION_DECISION_SCHEMA,
+                max_tokens=max(256, DATE_SCENE_MAX_TOKENS),
+                temperature=0.7,
+            )
+            parsed = extract_json_object(raw) if isinstance(raw, str) else None
+            decision = parse_date_invitation_decision(parsed)
+            if decision is None:
+                log.warning("El modelo devolvió una decisión de cita inválida")
+            return decision
+        except Exception:
+            log.exception("Error evaluando invitación a cita")
+            return None
 
     async def judge_gift(session, item, user, recent_gifts=None):
         """Airi juzga un regalo: su reacción y cuánta afinidad le llega.
@@ -1190,6 +1252,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         )
 
     return SimpleNamespace(
+        evaluate_date_invitation=evaluate_date_invitation,
         propose_scenes=propose_scenes,
         judge_gift=judge_gift,
         process_date_turn=process_date_turn,
@@ -1468,6 +1531,7 @@ def run_bot(argv=None):
             process_date_turn=glue.process_date_turn,
             add_diary_reflection=glue.add_diary_reflection,
             judge_gift=glue.judge_gift,
+            evaluate_date_invitation=glue.evaluate_date_invitation,
             propose_scenes=glue.propose_scenes,
             busy_date_owner=glue.busy_date_owner,
             notify_busy=glue.notify_busy,

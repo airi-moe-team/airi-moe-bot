@@ -1,22 +1,22 @@
 {
   "feature_name": "airi-cita-decision",
   "created_at": "2026-11-02T08:40:00Z",
-  "updated_at": "2026-11-02T08:42:00Z",
+  "updated_at": "2026-11-02T09:09:00Z",
   "language": "es",
-  "phase": "requirements-generated",
+  "phase": "implementation-complete",
   "approvals": {
     "requirements": {
       "generated": true,
-      "approved": false
+      "approved": true
     },
     "design": {
-      "generated": false,
-      "approved": false
+      "generated": true,
+      "approved": true
     },
     "tasks": {
-      "generated": false,
-      "approved": false
+      "generated": true,
+      "approved": true
     }
   },
-  "ready_for_implementation": false
+  "ready_for_implementation": true
 }

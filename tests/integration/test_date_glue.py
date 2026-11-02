@@ -14,7 +14,11 @@ import time
 from airi.discord_bot.client import build_date_glue
 from airi.domain.constants import DATE_MAX_SECONDS, DATE_SCENE_MAX_TOKENS, DATE_SCENES
 from airi.domain.dates import new_date_session
-from airi.domain.prompts import GIFT_JUDGE_SCHEMA, SCENE_PROPOSAL_SCHEMA
+from airi.domain.prompts import (
+    DATE_INVITATION_DECISION_SCHEMA,
+    GIFT_JUDGE_SCHEMA,
+    SCENE_PROPOSAL_SCHEMA,
+)
 from airi.testing import FakeUser, make_state
 
 ANA = FakeUser(1, "Ana")
@@ -133,6 +137,34 @@ def test_propose_scenes_sends_model_and_low_reasoning_budget():
     assert "json_schema" not in payload
     # El límite de reasoning reserva espacio para completar la respuesta JSON.
     assert payload["max_tokens"] == max(DATE_SCENE_MAX_TOKENS, 256 + 512)
+
+
+def test_evaluate_date_invitation_parses_decision_and_provides_affinity_context():
+    state, _ = make_state(affinity={"1": {"points": 2}}, users={"1": {"name": "Ana"}})
+    glue = _glue(state)
+    session = _FakeSession(
+        json.dumps({"decision": "accept", "reply": "¡Sí, vamos!"})
+    )
+
+    decision = run(glue.evaluate_date_invitation(session, ANA))
+
+    assert decision.decision == "accept"
+    assert decision.reply == "¡Sí, vamos!"
+    payload = session.payloads[-1]
+    assert payload["response_format"]["json_schema"]["schema"] == DATE_INVITATION_DECISION_SCHEMA
+    prompt = " ".join(item["content"] for item in payload["messages"])
+    assert "2" in prompt
+    assert "umbral" in prompt.lower()
+
+
+def test_evaluate_date_invitation_fails_closed_on_invalid_json_or_model_error():
+    state, _ = make_state()
+    glue = _glue(state)
+
+    assert run(glue.evaluate_date_invitation(_FakeSession("not json"), ANA)) is None
+    assert run(
+        glue.evaluate_date_invitation(_FakeSession(exc=RuntimeError("offline")), ANA)
+    ) is None
 
 
 # --- judge_gift ------------------------------------------------------------
