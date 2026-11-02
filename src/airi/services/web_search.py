@@ -30,26 +30,45 @@ from airi.ports.web_search import WebSearchNotes
 
 log = logging.getLogger(__name__)
 
-_ACKNOWLEDGMENT_WORDS = {
-    "si", "bim", "bom", "otra", "respuesta", "correcta", "correcto",
-    "bien", "genial", "perfecto", "acertaste", "ganaste", "bravo",
-    "jaja", "exacto", "exacta", "gracias", "vale", "de", "acuerdo",
-    "que", "bueno", "buenisimo",
-}
 _ACKNOWLEDGMENT_MARKERS = {
     "si", "bien", "genial", "perfecto", "acertaste", "ganaste", "bravo",
-    "jaja", "exacto", "exacta", "gracias", "vale",
+    "jaja", "exacto", "exacta", "gracias", "vale", "felicidades",
+    "felicitaciones", "enhorabuena", "buenisimo", "increible", "lo lograste",
+    "congrats", "congratulations", "well done", "you won", "nailed it",
 }
-_CONFIRMATION_MARKERS = {
-    "correcta", "correcto", "acertaste", "ganaste", "exacto", "exacta",
+_INFORMATION_REQUEST_MARKERS = {
+    "busca", "buscar", "buscame", "buscalo", "comprueba", "comprobar",
+    "verifica", "verificar", "confirma", "averigua", "investiga", "encuentra",
+    "revisa", "revisar", "consulta", "consultar", "mira", "mirar", "dime",
+    "decirme", "explica", "saber", "quien", "cual", "cuando", "donde", "como",
+    "who", "what", "when", "where", "why", "how", "find", "search",
+    "check", "verify", "tell",
 }
+_FACTUAL_DOUBT_MARKERS = {
+    "falso", "falsa", "falsos", "falsas", "mentira", "mentiroso",
+    "mentirosa", "incorrecto", "incorrecta", "equivocado", "equivocada",
+    "dudo", "duda", "dudoso", "dudosa", "sospecho", "sospechoso",
+    "sospechosa", "contradice", "contradictorio", "contradictoria",
+}
+_FACTUAL_DOUBT_PHRASES = (
+    "no es verdad", "no es cierto", "no creo", "no estoy seguro",
+    "no estoy segura", "no me convence", "estas mintiendo", "me estas mintiendo",
+    "are you lying", "that is false", "that's false", "not true", "i doubt",
+)
+_TASK_CONTINUATION_RE = re.compile(
+    r"\b(?:siguiente|pr[oó]xima|nueva|otra)\s+(?:frase|pista|pregunta|ronda)\b"
+    r"|\b(?:aqui|ac[aá])\s+(?:va|esta|tienes)\s+(?:la\s+)?(?:frase|pista)\b"
+    r"|\b(?:adivina|identifica|resuelve)\b",
+    re.IGNORECASE,
+)
 
 
 def _is_acknowledgment_only(text: str) -> bool:
     """Reconoce confirmaciones breves, solo para suprimir búsquedas contextuales.
 
-    La lista es deliberadamente restrictiva: una pregunta, una petición o texto
-    ajeno a la lista devuelve False y conserva la decisión normal del modelo.
+    Detecta actos de reacción sin exigir que todo el mensaje pertenezca a una
+    lista cerrada (p. ej. puede mencionar el título recién acertado). Preguntas,
+    peticiones y nuevos elementos de una actividad siguen a la decisión normal.
     """
     folded = unicodedata.normalize("NFKD", text.lower())
     folded = "".join(char for char in folded if not unicodedata.combining(char))
@@ -59,12 +78,22 @@ def _is_acknowledgment_only(text: str) -> bool:
         re.sub(r"([aeiou])\1+", r"\1", word)
         for word in re.findall(r"[a-z]+", folded)
     ]
-    if not words or len(words) > 24 or any(word not in _ACKNOWLEDGMENT_WORDS for word in words):
+    if not words:
         return False
-    return (
-        any(word in _ACKNOWLEDGMENT_MARKERS for word in words)
-        and any(word in _CONFIRMATION_MARKERS for word in words)
-    )
+    if "?" in text or "¿" in text:
+        return False
+    if any(word in _INFORMATION_REQUEST_MARKERS for word in words):
+        return False
+    normalized_words = " ".join(words)
+    if any(word in _FACTUAL_DOUBT_MARKERS for word in words) or any(
+        phrase in normalized_words for phrase in _FACTUAL_DOUBT_PHRASES
+    ):
+        # La heurística solo reconoce reacciones inequívocas. Si aparece una
+        # objeción factual, deja que el modelo decida si hace falta verificar.
+        return False
+    if _TASK_CONTINUATION_RE.search(folded):
+        return False
+    return any(marker in normalized_words for marker in _ACKNOWLEDGMENT_MARKERS)
 
 
 @dataclass(frozen=True, slots=True)

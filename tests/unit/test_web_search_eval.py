@@ -31,8 +31,10 @@ def test_decision_policy_allows_initiative_for_open_factual_curiosity():
 
 
 def test_decision_policy_does_not_turn_prior_context_into_search_intent():
-    assert "según la intención del mensaje actual" in WEB_SEARCH_DECISION_PROMPT
+    assert "función del mensaje actual" in WEB_SEARCH_DECISION_PROMPT
     assert "confirme o celebre" in WEB_SEARCH_DECISION_PROMPT
+    assert "nuevo elemento que la actividad requiere resolver" in WEB_SEARCH_DECISION_PROMPT
+    assert "duda o contradicción factual" in WEB_SEARCH_DECISION_PROMPT
 
 
 def test_evaluation_reports_search_decision_precision_recall_and_case_results():

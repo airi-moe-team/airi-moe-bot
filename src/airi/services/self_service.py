@@ -14,6 +14,7 @@ from airi.domain.diary import diary_for_user
 from airi.domain.llm_output import extract_json_object, parse_self_update
 from airi.domain.prompts import SELF_REFLECTION_SCHEMA, self_reflection_prompt
 from airi.domain.self_model import apply_self_update
+from airi.domain.self_notes import is_informative_note, notes_contain
 from airi.domain.text_filters import clean_reply
 from airi.services.state import AppState
 
@@ -72,6 +73,7 @@ class SelfService:
             return ReflectionOutcome()
 
         model = self.state.self_model()
+        self.state.clean_legacy_self_discoveries()
         notes = self.state.self_notes()
         prompt = self_reflection_prompt(
             model,
@@ -130,6 +132,8 @@ class SelfService:
         discovery_text = clean_reply(discovery) if isinstance(discovery, str) else ""
         if discovery_text.strip().lower() in ("", "none", "ninguno", "null"):
             discovery_text = ""
+        elif not is_informative_note(discovery_text):
+            discovery_text = ""
         self_update = parse_self_update(parsed.get("self_update"))
 
         async with (self.lock or nullcontext()):
@@ -141,11 +145,12 @@ class SelfService:
             with context:
                 discovery_entry = None
                 if discovery_text:
-                    discovery_entry = self.state.add_self_note(
-                        discovery_text,
-                        now=now,
-                        source=trigger,
-                    )
+                    if not notes_contain(notes, discovery_text):
+                        discovery_entry = self.state.add_self_note(
+                            discovery_text,
+                            now=now,
+                            source=trigger,
+                        )
                 self_entry = None
                 if self_update:
                     self_entry = apply_self_update(

@@ -110,6 +110,9 @@ def test_reflection_prompt_contains_current_traits_and_private_recent_evidence_o
     assert "contextual:" in prompt.lower()
     assert "hipótesis:" in prompt.lower()
     assert "no incluyas nombres de usuarios" in prompt.lower()
+    assert "no guardes frases vacías" in prompt.lower()
+    assert "tampoco reformules" in prompt.lower()
+    assert 'si discovery es "none"' in prompt.lower()
 
 
 def test_discovery_without_stable_trait_pattern_does_not_force_trait_change():
@@ -129,6 +132,23 @@ def test_discovery_without_stable_trait_pattern_does_not_force_trait_change():
     assert outcome.discovery == "Hoy me apetecía probar una bebida nueva."
     assert outcome.self_entry is None
     assert state.self_model()["traits"] == before
+
+
+def test_generic_discovery_is_not_saved_or_published_as_a_change():
+    state, _ = make_state(users={"42": {"name": "David", "interactions": 10}})
+    llm = FakeLLM(replies=[
+        '{"discovery":"Hipótesis: Me estoy descubriendo poco a poco.",'
+        '"self_update":{"key":"none","op":"none","value":"",'
+        '"reason":"","evidence":""}}'
+    ])
+    service = SelfService(llm=llm, state=state, clock=lambda: NOW)
+
+    outcome = run(service.reflect(DAVID, now=NOW, force=True))
+
+    assert outcome.ran is True
+    assert outcome.discovery is None
+    assert outcome.changed is False
+    assert state.self_notes() == []
 
 
 

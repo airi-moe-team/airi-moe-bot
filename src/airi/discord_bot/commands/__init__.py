@@ -36,6 +36,7 @@ def build_registry() -> CommandRegistry:
     registry.exact("!identidad-airi", "!yo")(command(identity.handle_yo))
     registry.exact("!animo-airi", "!animo")(command(identity.handle_animo))
     registry.exact("!descubrir")(command(identity.handle_descubrir))
+    registry.exact("!descubrimientos")(command(identity.handle_descubrimientos))
     registry.prefix("!identidad-airi historia", "!yo historia")(
         command(identity.handle_yo_historia)
     )

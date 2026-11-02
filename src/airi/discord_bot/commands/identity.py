@@ -8,6 +8,7 @@ import aiohttp
 
 from airi.discord_bot import embeds
 from airi.domain.mood import render_mood_history
+from airi.domain.self_notes import recent_notes
 from airi.domain.self_model import (
     render_self_history,
     render_self_narrative,
@@ -37,6 +38,30 @@ async def handle_yo_historia(ctx, message):
     model = ctx.state.self_model()
     await message.channel.send(
         embed=embeds.system_embed(render_self_history(model))
+    )
+
+
+async def handle_descubrimientos(ctx, message):
+    """Muestra al dueño las notas privadas de autodescubrimiento."""
+    if ctx.owner_id and message.author.id != ctx.owner_id:
+        await message.reply(
+            embed=embeds.system_embed(
+                "Solo el dueño del canal puede consultar los descubrimientos privados de Airi."
+            ),
+            mention_author=False,
+        )
+        return
+
+    notes = recent_notes(ctx.state.self_notes(), limit=20)
+    if not notes:
+        text = "Aún no tengo descubrimientos guardados sobre mí."
+    else:
+        text = "**Mis descubrimientos recientes:**\n" + "\n".join(
+            f"• {note}" for note in notes
+        )
+    await message.reply(
+        embed=embeds.system_embed(text),
+        mention_author=False,
     )
 
 

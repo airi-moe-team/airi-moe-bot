@@ -1366,6 +1366,8 @@ def run_bot(argv=None):
     state = boot.state
     persistence = boot.persistence
     state.traces = trace_store
+    if state.clean_legacy_self_discoveries():
+        log.info("Se limpiaron notas genéricas y eventos legacy de autodescubrimiento")
     if boot.recovered:
         log.warning("Estado recuperado desde la copia de seguridad")
     if boot.migration is not None:

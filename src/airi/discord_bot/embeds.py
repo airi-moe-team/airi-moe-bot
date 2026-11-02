@@ -106,6 +106,7 @@ HELP_TEXT = (
     "• `!animo` — ver su ánimo actual y la evolución de los últimos turnos\n"
     "• `!yo historia` — cambios que Airi ha hecho en su forma de ser\n"
     "• `!descubrir` — pedirle a Airi una reflexión sobre sí misma (solo dueño)\n"
+    "• `!descubrimientos` — ver sus descubrimientos privados (solo dueño)\n"
     "• `!reset` — reiniciar vuestra conversación\n\n"
 
     "**🔧 Comandos de administrador**\n"

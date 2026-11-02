@@ -21,7 +21,23 @@ def test_acknowledgment_classifier_collapses_vowels_without_corrupting_words():
     assert _is_acknowledgment_only(
         "siiiiiiiiiiiiiii bim bom otra respuesta correcta  bieeeen"
     )
+    assert _is_acknowledgment_only("sii your name felicidades ganaste")
+    assert _is_acknowledgment_only("¡Felicidades! Esa respuesta era correcta.")
     assert not _is_acknowledgment_only("¡Sí, acertaste! ¿Quién escribió One Piece?")
+    assert not _is_acknowledgment_only(
+        "¡Sí, acertaste! La siguiente frase es: '¿Quién soy?'"
+    )
+
+
+def test_acknowledgment_with_explicit_search_request_is_not_suppressed():
+    assert not _is_acknowledgment_only("¡Felicidades! Busca quién escribió One Piece.")
+
+
+def test_acknowledgment_with_factual_doubt_is_not_suppressed():
+    assert not _is_acknowledgment_only(
+        "¡Felicidades, pero creo que esa respuesta es falsa!"
+    )
+    assert not _is_acknowledgment_only("Bien, no estoy segura de que sea verdad.")
 
 
 def test_model_tool_call_triggers_one_search_and_produces_prompt_notes():
@@ -89,6 +105,36 @@ def test_confirmation_with_explicit_followup_question_still_allows_search():
 
     assert outcome.requested is True
     assert search.queries == ["autor de One Piece"]
+
+
+def test_confirmation_does_not_hide_a_new_item_in_an_active_game():
+    llm = FakeLLM(tool_calls=[_tool_call("origen de la frase", "nueva pista del juego")])
+    search = FakeSearch(result="respuesta encontrada")
+    service = WebSearchService(llm=llm, search=search)
+
+    outcome = run(service.run(
+        current_text="¡Ganaste! La siguiente frase: 'Si puedo volver a verte, te encontraré'.",
+        context="Estamos jugando a identificar frases de anime. Airi acertó la anterior.",
+    ))
+
+    assert outcome.requested is True
+    assert search.queries == ["origen de la frase"]
+
+
+def test_acknowledgment_with_doubt_allows_model_to_verify_claim():
+    llm = FakeLLM(tool_calls=[_tool_call(
+        "verificar si la respuesta anterior es falsa", "el usuario expresa duda factual"
+    )])
+    search = FakeSearch(result="La fuente confirma el dato")
+    service = WebSearchService(llm=llm, search=search)
+
+    outcome = run(service.run(
+        current_text="¡Felicidades, pero creo que esa respuesta es falsa!",
+        context="Airi acaba de identificar una frase como de Your Name.",
+    ))
+
+    assert outcome.requested is True
+    assert search.queries == ["verificar si la respuesta anterior es falsa"]
 
 
 def test_failed_search_returns_control_context_not_reply_template():

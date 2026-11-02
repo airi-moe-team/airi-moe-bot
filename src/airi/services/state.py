@@ -31,7 +31,9 @@ from airi.domain.self_model import (
 from airi.domain.self_notes import (
     NOTES_KEY,
     add_note,
+    is_informative_note,
     normalize_notes,
+    remove_legacy_diary_discoveries,
 )
 from airi.observability.trace_store import TraceStore
 
@@ -217,7 +219,22 @@ class AppState:
 
     def self_notes(self) -> list:
         """Notas privadas de Airi en este servidor."""
-        return normalize_notes(self._notes_list())
+        notes = normalize_notes(self._notes_list())
+        return notes
+
+    def clean_legacy_self_discoveries(self) -> bool:
+        """Elimina basura genérica y duplicados legacy, persistiendo si cambia."""
+        raw_notes = self._notes_list()
+        notes = normalize_notes(raw_notes)
+        notes_changed = notes != raw_notes
+        if notes_changed:
+            self.world[NOTES_KEY] = notes
+        removed_diary = remove_legacy_diary_discoveries(self.diary, notes)
+        if removed_diary:
+            self.save_diary()
+        if notes_changed:
+            self.save_world()
+        return bool(notes_changed or removed_diary)
 
     def add_self_note(self, text, *, now, source="reflection"):
         entry = add_note(self._notes_list(), text, now=now, source=source)

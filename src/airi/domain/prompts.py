@@ -204,10 +204,13 @@ WEB_SEARCH_DECISION_PROMPT = (
     "- Buscar algo reciente (noticias, lanzamientos o cambios) relevante para la charla.\n"
     "Si hay una actividad explícita en curso, conserva su objetivo: busca lo necesario para cumplirla, "
     "no te desvíes a definir una palabra si el usuario necesita identificar, comparar o resolver algo.\n"
-    "Decide según la intención del mensaje actual. El contexto anterior sirve para resolver referencias, "
-    "pero no crea por sí solo una nueva petición de búsqueda. No vuelvas a verificar una respuesta "
-    "anterior solo porque el usuario la confirme o celebre; hazlo únicamente si ahora pide comprobarla "
-    "o expresa duda.\n"
+    "Decide según la función del mensaje actual: distingue una nueva pregunta o dato que hace avanzar "
+    "la actividad de una reacción social a la respuesta anterior (confirmación, felicitación o celebración). "
+    "El contexto ayuda a interpretar el mensaje, pero no es por sí solo una nueva petición. No vuelvas a "
+    "verificar una respuesta anterior solo porque el usuario la confirme o celebre. Si el mismo mensaje "
+    "añade una pregunta, petición de verificación, duda o contradicción factual, o un nuevo elemento que "
+    "la actividad requiere resolver, sí puedes buscar para comprobarlo, incluso si no pide literalmente "
+    "‘buscar’.\n"
     "NO la uses para opiniones, emociones, felicitaciones o cosas ya dichas. "
     "Si no es necesario buscar, termina sin invocarla."
 )
@@ -630,6 +633,13 @@ def self_reflection_prompt(
         "ÁNIMO RECIENTE (estado transitorio, solo como evidencia; no es un "
         "rasgo):\n"
         f"{mood_context}\n"
+        "GUARDIA DE CALIDAD DEL DESCUBRIMIENTO (prioritaria): devuelve discovery=\"none\" "
+        "salvo que puedas expresar un dato concreto, nuevo y útil sobre una preferencia, "
+        "límite o patrón de Airi, respaldado por evidencia específica visible arriba. "
+        "No guardes frases vacías sobre estar descubriéndote, crecer, aprender o ser tú misma; "
+        "tampoco reformules, etiquetes ni conviertas en hipótesis una nota ya listada. "
+        "Si la evidencia no permite decir qué aprendiste exactamente, usa \"none\". "
+        "La etiqueta Contextual o Hipótesis no vuelve útil una idea vaga ni repetida. "
         "El descubrimiento actúa como gatillo para evaluar si un trait refleja un patrón "
         "estable. Si revela un patrón de personalidad, identifica el trait más cercano y "
         "propón un cambio gradual de un punto cuando la evidencia reciente lo respalde. "
@@ -647,7 +657,8 @@ def self_reflection_prompt(
         "Cambia como máximo un trait; indica motivo y evidencia específicos. Si el "
         "descubrimiento no revela un patrón estable o no hay evidencia, usa exactamente "
         'el sentinel neutro {"key":"none","op":"none","value":"","reason":"",'
-        '"evidence":""}. No cambies gustos ni preferencias base.'
+        '"evidence":""}. Si discovery es \"none\", usa también este sentinel. '
+        "No cambies gustos ni preferencias base."
     )
 
 def last_shutdown_prompt_section(world):

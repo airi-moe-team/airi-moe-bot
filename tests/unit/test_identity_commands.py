@@ -59,6 +59,34 @@ def test_yo_does_not_show_private_notes():
     assert "Mis rasgos" in embed.description
 
 
+def test_descubrimientos_shows_private_notes_to_owner():
+    ctx = make_ctx(owner_id=1)
+    ctx.state.add_self_note("He descubierto que me gusta la lluvia", now=10.0)
+    message = FakeMessage("!descubrimientos", author_id=1)
+    run(identity.handle_descubrimientos(ctx, message))
+    embed = message.replies[0][1]["embed"]
+    assert "Mis descubrimientos recientes" in embed.description
+    assert "me gusta la lluvia" in embed.description
+
+
+def test_descubrimientos_is_owner_only():
+    ctx = make_ctx(owner_id=1)
+    ctx.state.add_self_note("Nota privada", now=10.0)
+    message = FakeMessage("!descubrimientos", author_id=999)
+    run(identity.handle_descubrimientos(ctx, message))
+    embed = message.replies[0][1]["embed"]
+    assert "Solo el dueño" in embed.description
+    assert "Nota privada" not in embed.description
+
+
+def test_descubrimientos_reports_empty_state():
+    ctx = make_ctx(owner_id=1)
+    message = FakeMessage("!descubrimientos", author_id=1)
+    run(identity.handle_descubrimientos(ctx, message))
+    embed = message.replies[0][1]["embed"]
+    assert "Aún no tengo descubrimientos" in embed.description
+
+
 def test_yo_historia_without_changes():
     ctx = make_ctx()
     message = FakeMessage("!yo historia")
