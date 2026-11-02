@@ -34,6 +34,7 @@ def build_registry() -> CommandRegistry:
     registry.exact("!reiniciar-temporada", "!reiniciar_temporada")(command(season.handle))
     registry.exact("!reset")(command(reset.handle))
     registry.exact("!identidad-airi", "!yo")(command(identity.handle_yo))
+    registry.exact("!animo-airi", "!animo")(command(identity.handle_animo))
     registry.exact("!descubrir")(command(identity.handle_descubrir))
     registry.prefix("!identidad-airi historia", "!yo historia")(
         command(identity.handle_yo_historia)

@@ -142,6 +142,23 @@ def test_reset_forgets_self_notes_but_keeps_identity_traits_and_values():
             "self_notes": [
                 {"ts": 1.0, "text": "Confío en KOKODA", "source": "reflection"}
             ],
+            "mood": {
+                "label": "molesta",
+                "valence": -2,
+                "energy": 3,
+                "warmth": 1,
+                "cause": "KOKODA me ignoró",
+            },
+            "mood_history": [
+                {
+                    "ts": 2.0,
+                    "label": "molesta",
+                    "valence": -2,
+                    "energy": 3,
+                    "warmth": 1,
+                    "cause": "KOKODA me ignoró",
+                }
+            ],
         }
     )
     ctx = _ctx(state)
@@ -154,6 +171,8 @@ def test_reset_forgets_self_notes_but_keeps_identity_traits_and_values():
     assert "tastes" not in model
     assert model["history"] == []
     assert state.world["self_notes"] == []
+    assert state.world["mood"] is None
+    assert state.world["mood_history"] == []
     # El "yo" tipado sobrevive a la temporada.
     assert model["traits"]["juguetona"] == 5
     assert model["values"] == ["honestidad"]

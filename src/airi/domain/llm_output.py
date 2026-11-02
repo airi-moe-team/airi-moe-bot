@@ -18,6 +18,7 @@ from airi.domain.constants import (
     LAST_CHANCE_RESULTS,
 )
 from airi.domain.gifs import ALLOWED_GIF_TYPES
+from airi.domain.mood import MOOD_SCHEMA, normalize_mood
 from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.relationships import (
     EVIDENCE_KINDS,
@@ -94,6 +95,8 @@ class ModelOutput(NamedTuple):
     romantic_update: object = None
     # Propuesta/aceptación/rechazo de pareja (RelationshipAction) o None.
     relationship_action: object = None
+    # Ánimo transitorio del turno: {"label","valence","energy","warmth","cause"}.
+    mood: object = None
 
 
 def _model_output(
@@ -111,11 +114,12 @@ def _model_output(
     self_update=None,
     romantic_update=None,
     relationship_action=None,
+    mood=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
         question, event, disconnect, self_update,
-        romantic_update, relationship_action,
+        romantic_update, relationship_action, mood,
     )
 
 
@@ -324,6 +328,22 @@ def parse_self_update(raw_update):
     }
 
 
+def parse_mood(raw_mood):
+    """Normaliza el ánimo transitorio declarado por el modelo.
+
+    Devuelve el dict canónico o `None` si no hay nada usable. El suavizado, la
+    persistencia y el fallback viven en `airi.domain.mood.apply_mood`.
+    """
+    if isinstance(raw_mood, str) and raw_mood.strip().lower() in (
+        "",
+        "none",
+        "ninguno",
+        "null",
+    ):
+        return None
+    return normalize_mood(raw_mood)
+
+
 def parse_disconnect(raw_disconnect):
     """Normaliza la decisión de marcharse propuesta por el modelo.
 
@@ -444,6 +464,8 @@ def parse_model_output(
     date_question = parse_date_question(parsed.get("date_question"))
     # Identidad: cambio de "yo" propuesto por Airi (opcional).
     self_update = parse_self_update(parsed.get("self_update"))
+    # Ánimo transitorio del turno (opcional; si falta se usa el fallback).
+    mood = parse_mood(parsed.get("mood"))
     # Marcharse: decisión contextual y excepcional de Airi.
     disconnect = parse_disconnect(parsed.get("disconnect"))
     # Relación: etapa afectiva y acción de pareja propuestas por el modelo.
@@ -467,7 +489,7 @@ def parse_model_output(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
         affinity_event, disconnect, self_update, romantic_update,
-        relationship_action,
+        relationship_action, mood,
     )
 
 # Esquema dedicado para turnos de sesión (espectador/activa/proactiva).
@@ -513,6 +535,7 @@ RESPONSE_SCHEMA = {
     "properties": {
         "reply": {"type": "string"},
         "gif": {"type": "string", "enum": sorted(ALLOWED_GIF_TYPES)},
+        "mood": MOOD_SCHEMA,
         "memory": {"type": "string"},
         "diary": {"type": "string"},
         "affinity_delta": {"type": "integer"},
@@ -609,6 +632,7 @@ RESPONSE_SCHEMA = {
     "required": [
         "reply",
         "gif",
+        "mood",
         "memory",
         "diary",
         "affinity_delta",

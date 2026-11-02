@@ -358,15 +358,39 @@ SELF_DISCOVERIES_MAX = env_int("SELF_DISCOVERIES_MAX", 50)
 SELF_NOTES_MAX = env_int("SELF_NOTES_MAX", SELF_DISCOVERIES_MAX)
 SELF_HISTORY_MAX = env_int("SELF_HISTORY_MAX", 200)
 SELF_HISTORY_VIEW_LIMIT = env_int("SELF_HISTORY_VIEW_LIMIT", 10)
-SELF_UPDATE_MIN_INTERVAL = env_int("SELF_UPDATE_MIN_INTERVAL", 3600)
+SELF_UPDATE_MIN_INTERVAL = env_int("SELF_UPDATE_MIN_INTERVAL", 900)
 SELF_KEY_DAILY_LIMIT = _positive_env_int(
-    "SELF_KEY_DAILY_LIMIT", 1, maximum=SELF_HISTORY_MAX
+    "SELF_KEY_DAILY_LIMIT", 2, maximum=SELF_HISTORY_MAX
 )
 SELF_KEY_DAILY_SECONDS = env_int("SELF_KEY_DAILY_SECONDS", 86400)
-SELF_DECAY_DAYS = env_int("SELF_DECAY_DAYS", 7)
+SELF_DECAY_DAYS = env_int("SELF_DECAY_DAYS", 30)
 SELF_DECAY_STEP = env_int("SELF_DECAY_STEP", 1)
 SELF_REFLECTION_EVERY_N = env_int("SELF_REFLECTION_EVERY_N", 5)
 SELF_REFLECTION_MIN_INTERVAL = env_int("SELF_REFLECTION_MIN_INTERVAL", 1800)
 SELF_REFLECTION_MAX_TOKENS = env_int("SELF_REFLECTION_MAX_TOKENS", 300)
 SELF_UPDATE_OPS = ("add", "remove", "inc", "set", "rewrite_concept", "none")
 SELF_UPDATE_SOURCES = ("message", "gift", "date", "reflection", "season")
+
+# ============================================================
+# ÁNIMO DEL TURNO (mood)
+# ============================================================
+# El ánimo es transitorio: no modifica los traits (identidad estable). Se
+# declara por turno, se suaviza con inercia y decae hacia una base derivada de
+# los traits. `MOOD_ENABLED=false` desactiva por completo su registro/prompt.
+MOOD_ENABLED = env_flag("MOOD_ENABLED", True)
+MOOD_MAX_STEP = max(1, env_int("MOOD_MAX_STEP", 1))
+MOOD_STALE_HOURS = max(1, env_int("MOOD_STALE_HOURS", 6))
+MOOD_STALE_SECONDS = MOOD_STALE_HOURS * 3600
+MOOD_HISTORY_MAX = _positive_env_int("MOOD_HISTORY_MAX", 50)
+MOOD_CAUSE_MAX_CHARS = env_int("MOOD_CAUSE_MAX_CHARS", 120)
+MOOD_VALENCE_MIN = env_int("MOOD_VALENCE_MIN", -2)
+MOOD_VALENCE_MAX = env_int("MOOD_VALENCE_MAX", 2)
+MOOD_AROUSAL_MIN = env_int("MOOD_AROUSAL_MIN", 1)
+MOOD_AROUSAL_MAX = env_int("MOOD_AROUSAL_MAX", 5)
+
+# Categorías visibles (cuadrantes valencia × energía). La intensidad va 0..5.
+MOOD_CATEGORY_MAX = env_int("MOOD_CATEGORY_MAX", 5)
+MOOD_BAR_WIDTH = max(1, env_int("MOOD_BAR_WIDTH", 10))
+# Una categoría secundaria solo se muestra si llega a esta intensidad.
+MOOD_CATEGORY_MIN_SECONDARY = env_int("MOOD_CATEGORY_MIN_SECONDARY", 2)
+MOOD_CATEGORY_MAX_VISIBLE = max(1, env_int("MOOD_CATEGORY_MAX_VISIBLE", 2))

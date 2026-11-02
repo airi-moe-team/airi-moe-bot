@@ -20,6 +20,8 @@ CONFIG_KEYS = (
     "SELF_TRAIT_MIN",
     "SELF_TRAIT_MAX",
     "SELF_KEY_DAILY_LIMIT",
+    "SELF_UPDATE_MIN_INTERVAL",
+    "SELF_DECAY_DAYS",
     "SELF_REFLECTION_EVERY_N",
     "SELF_REFLECTION_MIN_INTERVAL",
     "SELF_HISTORY_MAX",
@@ -54,6 +56,8 @@ from airi.domain.constants import (
     AFFINITY_LEVELS,
     DATE_SCENES,
     SELF_KEY_DAILY_LIMIT,
+    SELF_UPDATE_MIN_INTERVAL,
+    SELF_DECAY_DAYS,
     SELF_REFLECTION_EVERY_N,
     SELF_REFLECTION_MIN_INTERVAL,
     SELF_BASE_TRAITS,
@@ -67,6 +71,8 @@ print(json.dumps({
     "trait_names": SELF_TRAITS_ALLOWLIST,
     "trait_values": SELF_BASE_TRAITS,
     "daily_limit": SELF_KEY_DAILY_LIMIT,
+    "update_min_interval": SELF_UPDATE_MIN_INTERVAL,
+    "decay_days": SELF_DECAY_DAYS,
     "reflection_every_n": SELF_REFLECTION_EVERY_N,
     "reflection_min_interval": SELF_REFLECTION_MIN_INTERVAL,
     "seeded_traits": seeded["traits"],
@@ -89,6 +95,9 @@ def test_business_settings_keep_current_defaults_when_environment_is_empty():
         "expresiva", "timida", "juguetona", "celosa", "sarcastica", "curiosa"
     ]
     assert config["trait_values"]["curiosa"] == 4
+    assert config["daily_limit"] == 2
+    assert config["update_min_interval"] == 900
+    assert config["decay_days"] == 30
     assert config["seeded_traits"] == config["trait_values"]
     assert config["allows_custom_trait"] is False
     assert config["date_before_threshold"] is False
@@ -175,7 +184,7 @@ def test_out_of_range_base_trait_falls_back_as_a_pair():
 def test_invalid_daily_update_limit_falls_back(limit):
     config, stderr = _load_config({"SELF_KEY_DAILY_LIMIT": limit})
 
-    assert config["daily_limit"] == 1
+    assert config["daily_limit"] == 2
     assert "SELF_KEY_DAILY_LIMIT" in stderr
 
 
@@ -208,7 +217,9 @@ def test_example_environment_documents_valid_business_json():
     assert len(levels) >= 7
     assert scenes
     assert set(allowlist) == set(base_traits)
-    assert values["SELF_KEY_DAILY_LIMIT"] == "1"
+    assert values["SELF_KEY_DAILY_LIMIT"] == "2"
+    assert values["SELF_UPDATE_MIN_INTERVAL"] == "900"
+    assert values["SELF_DECAY_DAYS"] == "30"
 
 
 def test_main_module_loads_dotenv_before_importing_bot_modules():

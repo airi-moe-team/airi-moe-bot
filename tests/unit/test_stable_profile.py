@@ -1,5 +1,8 @@
 """Perfil canónico de gustos configurable por entorno + self-updates sin gustos."""
 
+import json
+from pathlib import Path
+
 
 from airi.domain.spectator import load_stable_profile
 from airi.services.state import AppState
@@ -13,13 +16,18 @@ def test_load_stable_profile_sin_variable(monkeypatch):
 def test_load_stable_profile_json_valido(monkeypatch):
     monkeypatch.setenv(
         "AIRI_PROFILE",
-        '{"loves":["videojuegos","ramen"],"dislikes":["grosero"],'
+        '{"loves":["videojuegos","ramen"],"comforts":["dulces"],'
+        '"curious_about":["té"],"dislikes":["spam"],'
+        '"boundaries":["groserías"],'
         '"favorite_food":"ramen y dulces","favorite_flower":"las rosas"}',
     )
     profile = load_stable_profile()
     assert profile == {
         "loves": ["videojuegos", "ramen"],
-        "dislikes": ["grosero"],
+        "comforts": ["dulces"],
+        "curious_about": ["té"],
+        "dislikes": ["spam"],
+        "boundaries": ["groserías"],
         "favorite_food": "ramen y dulces",
         "favorite_flower": "las rosas",
     }
@@ -40,6 +48,84 @@ def test_load_stable_profile_componentes_raros_se_ignoran(monkeypatch):
     assert profile["loves"] == ["videojuegos"]
     assert profile["favorite_food"] == "postres"
     assert profile["favorite_flower"] == ""
+
+
+def test_profile_legacy_loves_is_preserved_and_new_categories_default_empty(monkeypatch):
+    monkeypatch.setenv("AIRI_PROFILE", '{"loves":["anime"]}')
+    profile = load_stable_profile()
+    assert profile["loves"] == ["anime"]
+    assert profile["comforts"] == []
+    assert profile["curious_about"] == []
+    assert profile["dislikes"] == []
+    assert profile["boundaries"] == []
+
+
+def test_preferences_prompt_separates_tastes_curiosity_and_boundaries():
+    from airi.domain.prompts import preferences_prompt_section
+
+    prompt = preferences_prompt_section({
+        "preferences": {
+            "loves": ["anime"],
+            "comforts": ["dormir"],
+            "curious_about": ["té"],
+            "dislikes": ["spam"],
+            "boundaries": ["groserías"],
+            "favorite_food": "dulces",
+            "favorite_flower": "tulipanes",
+        }
+    })
+    assert "Intereses y gustos estables: anime" in prompt
+    assert "Me reconforta: dormir" in prompt
+    assert "Me da curiosidad explorar: té" in prompt
+    assert "Cosas que prefiero evitar: spam" in prompt
+    assert "Límites de trato: groserías" in prompt
+    assert "no implica que ya me guste ni que lo haya probado" in prompt
+    assert "dulces" in prompt
+
+
+def test_self_narrative_displays_preference_categories_separately():
+    from airi.domain.self_model import render_self_narrative
+
+    state = AppState()
+    text = render_self_narrative(
+        state.self_model(),
+        notes=[],
+        preferences={
+            "loves": ["anime"],
+            "comforts": ["dormir"],
+            "curious_about": ["té"],
+            "dislikes": ["spam"],
+            "boundaries": ["groserías"],
+            "favorite_food": "dulces",
+            "favorite_flower": "tulipanes",
+        },
+    )
+    assert "**Mis intereses:** anime" in text
+    assert "**Me reconforta:** dormir" in text
+    assert "**Me da curiosidad:** té" in text
+    assert "**Prefiero evitar:** spam" in text
+    assert "**Límites de trato:** groserías" in text
+    assert "comida dulces" in text
+
+
+def test_example_env_profile_documents_all_preference_categories():
+    example = Path(__file__).resolve().parents[2] / ".env.example"
+    line = next(
+        row.strip() for row in example.read_text(encoding="utf-8").splitlines()
+        if row.strip().startswith("# AIRI_PROFILE=")
+    )
+    profile = json.loads(line.split("=", 1)[1].strip().strip("'\""))
+    assert {
+        "loves",
+        "comforts",
+        "curious_about",
+        "dislikes",
+        "boundaries",
+        "favorite_food",
+        "favorite_flower",
+    } <= set(profile)
+    assert "narrativas imaginativas e interactivas" in profile["curious_about"]
+    assert "que asuman que estoy para servir" in profile["boundaries"]
 
 
 def test_apply_stable_profile_persiste_en_preferences():

@@ -80,6 +80,7 @@ class SelfService:
             now=now,
             notes=notes,
             preferences=self.state.world.get("preferences"),
+            mood_history=self.state.world.get("mood_history"),
         )
         messages = [
             {
@@ -145,13 +146,6 @@ class SelfService:
                         now=now,
                         source=trigger,
                     )
-                    if discovery_entry:
-                        self.state.log_diary_event(
-                            "discovery",
-                            user_id,
-                            f"Airi descubre: {discovery_text}",
-                            now=now,
-                        )
                 self_entry = None
                 if self_update:
                     self_entry = apply_self_update(
@@ -162,6 +156,13 @@ class SelfService:
                         source="reflection",
                     )
                     if self_entry:
+                        if (
+                            discovery_entry
+                            and str(self_entry.get("key", "")).startswith("traits.")
+                        ):
+                            # Deja trazabilidad entre el descubrimiento que
+                            # disparó la evaluación y el cambio de trait.
+                            self_entry["discovery_ref"] = discovery_entry["text"]
                         self.state.save_identity()
                 self.state.mark_self_reflection(now=now)
 

@@ -68,13 +68,22 @@ ella o cuando detecta algo relevante, para que su participación se sienta espon
 9. IF un sinónimo o variante debe activar el disparador, THEN el bot SHALL exigir que el
    alias esté definido explícitamente en la configuración del matcher.
 10. THE perfil canónico de gustos SHALL ser configurable por variable de entorno (JSON
-    con loves/dislikes/favorite_food/favorite_flower) y SHALL prevalecer sobre lo
+     con loves, comforts, curious_about, dislikes, boundaries y favoritos) y SHALL prevalecer sobre lo
     persistido cuando esté definida.
 11. IF la variable no está definida o su JSON no es válido, THEN el bot SHALL conservar
     el perfil persistido o los defaults y SHALL registrar el motivo.
 12. WHEN el autodescubrimiento propone un cambio de identidad, THEN SHALL afectar solo a
     personalidad, valores, manías y forma de pensar; NO SHALL modificar los gustos
     estables ni los favoritos del perfil canónico.
+13. THE perfil SHALL distinguir intereses/gustos (`loves`), confort (`comforts`),
+    curiosidad (`curious_about`), aversiones a contenido/actividades (`dislikes`), límites
+    interpersonales (`boundaries`) y favoritos explícitos; `curious_about` NO SHALL
+    presentarse como gusto establecido ni como experiencia previa.
+14. Airi NO SHALL inferir que comparte el gusto del usuario ni convertir una categoría
+    amplia de perfil en una preferencia específica no declarada.
+15. THE matcher de intereses SHALL poder activar por `loves`, `comforts`, `curious_about`
+    y favoritos; `dislikes` y `boundaries` NO SHALL activar coincidencias positivas ni
+    contarse como afinidad positiva en regalos.
 
 ### Requirement 3: Generación contextual de la intervención
 **Objective:** Como participante, quiero que Airi entienda de qué está hablando el grupo
@@ -276,7 +285,23 @@ basada en decisiones y opiniones concretas, no en adjetivos repetidos.
 11. THE frecuencia de reflexión y el intervalo mínimo entre reflexiones SHALL ser
     configurables; los valores por defecto SHALL ser cada 5 interacciones y 1800 segundos.
 12. WHEN una reflexión no encuentre un cambio genuinamente respaldado por evidencia,
-    THEN SHALL conservar los traits actuales y emitir el sentinel de no actualización.
+     THEN SHALL conservar los traits actuales y emitir el sentinel de no actualización.
+13. THE presentación de traits para usuario SHALL agrupar los rasgos canónicos en
+    dimensiones generales y mostrarlos con barras de intensidad 1–5, sin alterar los
+    valores canónicos que recibe el prompt.
+14. WHEN exista evidencia conversacional repetida o una experiencia clara, THEN Airi
+    SHALL poder proponer un cambio gradual de trait sin esperar un acontecimiento
+    extraordinario; un descubrimiento de personalidad SHALL gatillar la evaluación del
+    trait relacionado, sin forzar un cambio si no hay evidencia adicional; SHALL conservar
+    motivo, evidencia, allowlist y rango 1–5.
+15. THE límites predeterminados de actualización SHALL permitir dos cambios por clave
+    durante 86400 segundos y exigir 900 segundos entre cambios globales; los rasgos
+    aprendidos SHALL decaer hacia su baseline cada 30 días. Estos límites SHALL seguir
+    siendo configurables desde el entorno.
+16. THE descubrimiento de reflexión SHALL clasificarse como `Patrón estable:`,
+    `Contextual:` o `Hipótesis:`; solo un patrón estable SHALL gatillar la evaluación de
+    un trait, sin usar la propia nota como única evidencia ni mezclar experiencias o
+    nombres de personas distintas.
 
 ### Requirement 10: Memoria consolidada y preferencias vigentes
 **Objective:** Como participante, quiero que Airi recuerde lo importante sin acumular
@@ -305,7 +330,16 @@ duplicados ni usar preferencias que ya fueron corregidas.
    canónica; las versiones contradictorias NO SHALL acumularse ni alternarse en el
    prompt.
 10. THE campo `memory` SHALL seguir guardando solo datos duraderos; `olvidar: <n>` SHALL
-    seguir funcionando y los datos triviales del momento NO SHALL guardarse.
+     seguir funcionando y los datos triviales del momento NO SHALL guardarse.
+11. WHEN un usuario consulta `!diario` en un canal público, THEN el comando SHALL mostrar
+    solo entradas cuyo `user_id` coincide con el invocador; la vista completa SHALL estar
+    disponible solo para el dueño mediante DM.
+12. THE diario SHALL distinguir visualmente eventos automáticos de reflexiones de Airi;
+    autodescubrimientos persistidos en `self_notes` NO SHALL duplicarse como eventos de
+    diario.
+13. WHEN el modelo solicita una reflexión realmente significativa/emocional, THEN el
+    sistema SHALL poder guardarla aunque no haya subida de afinidad, preservando
+    deduplicación y cooldown; los turnos proactivos SHALL mantener su política actual.
 
 ### Requirement 11: Coherencia de despedida, actividad y estado
 **Objective:** Como participante, quiero que lo que Airi dice sobre quedarse o marcharse

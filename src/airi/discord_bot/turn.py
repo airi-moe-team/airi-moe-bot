@@ -30,6 +30,7 @@ from airi.domain.constants import (
     DATE_QUESTION_TIME_MARGIN,
     DATE_QUESTION_TIMEOUT,
     DATE_SCENES,
+    MOOD_ENABLED,
 )
 from airi.domain.dates import (
     date_expired,
@@ -37,9 +38,14 @@ from airi.domain.dates import (
     date_turns_left,
     new_date_session,
 )
-from airi.domain.constants import SELF_TRAITS_ALLOWLIST
 from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_EMOTION_TITLES
-from airi.domain.self_model import normalize_self
+from airi.domain.mood import (
+    mood_category_color,
+    normalize_history,
+    normalize_mood,
+    render_mood_meter,
+)
+from airi.domain.self_model import normalize_self, render_trait_bars
 from airi.domain.notices import discovery_notice, self_changed_notice
 from airi.domain.text_filters import clean_reply
 from airi.domain.texts import (
@@ -157,14 +163,33 @@ def traits_summary(ctx):
     except Exception:
         pass
     traits = (model or {}).get("traits") or {}
-    parts = [
-        f"{name} {int(traits.get(name, 0))}/5"
-        for name in SELF_TRAITS_ALLOWLIST
-        if name in traits
-    ]
-    if not parts:
+    return render_trait_bars(traits)
+
+
+def mood_summary(ctx):
+    """Resumen visible del ánimo: categorías con barra (o "" si no hay)."""
+    if not MOOD_ENABLED:
         return ""
-    return " · ".join(parts)
+    state = getattr(ctx, "state", None)
+    world = getattr(state, "world", None) or {}
+    mood = normalize_mood(world.get("mood"))
+    if mood is None:
+        return ""
+    history = normalize_history(world.get("mood_history"))
+    previous = history[-2] if len(history) >= 2 else None
+    return render_mood_meter(mood, previous=previous)
+
+
+def mood_embed_color(ctx):
+    """Color del embed según la categoría principal (None si no hay ánimo)."""
+    if not MOOD_ENABLED:
+        return None
+    state = getattr(ctx, "state", None)
+    world = getattr(state, "world", None) or {}
+    mood = normalize_mood(world.get("mood"))
+    if mood is None:
+        return None
+    return discord.Color(mood_category_color(mood))
 
 
 async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0):
@@ -182,7 +207,7 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0
     try:
         embed = discord.Embed(
             title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
-            color=embeds.GIF_EMBED_COLOR,
+            color=mood_embed_color(ctx) or embeds.GIF_EMBED_COLOR,
         )
         # Rasgos de Airi encima de la imagen (Discord pinta los campos antes
         # que la imagen grande).
@@ -192,6 +217,11 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0
                 embed.add_field(
                     name="Rasgos de Airi", value=traits, inline=False
                 )
+        mood_text = mood_summary(ctx)
+        if mood_text:
+            embed.add_field(
+                name="Ánimo de Airi", value=mood_text, inline=False
+            )
         footer = affinity_footer_for_change(ctx, user, affinity_delta)
         if footer:
             avatar = getattr(user, "display_avatar", None)

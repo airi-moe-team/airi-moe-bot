@@ -378,3 +378,44 @@
 > pasan. La suite completa conserva 21 fallos en tests de conversación, temporalidad,
 > relaciones, desconexión, búsqueda web y transcripts; no aparecieron fallos del área de
 > traits. Ruff no pudo ejecutarse: mise no tiene una versión de ruff configurada.
+
+
+- [x] 21. Hacer visibles y más frecuentes los cambios graduales de traits (`R9`)
+  - [x] 21.1 Añadir tests para barras agrupadas, límites 900 s / 2 por clave al día y
+    decaimiento de 30 días.
+  - [x] 21.2 Renderizar barras de Expresividad, Humor, Curiosidad y Reactividad en el
+    embed y en `!yo`, conservando traits canónicos y barras configurables.
+  - [x] 21.3 Relajar el prompt para que considere evidencia repetida y cambios pequeños;
+    un descubrimiento de personalidad dispara la evaluación del trait relacionado, sin
+    forzar el cambio ni quitar motivo/evidencia ni límites 1–5.
+  - [x] 21.4 Vincular mediante `discovery_ref` los cambios de trait a la nota generada en
+    la misma reflexión y cubrir que un descubrimiento situacional sin patrón no cambia traits.
+  - [x] 21.5 Ejecutar pruebas focalizadas y suite completa; registrar los fallos
+    preexistentes de áreas ajenas a traits.
+  - [x] 21.6 Clasificar los descubrimientos como patrón/contexto/hipótesis; evitar nombres
+    y mezcla de personas, y conservar el esquema JSON actual.
+  - _Requirements: 9.13–9.16_
+
+
+- [x] 22. Proteger el diario y desacoplar reflexiones de los level-ups (`R10`)
+  - [x] 22.1 Filtrar `!diario` por el invocador; permitir vista completa del dueño solo
+    por DM y cubrir el rechazo de publicación global en canal.
+  - [x] 22.2 Diferenciar en el render los eventos automáticos de las reflexiones de Airi;
+    eliminar el evento de diario duplicado para descubrimientos ya guardados en
+    `self_notes`.
+  - [x] 22.3 Guardar reflexiones no proactivas y significativas aunque no haya level-up,
+    manteniendo cooldown, deduplicación y la política de turnos proactivos.
+  - [x] 22.4 Actualizar ayuda/cobertura y ejecutar las pruebas de diario, citas,
+    reflexión e integración.
+  - _Requirements: 10.11–10.13_
+
+
+- [x] 23. Separar semánticamente las preferencias canónicas de Airi (`R10`)
+  - [x] 23.1 Extender `AIRI_PROFILE` con comforts, curiosidades y límites manteniendo
+    compatibilidad con el perfil legacy.
+  - [x] 23.2 Separar las categorías en el prompt y `!yo`; prohibir inferir gustos del
+    usuario o especificar favoritos desde categorías generales.
+  - [x] 23.3 Adaptar matcher y regalos para que curiosidad no signifique gusto/experiencia,
+    ni límites/dislikes se usen como señales positivas.
+  - [x] 23.4 Actualizar `.env` y `.env.example` y validar parseo/perfiles legacy.
+  - _Requirements: 2.13–2.15_

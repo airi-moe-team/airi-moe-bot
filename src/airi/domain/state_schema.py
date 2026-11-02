@@ -108,6 +108,12 @@ def validate_legacy_dataset(name: str, data: object) -> ValidationResult:
 
 def _validate_world(world: dict, errors: list[str], label: str) -> None:
     """Valida el estado romántico anidado dentro de `world`."""
+    mood = world.get("mood")
+    if mood is not None and not isinstance(mood, dict):
+        errors.append(f"{label}.mood debe ser dict o nulo")
+    mood_history = world.get("mood_history", [])
+    if not isinstance(mood_history, list):
+        errors.append(f"{label}.mood_history debe ser una lista")
     if "relationships" not in world:
         return
     relationships = world.get("relationships")

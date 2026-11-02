@@ -7,6 +7,7 @@ import time
 import aiohttp
 
 from airi.discord_bot import embeds
+from airi.domain.mood import render_mood_history
 from airi.domain.self_model import (
     render_self_history,
     render_self_narrative,
@@ -26,6 +27,7 @@ async def handle_yo(ctx, message):
         model,
         notes=[],
         preferences=ctx.state.world.get("preferences"),
+        mood=ctx.state.world.get("mood"),
     )
     await message.channel.send(embed=embeds.system_embed(text))
 
@@ -36,6 +38,17 @@ async def handle_yo_historia(ctx, message):
     await message.channel.send(
         embed=embeds.system_embed(render_self_history(model))
     )
+
+
+async def handle_animo(ctx, message):
+    """Muestra el ánimo actual y su evolución reciente."""
+    owner_only_cause = bool(
+        ctx.owner_id and message.author.id == ctx.owner_id
+    )
+    text = render_mood_history(
+        ctx.state.world, include_cause=owner_only_cause
+    )
+    await message.channel.send(embed=embeds.system_embed(text))
 
 
 def reflection_notice(outcome):

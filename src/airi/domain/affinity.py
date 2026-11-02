@@ -97,7 +97,10 @@ def default_entry():
 def default_preferences():
     return {
         "loves": ["romantico", "tierno", "videojuegos", "lol"],
-        "dislikes": ["grosero"],
+        "comforts": [],
+        "curious_about": [],
+        "dislikes": [],
+        "boundaries": ["grosero"],
         "favorite_flower": "rosas",
         "favorite_food": "postres y dulces",
     }
@@ -110,6 +113,9 @@ def default_world():
         "season": 1,
         "preferences": default_preferences(),
         "relationships": {},
+        # Ánimo transitorio de Airi (capa separada de la identidad).
+        "mood": None,
+        "mood_history": [],
     }
 
 

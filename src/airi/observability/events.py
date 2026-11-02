@@ -174,6 +174,10 @@ class TurnEvent:
     relationship_claims_repaired: bool = False
     relationship_notes: list = field(default_factory=list)
 
+    # Ánimo transitorio del turno (no es identidad)
+    mood: dict | None = None
+    mood_source: str = "fallback"
+
     # Errores y notas
     skipped: bool = False
     error: str | None = None

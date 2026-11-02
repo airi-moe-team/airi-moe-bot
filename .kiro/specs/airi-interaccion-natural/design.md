@@ -293,8 +293,21 @@ Reglas:
 5. `memories_prompt_section` muestra solo entradas activas, con correcciones
    primero y sin exponer metadatos internos.
 6. Las preferencias de Airi no se guardan en la memoria de usuario: viven en
-   `world["preferences"]`, con `AIRI_PROFILE` como fuente canónica cuando está
-   definida. `self_model` no puede mutar `tastes.*`.
+    `world["preferences"]`, con `AIRI_PROFILE` como fuente canónica cuando está
+    definida. `self_model` no puede mutar `tastes.*`.
+
+El perfil canónico separa categorías semánticas manteniendo `loves` como clave
+legacy compatible: `loves` (intereses/gustos estables), `comforts` (cosas que
+reconfortan), `curious_about` (temas por explorar, sin inferir gusto o experiencia),
+`dislikes` (contenido/actividades que evita) y `boundaries` (límites de trato), además
+de favoritos de comida y flor. El prompt y `!yo` presentan las categorías por separado.
+El matcher pasivo puede usar intereses, comforts, curiosidades y favoritos como señales
+positivas; gifts no convierte curiosidad o límites en preferencias positivas.
+
+La instrucción prohíbe copiar gustos del interlocutor a la identidad de Airi y prohíbe
+inventar un producto concreto desde una preferencia amplia (`dulces` no determina un
+postre favorito). Perfiles persistidos antiguos que solo contienen `loves`, `dislikes` y
+favoritos siguen siendo válidos: las categorías nuevas se normalizan a listas vacías.
 
 La consolidación es conservadora: no usa embeddings ni un LLM adicional. La
 similitud se basa en normalización de texto y solapamiento de tokens, con umbral
@@ -545,3 +558,34 @@ El bloque de personalidad describe una diferencia conductual concreta para cada 
 de los cinco valores de cada trait, sin convertirlos en órdenes. Así un cambio de un
 punto (incluido 1→2) modifica la guía efectiva que recibe el LLM. Los tests comprueban
 los cinco niveles y que límites contextuales y prioridad de intención permanecen intactos.
+
+Para hacer perceptible la evolución sin cambiar el modelo canónico, los traits se
+presentan en barras agrupadas: Expresividad combina `expresiva` y `timida` invertida;
+Humor combina `juguetona` y `sarcastica`; Curiosidad refleja `curiosa`; Reactividad
+refleja `celosa`. Esta vista se comparte entre el embed y el comando de identidad.
+La instrucción de actualización admite patrones repetidos y experiencias claras para
+cambios pequeños, sin inventar evidencia. Un descubrimiento que describa un patrón de
+personalidad dispara la evaluación del trait más cercano; no obliga a modificarlo y la
+nota no se acepta como única evidencia. Si se aplica un cambio de trait en la misma
+reflexión, la entrada de historial conserva `discovery_ref` para relacionarlo con la nota.
+Cada nota comienza con `Patrón estable:`, `Contextual:` o `Hipótesis:`. Solo la primera
+clasificación puede llevar a evaluar un trait; las otras dos se conservan sin cambio de
+identidad. El prompt prohíbe mezclar personas en notas generales y exige marcar como
+hipótesis las explicaciones psicológicas no verificadas. Se mantiene el esquema JSON
+existente para no añadir complejidad al contrato estricto.
+Los defaults configurables son
+`SELF_UPDATE_MIN_INTERVAL=900`, `SELF_KEY_DAILY_LIMIT=2` por ventana de 86400 segundos
+y `SELF_DECAY_DAYS=30`; se mantienen motivo/evidencia, allowlist y límites 1–5.
+
+### Decisión 15 — Diario privado por usuario y separado por tipo de entrada
+
+Se conserva `diary.json` como lista cronológica por evento, usando `user_id` para el
+aislamiento. El comando público `!diario` filtra por el invocador. La vista completa
+`!diario todos` solo se atiende en DM y solo para `owner_id`; si el DM no está disponible,
+no se publica el contenido en el canal. El render distingue eventos automáticos de
+`reflection` (reflexión escrita por Airi). Los descubrimientos permanecen en
+`world.self_notes` y no se vuelven a copiar al diario como `kind=discovery`.
+
+El campo `diary` puede persistirse en turnos no proactivos cuando el modelo declara una
+reflexión significativa, no solo al subir la afinidad. Se conservan el límite por usuario,
+deduplicación exacta reciente y cooldown; los turnos proactivos no persisten este campo.

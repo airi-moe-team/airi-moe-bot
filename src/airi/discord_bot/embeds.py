@@ -100,9 +100,10 @@ HELP_TEXT = (
     "hablarle hasta que termine.\n"
     "• `!regalo <item>` — regalarle algo (1/día). Prueba: flores, chocolate, collar...\n"
     "• `!memorias` / `!olvidar <número>` — ver o borrar sus recuerdos sobre ti\n"
-    "• `!diario` — leer el diario de recuerdos de Airi\n"
+    "• `!diario` — ver los recuerdos de Airi sobre ti; `!diario todos` (solo dueño, por DM)\n"
     "• `!usuarios` — gente del canal\n"
     "• `!yo` — ver cómo es Airi ahora mismo\n"
+    "• `!animo` — ver su ánimo actual y la evolución de los últimos turnos\n"
     "• `!yo historia` — cambios que Airi ha hecho en su forma de ser\n"
     "• `!descubrir` — pedirle a Airi una reflexión sobre sí misma (solo dueño)\n"
     "• `!reset` — reiniciar vuestra conversación\n\n"
@@ -185,13 +186,13 @@ def memories_embed(listing):
     return embed
 
 
-def diary_embed(listing):
+def diary_embed(listing, *, footer="Recuerdos de Airi relacionados contigo"):
     embed = discord.Embed(
         title="📔 Diario de Airi",
         description=listing,
         color=GIF_EMBED_COLOR,
     )
-    embed.set_footer(text="Los recuerdos de Airi, a la vista de todos")
+    embed.set_footer(text=footer)
     return embed
 
 

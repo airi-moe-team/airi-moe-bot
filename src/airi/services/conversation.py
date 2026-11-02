@@ -32,6 +32,7 @@ from airi.domain.constants import (
     LLM_REASONING_BUDGET_MEDIUM_TOKENS,
     LLM_SHORT_MAX_TOKENS,
     MAX_HISTORY_MESSAGES,
+    MOOD_ENABLED,
     QUICK_HISTORY_MESSAGES,
     QUICK_REPLY_MAX_CHARS,
 )
@@ -62,6 +63,7 @@ from airi.domain.notices import (
     relationship_proposed_notice,
     self_changed_notice,
 )
+from airi.domain.mood import apply_mood
 from airi.domain.reactions import is_negative_reaction
 from airi.domain.relationship_claims import (
     relationship_claim_problem,
@@ -404,6 +406,9 @@ class TurnResult:
     diary_saved: bool = False
     self_changed: bool = False
     self_update_action: object = None
+    # Ánimo transitorio del turno (None si la función está desactivada).
+    mood: object = None
+    mood_source: str = "fallback"
     # Relación afectiva
     romantic_stage_before: str = "none"
     romantic_stage_after: str = "none"
@@ -1091,11 +1096,19 @@ class ConversationService:
             output.affinity_delta, applied, points_now, level_before, level_after,
         )
 
+        diary_requested = (
+            isinstance(output.diary, str)
+            and output.diary.strip().lower() not in ("", "none", "ninguno", "null")
+        )
         diary_saved = False
-        if (not proactive) and leveled_up and output.diary.lower() != "none":
+        if (not proactive) and diary_requested:
             diary_saved = self._add_diary_reflection(uid, output.diary, draft.now)
         if diary_saved:
             self._log_module("diary", "activated", diary_saved=True)
+        elif diary_requested and proactive:
+            self._log_module("diary", "skipped", reason_code="proactive_turn")
+        elif diary_requested:
+            self._log_module("diary", "skipped", reason_code="duplicate_or_cooldown")
         else:
             self._log_module("diary", "skipped", reason_code="not_requested")
         memory_saved = False
@@ -1178,6 +1191,29 @@ class ConversationService:
         # Deriva lenta: si han pasado los días configurados, los rasgos se
         # acercan un paso a su base. Es idempotente y no toca el núcleo.
         self.state.decay_self(now=draft.now)
+
+        # Ánimo transitorio del turno: se declara en la salida, se suaviza y
+        # se persiste. Nunca modifica traits ni afinidad.
+        mood = None
+        mood_source = "fallback"
+        if MOOD_ENABLED:
+            mood, mood_source = apply_mood(
+                self.state.world,
+                getattr(output, "mood", None),
+                now=draft.now,
+                user_id=uid,
+                channel_id=getattr(draft.context, "channel_id", ""),
+                traits=self.state.self_model().get("traits"),
+            )
+            self.state.save_world()
+            if ev is not None:
+                ev.mood = mood
+                ev.mood_source = mood_source
+            self._log_module(
+                "mood", "activated", label=mood["label"], source=mood_source
+            )
+        else:
+            self._log_module("mood", "skipped", reason_code="disabled")
 
         self_changed = False
         self_entry = None
@@ -1334,6 +1370,8 @@ class ConversationService:
             diary_saved=diary_saved,
             self_changed=self_changed,
             self_update_action=self_entry,
+            mood=mood,
+            mood_source=mood_source,
             romantic_stage_before=relationship_outcome.stage_before,
             romantic_stage_after=relationship_outcome.stage_after,
             romantic_update_action=relationship_outcome.update_entry,
@@ -1658,6 +1696,13 @@ class ConversationService:
             state.world,
             notes=state.world.get("self_notes") or [],
         )
+        mood_section = domain_prompts.mood_prompt_section(
+            state.world,
+            affinity_points=points,
+            display_name=user.display_name,
+            now=now,
+            user_id=user.id,
+        )
         if quick:
             # Turno breve: tono, relación, yo y memorias vigentes. Sin diario,
             # usuarios conocidos ni explicación larga de etiquetas; el mensaje
@@ -1682,6 +1727,7 @@ class ConversationService:
                 domain_prompts.last_shutdown_prompt_section(state.world),
                 domain_prompts.identity_tags_prompt_section(compact=True),
                 self_section,
+                mood_section,
                 domain_prompts.memories_prompt_section(
                     _read_only_memories(state.memories, user.id)
                 ),
@@ -1710,6 +1756,7 @@ class ConversationService:
                     date_session if isinstance(date_session, dict) else None
                 ),
                 self_section,
+                mood_section,
                 domain_prompts.memories_prompt_section(
                     _read_only_memories(state.memories, user.id)
                 ),

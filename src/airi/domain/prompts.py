@@ -12,12 +12,20 @@ from airi.domain.constants import (
     DIARY_PROMPT_MAX_CHARS,
     DIARY_PROMPT_MAX_USER,
     KNOWN_USERS_PROMPT_MAX,
+    MOOD_ENABLED,
     SELF_DISCOVERY_MAX_CHARS,
     SELF_HISTORY_VIEW_LIMIT,
 )
 from airi.domain.dates import normalize_date_session, question_allowed
 from airi.domain.diary import diary_for_user, format_relative_time
 from airi.domain.gifs import ALLOWED_GIF_TYPES
+from airi.domain.mood import (
+    MOOD_CATEGORIES,
+    MOOD_LABELS,
+    normalize_history,
+    normalize_mood,
+    render_mood_section,
+)
 from airi.domain.self_model import (
     SELF_UPDATE_SCHEMA,
     migrate_from_world,
@@ -141,8 +149,15 @@ OUTPUT_CONTRACT_PROMPT = (
     "Claves del objeto:\n"
     '- "reply": Tu respuesta completa como Airi, usando asteriscos para acciones.\n'
     f'- "gif": Emoción obligatoria. Valores permitidos: {", ".join(sorted(ALLOWED_GIF_TYPES - {"none"}))}.\n'
+    '- "mood": Tu ánimo de ESTE turno. Objeto con "label" (uno de: '
+    f'{", ".join(MOOD_LABELS)}), "valence" (-2..2), "energy" (1..5), '
+    '"warmth" (1..5), "categories" (intensidad 0..5 de: '
+    f'{", ".join(MOOD_CATEGORIES)}) y "cause" (frase breve o "none"). '
+    "La categoría principal debe ser coherente con valence/energy; usa una "
+    "secundaria ≥2 solo si de verdad matiza el ánimo. Muéstralo en el tono; "
+    "nunca lo anuncies en el texto.\n"
     '- "memory": Breve dato duradero sobre el usuario a recordar, o "none". Para olvidar algo: "olvidar: <n>".\n'
-    '- "diary": Reflexión subjetiva breve si el momento fue muy emocional, o "none".\n'
+    '- "diary": Reflexión subjetiva breve si el momento fue realmente significativo o emocional, aunque no cambie la afinidad; no repitas eventos ya registrados ni escribas por una charla cotidiana. Si no aplica, "none".\n'
     '- "affinity_delta": Entero (-5 a 5) indicando un cambio real en afinidad (0 por defecto).\n'
     '- "affinity_event": Motivo del cambio de afinidad, o "none" si fue 0.\n'
     '- "self_update": Objeto para cambiar un rasgo de tu identidad (solo si está muy justificado). '
@@ -163,7 +178,7 @@ OUTPUT_CONTRACT_PROMPT = (
     "4. No inventes información factual ni recuerdos reales.\n"
     f"\nGuía de GIFs: {GIF_EMOTION_GUIDE}\n\n"
     'Ejemplo base:\n'
-    '{"reply":"*sonríe levemente* Me parece una idea genial.","gif":"happy","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n'
+    '{"reply":"*sonríe levemente* Me parece una idea genial.","gif":"happy","mood":{"label":"alegre","valence":2,"energy":4,"warmth":4,"categories":{"entusiasmo":4,"tension":0,"calma":0,"bajon":0,"neutral":0},"cause":"none"},"memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n'
 )
 
 COMPACT_OUTPUT_PROMPT = (
@@ -171,12 +186,13 @@ COMPACT_OUTPUT_PROMPT = (
     "Devuelve exclusivamente un objeto JSON válido.\n"
     '- "reply": Tu respuesta (español, acciones entre asteriscos).\n'
     '- "gif": Emoción (obligatorio, nunca "none").\n'
+    '- "mood": Tu ánimo de este turno ("label", "valence", "energy", "warmth", "categories", "cause").\n'
     '- "memory": Dato duradero, "olvidar: <n>" o "none".\n'
     '- "diary": Reflexión personal o "none".\n'
     '- "affinity_delta": Entero -5..5 (0 por defecto). "affinity_event": Motivo o "none".\n'
     '- Mantén los campos identity, romance, relationship y disconnect en sus valores centinela (neutros).\n'
     'Ejemplo:\n'
-    '{"reply":"...","gif":"happy","memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n'
+    '{"reply":"...","gif":"happy","mood":{"label":"alegre","valence":2,"energy":4,"warmth":4,"categories":{"entusiasmo":4,"tension":0,"calma":0,"bajon":0,"neutral":0},"cause":"none"},"memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""}}\n'
 )
 
 WEB_SEARCH_DECISION_PROMPT = (
@@ -187,7 +203,7 @@ WEB_SEARCH_DECISION_PROMPT = (
 )
 
 AFFINITY_TONE_HINTS = {
-    "Desconocida": "Eres educada y cautelosa. Muestra simpatía pero con distancia natural.",
+    "Desconocida": "Trato neutral y a la defensiva. Eres cortés, pero mantienes tus barreras altas por miedo a decepcionar o salir lastimada. No ofreces confianza gratuita. Para que bajes la guardia, el usuario debe demostrar con acciones concretas que le importas; la simple simpatía o las bromas vacías no son suficientes para acercarse a ti.",
     "Conocida": "Charla relajada. Empiezas a mostrar curiosidad genuina y sueltas alguna broma.",
     "Amiga": "Eres cercana y cálida. Usas apodos, bromeas y compartes cosas tuyas libremente.",
     "Cercana": "Hay confianza especial y bromas internas. Mantén la cercanía (sin forzar romance).",
@@ -461,7 +477,38 @@ def self_model_prompt_section(world, notes=None):
     intensity = _trait_intensity_guidance(model)
     return (
         f"\n\n=== TU YO ACTUAL ===\n{body}\n{intensity}\n"
-        "Puedes actualizar un rasgo en 'self_update' si la charla lo justifica genuinamente."
+        "En cada turno, considera si lo vivido aporta evidencia para que tu forma de ser evolucione. "
+        "Un cambio pequeño de un punto es válido cuando una pauta se repite o una experiencia "
+        "te afecta de forma clara; no esperes a un acontecimiento extraordinario. "
+        "No inventes motivos ni cambies por variar: si no hay evidencia real, usa el sentinel neutro."
+    )
+
+
+def mood_prompt_section(
+    world, *, affinity_points=0, display_name="", now=0.0, user_id=None
+):
+    """Sección del ánimo del turno (transitorio, no identidad).
+
+    La causa del ánimo solo se muestra si procede del mismo interlocutor: el
+    ánimo es global, pero un motivo puede nombrar a otra persona.
+    """
+    if not MOOD_ENABLED or not isinstance(world, dict):
+        return ""
+    model = migrate_from_world(world) if not isinstance(
+        world.get("self"), dict
+    ) else world["self"]
+    mood = normalize_mood(world.get("mood"))
+    if mood is not None and user_id is not None:
+        raw_mood = world.get("mood")
+        owner = raw_mood.get("user_id") if isinstance(raw_mood, dict) else ""
+        if str(owner or "") != str(user_id):
+            mood = {**mood, "cause": "none"}
+    return render_mood_section(
+        mood,
+        traits=model.get("traits"),
+        affinity_points=affinity_points,
+        display_name=display_name,
+        now=now,
     )
 
 
@@ -487,9 +534,18 @@ SELF_REFLECTION_SCHEMA = {
 }
 
 
-def self_reflection_prompt(model, *, user_name, diary, now, notes=None, preferences=None):
+def self_reflection_prompt(
+    model, *, user_name, diary, now, notes=None, preferences=None,
+    mood_history=None,
+):
     reflection_world = {"self": model}
     current_self = self_model_prompt_section(reflection_world, notes=notes)
+    mood_rows = normalize_history(mood_history)[-5:]
+    mood_context = "\n".join(
+        f"- {entry['label']} (valencia {entry['valence']:+d}, energía "
+        f"{entry['energy']}, cercanía {entry['warmth']})"
+        for entry in mood_rows
+    ) or "(sin ánimos recientes)"
     evidence = []
     for entry in (diary or [])[-5:]:
         if not isinstance(entry, dict):
@@ -515,8 +571,25 @@ def self_reflection_prompt(model, *, user_name, diary, now, notes=None, preferen
         f"{diary_context}\n"
         "HISTORIAL RECIENTE DE CAMBIOS DE IDENTIDAD:\n"
         f"{history_context}\n"
-        "Cambia como máximo un trait solo si la evidencia concreta y un patrón reciente "
-        "lo justifican; indica motivo y evidencia específicos. Si no, usa exactamente "
+        "ÁNIMO RECIENTE (estado transitorio, solo como evidencia; no es un "
+        "rasgo):\n"
+        f"{mood_context}\n"
+        "El descubrimiento actúa como gatillo para evaluar si un trait refleja un patrón "
+        "estable. Si revela un patrón de personalidad, identifica el trait más cercano y "
+        "propón un cambio gradual de un punto cuando la evidencia reciente lo respalde. "
+        "No uses el descubrimiento como única evidencia: exige evidencia concreta, apoyada "
+        "en hechos recientes de la "
+        "conversación, diario o notas. Un gusto puntual o una reacción aislada no bastan. "
+        "Clasifica cada descubrimiento empezando exactamente por una etiqueta: "
+        "'Patrón estable:' para una tendencia respaldada por varias observaciones; "
+        "'Contextual:' para algo que depende de la situación; o 'Hipótesis:' para una "
+        "interpretación que aún necesita comprobarse. Solo 'Patrón estable:' puede llevar "
+        "a evaluar un trait; los otros tipos usan el sentinel neutro. No incluyas nombres "
+        "de usuarios ni mezcles experiencias de personas distintas en una nota general. "
+        "No presentes causas psicológicas especulativas como hechos: márcalas como "
+        "'Hipótesis:'. "
+        "Cambia como máximo un trait; indica motivo y evidencia específicos. Si el "
+        "descubrimiento no revela un patrón estable o no hay evidencia, usa exactamente "
         'el sentinel neutro {"key":"none","op":"none","value":"","reason":"",'
         '"evidence":""}. No cambies gustos ni preferencias base.'
     )
@@ -531,11 +604,27 @@ def last_shutdown_prompt_section(world):
 
 def preferences_prompt_section(world):
     prefs = world.get("preferences") or default_preferences()
+    interests = ", ".join(prefs.get("loves") or []) or "(por descubrir)"
+    comforts = ", ".join(prefs.get("comforts") or []) or "(ninguna registrada)"
+    curious = ", ".join(prefs.get("curious_about") or []) or "(ninguno registrado)"
+    dislikes = ", ".join(prefs.get("dislikes") or []) or "(ninguno registrado)"
+    boundaries = ", ".join(prefs.get("boundaries") or []) or "(ninguno registrado)"
+    food = prefs.get("favorite_food") or "(por descubrir)"
+    flower = prefs.get("favorite_flower") or "(por descubrir)"
     return (
-        f"\n\n=== TUS GUSTOS SECRETOS ===\n"
-        f"Amas: {', '.join(prefs.get('loves', []))}. Odias: {', '.join(prefs.get('dislikes', []))}. "
-        f"Flor: {prefs.get('favorite_flower', 'rosas')}. Comida: {prefs.get('favorite_food', 'postres')}. "
-        "No recites esto, úsalo para reaccionar de forma coherente."
+        "\n\n=== TUS PREFERENCIAS CANÓNICAS ===\n"
+        f"Intereses y gustos estables: {interests}.\n"
+        f"Me reconforta: {comforts}.\n"
+        f"Me da curiosidad explorar: {curious} (curiosidad no implica que ya me guste "
+        "ni que lo haya probado).\n"
+        f"Cosas que prefiero evitar: {dislikes}.\n"
+        f"Límites de trato: {boundaries}.\n"
+        f"Preferencias registradas: comida {food}; flor {flower}.\n"
+        "No recites estas listas. No infieras que compartes el gusto del usuario, no "
+        "adoptes sus preferencias y no inventes un favorito concreto a partir de una "
+        "categoría amplia (por ejemplo, que te gusten los dulces no significa que el "
+        "flan sea tu favorito). Si algo solo te da curiosidad, exprésalo sin afirmar "
+        "que ya te gusta o que lo has probado."
     )
 
 def date_context_section(session):

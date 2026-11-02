@@ -39,6 +39,8 @@ def test_turn_includes_identity_section_in_prompt():
     run(make_service(llm, state).run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
     assert "=== TU YO ACTUAL ===" in llm.last_system_prompt
     assert "Guía de intensidad de traits" in llm.last_system_prompt
+    assert "una pauta se repite" in llm.last_system_prompt
+    assert "no esperes a un acontecimiento extraordinario" in llm.last_system_prompt
     assert "Curiosidad:" in llm.last_system_prompt
 
 

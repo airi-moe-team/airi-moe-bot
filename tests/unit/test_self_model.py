@@ -8,6 +8,7 @@ from airi.domain.self_model import (
     apply_self_update,
     default_self,
     normalize_self,
+    render_trait_bars,
     render_self_narrative,
     render_self_section,
     revert_self_update,
@@ -80,6 +81,22 @@ def test_rate_limit_blocks_second_change():
     ) is None
 
 
+def test_default_rate_limit_allows_two_changes_per_trait_but_not_three():
+    model = default_self()
+    assert apply_self_update(
+        model, update(op="set", value="5"), now=NOW, user_id=42,
+        source="message",
+    )
+    assert apply_self_update(
+        model, update(op="set", value="4"), now=NOW + 901, user_id=42,
+        source="message",
+    )
+    assert apply_self_update(
+        model, update(op="set", value="5"), now=NOW + 1802, user_id=42,
+        source="message",
+    ) is None
+
+
 def test_configured_daily_limit_allows_two_changes_then_blocks_until_window_expires(
     monkeypatch,
 ):
@@ -126,6 +143,18 @@ def test_render_section_includes_identity_without_history():
     assert "me intrigó su historia" not in text
 
 
+def test_trait_bars_group_personality_into_general_dimensions():
+    model = default_self()
+    bars = render_trait_bars(model["traits"])
+    assert "Expresividad" in bars
+    assert "Humor" in bars
+    assert "Curiosidad" in bars
+    assert "Reactividad" in bars
+    assert "████" in bars
+    assert "/5" in bars
+    assert "timida" not in bars
+
+
 def test_normalize_drops_legacy_tastes_and_keeps_canonical_preferences():
     """Los gustos ya no viven en el self: solo en `world["preferences"]`."""
     model = normalize_self(
@@ -149,11 +178,12 @@ def test_normalize_drops_legacy_tastes_and_keeps_canonical_preferences():
     assert "postres" not in text
 
 
-def test_decay_moves_traits_toward_base_after_the_interval():
+def test_decay_moves_traits_toward_base_after_the_thirty_day_interval():
     model = default_self()
     model["traits"]["curiosa"] = 5
     model["last_decay_at"] = NOW
-    changed = apply_decay(model, now=NOW + 7 * 86400)
+    assert apply_decay(model, now=NOW + 29 * 86400) is False
+    changed = apply_decay(model, now=NOW + 30 * 86400)
     assert changed is True
     assert model["traits"]["curiosa"] == 4
 
@@ -226,7 +256,7 @@ def test_baseline_change_preserves_learned_character_then_decays(monkeypatch):
     # …y el decaimiento la lleva de vuelta al nuevo baseline del env.
     _patch_baseline(monkeypatch, NEW)
     model["last_decay_at"] = NOW
-    changed = apply_decay(model, now=NOW + 7 * 86400)
+    changed = apply_decay(model, now=NOW + 30 * 86400)
     assert changed is True
     assert model["traits_learned"] == {"curiosa": 0}
     assert model["traits"]["curiosa"] == 2

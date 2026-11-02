@@ -129,7 +129,15 @@ class ActivationDecision:
 # Perfil canónico de gustos (estable) configurable por entorno
 # ============================================================
 
-_PROFILE_KEYS = ("loves", "dislikes", "favorite_food", "favorite_flower")
+_PROFILE_LIST_KEYS = (
+    "loves",
+    "comforts",
+    "curious_about",
+    "dislikes",
+    "boundaries",
+)
+_PROFILE_SCALAR_KEYS = ("favorite_food", "favorite_flower")
+_PROFILE_KEYS = (*_PROFILE_LIST_KEYS, *_PROFILE_SCALAR_KEYS)
 
 
 def _clean_profile(raw):
@@ -149,10 +157,10 @@ def _clean_profile(raw):
                 if text and not text.isdigit():
                     items.append(text)
             cleaned[key] = items
-        elif isinstance(value, str):
+        elif key in _PROFILE_SCALAR_KEYS and isinstance(value, str):
             cleaned[key] = _clean_term(value)
         else:
-            cleaned[key] = []
+            cleaned[key] = "" if key in _PROFILE_SCALAR_KEYS else []
         if cleaned[key]:
             had_content = True
     if not had_content:
@@ -217,24 +225,27 @@ def _profile_tastes(profile):
     if isinstance(tastes, dict):
         return tastes
     # `world["preferences"]` legacy y modelos antiguos exponen las claves arriba.
-    if "loves" in profile or "favorite_food" in profile or "loves" in profile:
+    taste_keys = set(_PROFILE_KEYS)
+    if taste_keys.intersection(profile):
         return {
-            "loves": profile.get("loves"),
-            "dislikes": profile.get("dislikes"),
-            "favorite_food": profile.get("favorite_food"),
-            "favorite_flower": profile.get("favorite_flower"),
+            key: profile.get(key) for key in _PROFILE_KEYS
         }
     return {}
 
 
 def positive_taste_terms(profile):
-    """Términos positivos del perfil: loves + scalar favorites (sin dislikes).
+    """Términos de intereses, confort y curiosidad (sin dislikes/límites).
 
-    Las frases se parten en palabras para que "postres y dulces" active con
-    "postres"; se descartan términos demasiado cortos o vacíos.
+    También incluye favoritos concretos. Las frases se parten en palabras para
+    que "postres y dulces" active con "postres"; términos demasiado cortos o
+    vacíos se descartan.
     """
     tastes = _profile_tastes(profile)
-    terms = list(tastes.get("loves") or [])
+    terms = (
+        list(tastes.get("loves") or [])
+        + list(tastes.get("comforts") or [])
+        + list(tastes.get("curious_about") or [])
+    )
     for key in ("favorite_food", "favorite_flower"):
         value = _clean_term(tastes.get(key))
         if value:

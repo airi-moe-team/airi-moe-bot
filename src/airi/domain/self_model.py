@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from airi.domain.constants import (
     LEGACY_SELF_BASE_TRAITS,
+    MOOD_BAR_WIDTH,
     SELF_BASE_TRAITS,
     SELF_CONCEPT_MAX_CHARS,
     SELF_DECAY_DAYS,
@@ -648,6 +649,48 @@ def apply_decay(model, now, *, days=SELF_DECAY_DAYS, step=SELF_DECAY_STEP):
 # ============================================================
 
 
+_TRAIT_GROUPS = (
+    ("Expresividad", (("expresiva", 1), ("timida", -1))),
+    ("Humor", (("juguetona", 1), ("sarcastica", 1))),
+    ("Curiosidad", (("curiosa", 1),)),
+    ("Reactividad", (("celosa", 1),)),
+)
+
+
+def render_trait_bars(traits, *, width=MOOD_BAR_WIDTH):
+    """Resume traits en dimensiones amplias con barras de intensidad 1–5.
+
+    Expresividad combina expresividad y timidez (invertida); Humor combina
+    juego y sarcasmo. Los demás grupos conservan la intensidad de su trait.
+    """
+    values = traits if isinstance(traits, dict) else {}
+    lines = []
+    known = set()
+    for label, members in _TRAIT_GROUPS:
+        present = [(key, sign) for key, sign in members if key in values]
+        if not present:
+            continue
+        group_values = []
+        for key, sign in present:
+            raw = clamp_trait(_as_int(values.get(key), SELF_TRAIT_MIN))
+            known.add(key)
+            group_values.append(raw if sign > 0 else SELF_TRAIT_MAX + SELF_TRAIT_MIN - raw)
+        intensity = clamp_trait(round(sum(group_values) / len(group_values)))
+        filled = max(0, min(width, round(intensity / SELF_TRAIT_MAX * width)))
+        bar = "█" * filled + "░" * (width - filled)
+        lines.append(f"{label:<18} {bar} {intensity}/{SELF_TRAIT_MAX}")
+
+    # Los traits personalizados configurados por entorno siguen visibles.
+    for name in SELF_TRAITS_ALLOWLIST:
+        if name in known or name not in values:
+            continue
+        intensity = clamp_trait(_as_int(values.get(name), SELF_TRAIT_MIN))
+        filled = max(0, min(width, round(intensity / SELF_TRAIT_MAX * width)))
+        bar = "█" * filled + "░" * (width - filled)
+        lines.append(f"{name.capitalize():<18} {bar} {intensity}/{SELF_TRAIT_MAX}")
+    return "\n".join(lines)
+
+
 def render_self_section(model, notes=None):
     """Cuerpo compacto del "yo" para el prompt (sin volcar el historial).
 
@@ -682,41 +725,55 @@ def preferences_view(preferences):
     prefs = preferences if isinstance(preferences, dict) else {}
     return {
         "loves": list(prefs.get("loves") or []),
+        "comforts": list(prefs.get("comforts") or []),
+        "curious_about": list(prefs.get("curious_about") or []),
         "dislikes": list(prefs.get("dislikes") or []),
+        "boundaries": list(prefs.get("boundaries") or []),
         "favorite_flower": str(prefs.get("favorite_flower") or ""),
         "favorite_food": str(prefs.get("favorite_food") or ""),
     }
 
 
-def render_self_narrative(model, notes=None, preferences=None):
+def render_self_narrative(model, notes=None, preferences=None, mood=None):
     """Resumen narrativo del "yo" para el comando público `!identidad-airi`.
 
     Los descubrimientos que se muestran son los privados de ESTE servidor
     (decisión A5): los de otros servidores no se comparten ni se consultan.
     Los gustos se leen del perfil canónico (`world["preferences"]`).
     """
+    from airi.domain.mood import normalize_mood, render_mood_meter
+
     normalize_self(model)
     lines = []
     lines.append(
         "*Airi se queda pensando un momento en cómo se ve a sí misma...*\n"
         f"«{model['self_concept'] or 'Todavía me estoy descubriendo, ¿sabes?'}»"
     )
-    traits = ", ".join(
-        f"{name} {model['traits'][name]}/5" for name in SELF_TRAITS_ALLOWLIST
-    )
-    lines.append(f"**Mis rasgos:** {traits}")
+    lines.append(f"**Mis rasgos:**\n{render_trait_bars(model['traits'])}")
+    current_mood = normalize_mood(mood)
+    if current_mood is not None:
+        lines.append(
+            f"**Mi ánimo ahora:** {render_mood_meter(current_mood)}"
+        )
     if model["values"]:
         lines.append("**Lo que valoro:** " + ", ".join(model["values"]))
     if model["quirks"]:
         lines.append("**Mis manías:** " + "; ".join(model["quirks"]))
     tastes = preferences_view(preferences)
     lines.append(
-        "**Mis gustos:** me encanta "
-        + (", ".join(tastes["loves"]) or "(por descubrir)")
-        + "; me disgusta "
-        + (", ".join(tastes["dislikes"]) or "(por descubrir)")
-        + f". Mi flor favorita son {tastes['favorite_flower'] or '(por descubrir)'}"
-        + f" y mi comida favorita es {tastes['favorite_food'] or '(por descubrir)'}."
+        "**Mis intereses:** " + (", ".join(tastes["loves"]) or "(por descubrir)")
+    )
+    if tastes["comforts"]:
+        lines.append("**Me reconforta:** " + ", ".join(tastes["comforts"]))
+    if tastes["curious_about"]:
+        lines.append("**Me da curiosidad:** " + ", ".join(tastes["curious_about"]))
+    if tastes["dislikes"]:
+        lines.append("**Prefiero evitar:** " + ", ".join(tastes["dislikes"]))
+    if tastes["boundaries"]:
+        lines.append("**Límites de trato:** " + ", ".join(tastes["boundaries"]))
+    lines.append(
+        f"**Preferencias registradas:** flor {tastes['favorite_flower'] or '(por descubrir)'}; "
+        f"comida {tastes['favorite_food'] or '(por descubrir)'}."
     )
     if notes is None:
         discoveries = list(model.get("discoveries") or [])

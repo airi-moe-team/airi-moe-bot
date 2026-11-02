@@ -29,3 +29,20 @@ def test_response_schema_uses_enums_for_closed_fields():
     assert RESPONSE_SCHEMA["properties"]["gif"]["enum"]
     assert RESPONSE_SCHEMA["properties"]["date_decision"]["enum"]
     assert RESPONSE_SCHEMA["properties"]["last_chance_result"]["enum"]
+    assert RESPONSE_SCHEMA["properties"]["mood"]["properties"]["label"]["enum"]
+
+
+def test_response_schema_mood_is_strict_too():
+    mood = RESPONSE_SCHEMA["properties"]["mood"]
+    assert mood["additionalProperties"] is False
+    assert set(mood["required"]) == set(mood["properties"])
+    categories = mood["properties"]["categories"]
+    assert categories["additionalProperties"] is False
+    assert set(categories["required"]) == set(categories["properties"])
+    assert set(categories["properties"]) == {
+        "entusiasmo",
+        "tension",
+        "calma",
+        "bajon",
+        "neutral",
+    }

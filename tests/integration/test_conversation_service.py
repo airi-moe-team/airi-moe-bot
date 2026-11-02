@@ -359,6 +359,24 @@ def test_turn_level_up_logs_diary_and_reflection():
     assert any(e.get("kind") == "reflection" for e in state.diary)
 
 
+def test_emotional_diary_reflection_is_saved_without_affinity_level_up():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json(
+        "Gracias por confiarme esto.",
+        diary="Hoy me conmovió que David confiara en mí con algo tan personal.",
+    )])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "quería contarte algo personal")], TurnContext()
+    ))
+
+    assert result.leveled_up is False
+    assert result.diary_saved is True
+    assert state.diary[-1]["kind"] == "reflection"
+    assert "me conmovió" in state.diary[-1]["text"]
+
+
 def test_turn_memory_saved_sends_notice():
     state, counters = make_state()
     notifier = FakeNotifier()

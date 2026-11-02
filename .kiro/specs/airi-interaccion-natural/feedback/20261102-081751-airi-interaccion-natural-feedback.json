@@ -1,0 +1,33 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-11-02T08:17:51Z",
+  "items": [
+    {
+      "id": "FB-DIARY-PRIVACY-SCOPE",
+      "title": "Aislar el diario por interlocutor y reducir duplicados",
+      "severity": "major",
+      "impact": "El comando público !diario lee el diario global y puede exponer recuerdos de otra persona; autodescubrimientos se duplican como self_note y como evento del diario. Las reflexiones del modelo solo se guardan en cambios de nivel, pese a que el contrato permite momentos emocionales sin subida de afinidad.",
+      "recommendation": "Filtrar !diario por el usuario invocador; permitir la vista completa solo al dueño por DM; distinguir visualmente evento y reflexión; no duplicar autodescubrimientos que ya viven en self_notes; guardar reflexiones significativas con cooldown/dedup aunque no suba afinidad.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "En canales públicos, !diario SHALL mostrar únicamente entradas asociadas al invocador; la vista completa SHALL ser exclusiva del dueño y solo por DM.",
+          "El diario SHALL distinguir eventos automáticos de reflexiones escritas por Airi, y los autodescubrimientos guardados en self_notes NO SHALL duplicarse como eventos de diario.",
+          "Una reflexión significativa o emocional SHALL poder guardarse aunque no cambie la afinidad, con deduplicación y cooldown; los turnos proactivos SHALL conservar la política de no guardado."
+        ],
+        "design": [
+          "Mantener diary.json como registro por evento y `kind` como discriminador de evento/reflection; filtrar en la interfaz pública por user_id.",
+          "`!diario todos` solo funciona para owner_id cuando el mensaje viene por DM; nunca degradar a publicación de todos en canal.",
+          "Separar notas de autodescubrimiento (`world.self_notes`) del diario relacional y quitar el log duplicado kind=discovery; almacenar reflexión no proactiva cuando se solicita, con cooldown/dedup, independientemente de leveled_up."
+        ],
+        "tasks": [
+          "Añadir tests de privacidad para !diario por usuario y vista completa del dueño solo por DM.",
+          "Desacoplar el guardado del campo diary del level-up, preservando cooldown/dedup y exclusión de turnos proactivos.",
+          "Quitar duplicado diary kind=discovery cuando self_notes ya es fuente; etiquetar eventos/reflexiones en !diario y actualizar ayuda/footer.",
+          "Ejecutar tests de comandos, servicio conversacional, self-reflection, calendario/citas y suite de regresión."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

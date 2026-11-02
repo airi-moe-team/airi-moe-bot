@@ -80,7 +80,10 @@ def test_positive_taste_terms_ignora_dislikes():
     profile = {
         "tastes": {
             "loves": ["videojuegos", "ramen"],
+            "comforts": ["dormir"],
+            "curious_about": ["té verde"],
             "dislikes": ["grosero"],
+            "boundaries": ["spam"],
             "favorite_food": "postres y dulces",
             "favorite_flower": "rosas",
         }
@@ -89,10 +92,13 @@ def test_positive_taste_terms_ignora_dislikes():
     lowered = {t.casefold() for t in terms}
     assert "videojuegos" in lowered
     assert "ramen" in lowered
+    assert "dormir" in lowered
+    assert "verde" in lowered
     assert "postres" in lowered
     assert "dulces" in lowered
     assert "rosas" in lowered
     assert "grosero" not in lowered
+    assert "spam" not in lowered
 
 
 def test_positive_taste_terms_acepta_preferencias_legacy():

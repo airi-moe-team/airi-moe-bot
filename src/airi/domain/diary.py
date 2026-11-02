@@ -4,6 +4,21 @@ from __future__ import annotations
 
 from airi.domain.constants import DIARY_MAX_ENTRIES
 
+DIARY_KIND_LABELS = {
+    "reflection": "Reflexión de Airi",
+    "meet": "Encuentro",
+    "level": "Relación",
+    "date": "Cita",
+    "gift": "Regalo",
+    "confession": "Confesión",
+}
+
+
+def diary_kind_label(kind):
+    """Etiqueta visible que distingue eventos de reflexiones personales."""
+    key = str(kind or "").strip().lower()
+    return DIARY_KIND_LABELS.get(key, "Evento")
+
 
 def default_diary():
     return []

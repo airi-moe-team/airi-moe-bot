@@ -1,0 +1,32 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-11-02T07:45:27Z",
+  "items": [
+    {
+      "id": "FB-TRAITS-MORE-VISIBLE",
+      "title": "Hacer más perceptible la evolución de traits",
+      "severity": "minor",
+      "impact": "Los traits apenas cambian de forma visible porque el prompt pide justificación genuina y los límites predeterminados son conservadores; la presentación muestra valores individuales sin barras agrupadas.",
+      "recommendation": "Mostrar traits agrupados en barras de intensidad 1–5 (Expresividad, Humor, Curiosidad y Reactividad); permitir cambios basados en patrones repetidos o experiencias claras sin exigir sucesos extraordinarios; clasificar descubrimientos como Patrón estable, Contextual o Hipótesis; tratar patrones estables como gatillos para evaluar cambios, no como evidencia suficiente por sí solos; evitar nombres y mezclar usuarios; enlazar descubrimiento y cambio; usar defaults de 900 s entre cambios, hasta 2 cambios por clave en 24 h y decaimiento cada 30 días.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "Los rasgos SHALL mostrarse al usuario en dimensiones agrupadas con barras de intensidad 1–5, sin cambiar los traits canónicos almacenados.",
+          "Airi SHALL poder actualizar un rasgo ante evidencia conversacional repetida o una experiencia clara, conservando motivo, evidencia y límites de valor.",
+          "Los límites predeterminados SHALL permitir dos cambios por clave cada 24 horas y al menos 900 segundos entre cambios globales; los rasgos aprendidos SHALL decaer hacia su baseline cada 30 días."
+        ],
+        "design": [
+          "Añadir render de barras agrupadas para presentación de traits: Expresividad combina expresiva y timidez invertida; Humor combina juguetona y sarcástica; Curiosidad conserva curiosa; Reactividad conserva celosa.",
+          "Ajustar defaults configurables de SELF_UPDATE_MIN_INTERVAL=900, SELF_KEY_DAILY_LIMIT=2, SELF_DECAY_DAYS=30. Mantener límites y evidencia como guardarraíles.",
+          "Relajar la instrucción de self_update: considerar evidencia repetida y permitir cambios pequeños de un punto; clasificar las notas como Patrón estable, Contextual o Hipótesis; evitar nombres/mezcla de personas y presentar causas psicológicas no comprobadas como hipótesis; un patrón estable activa la evaluación del trait, pero no cuenta como única evidencia; registrar referencia al descubrimiento en el cambio."
+        ],
+        "tasks": [
+          "Añadir tests primero para barras agrupadas, límites de cambios 900 s / 2 por clave por ventana, decaimiento a 30 días y gatillo de descubrimiento con evidencia.",
+          "Implementar render de barras agrupadas en embed y comando de identidad; actualizar instrucción del prompt para cambios graduales basados en evidencia, con clasificación de descubrimientos.",
+          "Actualizar .env y .env.example y verificar tests de identidad, prompt, configuración y suite de regresión."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": []
+}

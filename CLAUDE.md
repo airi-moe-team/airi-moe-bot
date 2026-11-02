@@ -12,6 +12,8 @@
   - Spec: `.kiro/specs/airi-relacion-natural-basada-en-evidencia/`
 - `airi-biografia-canonica` — Integrar el pasado ficticio canónico de Airi en el prompt base, separado de la memoria dinámica por usuario y de su identidad mutable.
   - Spec: `.kiro/specs/airi-biografia-canonica/`
+- `airi-cita-decision` — Permitir invitar a Airi a cualquier afinidad y hacer que ella decida si acepta antes de iniciar la cita.
+  - Spec: `.kiro/specs/airi-cita-decision/`
 
 - `business-config-env` — Hacer configurables mediante variables de entorno, documentadas en `.env` y `.env.example`, los valores editables de configuración de negocio de Airi; mantener en código los defaults de compatibilidad y las constantes estructurales.
   - Spec: `.kiro/specs/business-config-env/`

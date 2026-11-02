@@ -35,7 +35,14 @@ def gift_effect(item, preferences, recent_gifts=None):
     if key in recent:
         return 0  # Se aburre de recibir lo mismo.
 
-    loves = {str(t).lower() for t in (preferences or {}).get("loves", [])}
+    preferences = preferences if isinstance(preferences, dict) else {}
+    loves = {
+        str(t).lower()
+        for t in (
+            list(preferences.get("loves") or [])
+            + list(preferences.get("comforts") or [])
+        )
+    }
     dislikes = {str(t).lower() for t in (preferences or {}).get("dislikes", [])}
     tags = {str(t).lower() for t in gift.get("tags", [])}
 

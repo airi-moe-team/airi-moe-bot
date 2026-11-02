@@ -105,6 +105,10 @@ def _mutate(state) -> None:
         self_model.pop("tastes", None)
         self_model["history"] = []
     state.world[NOTES_KEY] = []
+    # El ánimo es transitorio y su motivo puede nombrar a gente de la
+    # temporada anterior: se reinicia con ella.
+    state.world["mood"] = None
+    state.world["mood_history"] = []
     state.dates.clear()
     state.memories.clear()
     state.histories.clear()

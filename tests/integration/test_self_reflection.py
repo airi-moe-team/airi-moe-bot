@@ -17,7 +17,7 @@ def run(coro):
 
 
 def test_forced_reflection_adds_note_and_applies_guarded_change():
-    state, _ = make_state(users={"42": {"name": "David", "interactions": 10}})
+    state, counters = make_state(users={"42": {"name": "David", "interactions": 10}})
     llm = FakeLLM(
         replies=[
             """{
@@ -45,6 +45,8 @@ def test_forced_reflection_adds_note_and_applies_guarded_change():
     assert outcome.self_entry is not None
     assert state.self_notes()[-1]["text"] == outcome.discovery
     assert state.self_model()["traits"]["curiosa"] == 5
+    assert state.self_model()["history"][-1]["discovery_ref"] == outcome.discovery
+    assert all(kind != "discovery" for kind, _uid, _text in counters["diary_logs"])
     after_prompt = self_model_prompt_section({"self": state.self_model()})
     after_curiosity = next(
         line for line in after_prompt.splitlines() if line.startswith("Curiosidad:")
@@ -102,6 +104,31 @@ def test_reflection_prompt_contains_current_traits_and_private_recent_evidence_o
     assert "Me gusta explorar ideas nuevas" in prompt
     assert "Secreto de otra persona" not in prompt
     assert "evidencia concreta" in prompt.lower()
+    assert "descubrimiento actúa como gatillo" in prompt.lower()
+    assert "no uses el descubrimiento como única evidencia" in prompt.lower()
+    assert "patrón estable:" in prompt.lower()
+    assert "contextual:" in prompt.lower()
+    assert "hipótesis:" in prompt.lower()
+    assert "no incluyas nombres de usuarios" in prompt.lower()
+
+
+def test_discovery_without_stable_trait_pattern_does_not_force_trait_change():
+    state, _ = make_state(users={"42": {"name": "David", "interactions": 10}})
+    llm = FakeLLM(
+        replies=[
+            '{"discovery":"Hoy me apetecía probar una bebida nueva.",'
+            '"self_update":{"key":"none","op":"none","value":"",'
+            '"reason":"","evidence":""}}'
+        ]
+    )
+    service = SelfService(llm=llm, state=state, clock=lambda: NOW)
+    before = dict(state.self_model()["traits"])
+
+    outcome = run(service.reflect(DAVID, now=NOW, force=True))
+
+    assert outcome.discovery == "Hoy me apetecía probar una bebida nueva."
+    assert outcome.self_entry is None
+    assert state.self_model()["traits"] == before
 
 
 

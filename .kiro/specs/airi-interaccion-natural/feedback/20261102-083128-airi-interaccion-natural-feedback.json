@@ -1,0 +1,31 @@
+{
+  "feature": "airi-interaccion-natural",
+  "generated_at": "2026-11-02T08:31:28Z",
+  "items": [
+    {
+      "id": "FB-PREFERENCES-CATEGORIES",
+      "title": "Separar los gustos de Airi en categorías semánticas",
+      "severity": "minor",
+      "impact": "El perfil canónico mezcla intereses, curiosidades, preferencias de confort y límites de trato. Esto permite que el modelo adopte gustos del usuario o afirme favoritos concretos sin respaldo (por ejemplo, convertir 'dulces' en 'flan favorito').",
+      "recommendation": "Separar `loves` (intereses/gustos estables), `comforts` (cosas reconfortantes), `curious_about` (curiosidades sin afirmar gusto/experiencia), `dislikes` (contenido/actividades que evita), `boundaries` (límites de trato) y favoritos food/flower. Mantener compatibilidad con perfiles legacy y describir claramente cada categoría en prompt, !yo y módulos que consumen gustos.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "AIRI_PROFILE SHALL separar intereses, confort, curiosidad, aversiones, límites interpersonales y favoritos concretos; curiosity SHALL NOT imply liking or prior experience.",
+          "El prompt SHALL NOT infer que Airi comparte gustos del usuario ni derivar un producto específico de una categoría general; los consumers SHALL ignorar dislikes/boundaries como señales positivas."
+        ],
+        "design": [
+          "Extender el perfil canónico con `comforts`, `curious_about`, `boundaries`, preservando `loves` legacy. `dislikes` cubre contenido/actividades; boundaries conductas interpersonales.",
+          "Actualizar prompt, render !yo y positive taste matcher para separar categorías; curiosidad puede servir como señal conversacional, pero no como gusto fuerte o experiencia.",
+          "Actualizar AIRI_PROFILE local y ejemplo con intereses, confort, curiosidad, aversiones, límites y favoritos; mantener valores compatibles con evidencia disponible."
+        ],
+        "tasks": [
+          "Añadir tests de parsing para categorías nuevas, compatibilidad legacy y perfil de ejemplo.",
+          "Actualizar prompt de gustos, render !yo, matching del modo espectador y consumidor de regalos respetando la semántica de cada categoría.",
+          "Actualizar `.env` y `.env.example`; ejecutar suites de perfil, spectator, gifts, prompt y negocio."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}
