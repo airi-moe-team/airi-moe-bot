@@ -65,12 +65,12 @@ Hoy la búsqueda web se activa con reglas léxicas (`src/airi/domain/web.py`), s
 
 ### Requisito 6: Límites y modos
 
-**Objetivo:** Como operador, quiero acotar la herramienta para que no degrade la conversación ni el coste.
+**Objetivo:** Como operador, quiero que la búsqueda esté disponible en todos los turnos conversacionales de respuesta, incluidos spectator y active, sin que se ejecute automáticamente ni degrade la conversación o el coste.
 
 #### Criterios de aceptación
 
 1. WHEN un turno ya haya ejecutado una búsqueda THEN el sistema SHALL ignorar cualquier tool call adicional en ese turno.
-2. WHEN `allow_web` sea falso (citas, sesiones, espectador) THEN el sistema SHALL NOT ofrecer la herramienta.
+2. WHEN un turno de respuesta esté en modo normal, espectador (`spectator`) o sesión activa (`active`) THEN el sistema SHALL ofrecer la herramienta al modelo si `AIRI_WEB_SEARCH` está habilitado; la disponibilidad SHALL NOT forzar una búsqueda. WHEN el turno sea una cita o proactivo sin una petición factual THEN el sistema SHALL NOT ofrecer la herramienta.
 3. WHEN la herramienta se invoque THEN el sistema SHALL registrar query, motivo, latencia, backend y resultado.
 
 ### Requisito 7: Trazabilidad y evaluación

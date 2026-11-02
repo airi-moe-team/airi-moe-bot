@@ -309,6 +309,8 @@ airi-trace repairs                    # agrupa reparaciones por motivo e indica 
 ```bash
 airi-replay ./traces/2026-10-14/<cid>.json
 # exit 0 = la reproducción coincide; exit 1 = diverge o no es reproducible
+# El replay reutiliza la respuesta guardada y mantiene búsqueda/notificaciones externas
+# deshabilitadas; verifica fidelidad, no si Airi habría decidido buscar en vivo.
 
 airi-replay --emit-test ./traces/.../<cid>.json
 # genera tests/integration/test_regression_<cid>.py desde la traza

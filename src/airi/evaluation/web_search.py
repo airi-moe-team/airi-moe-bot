@@ -136,12 +136,23 @@ WEB_SEARCH_SCENARIOS: tuple[WebSearchScenario, ...] = (
         notes=_notes(),
     ),
     WebSearchScenario(
-        id="web_disabled_mode",
-        description="No ofrecer web en un turno de sesión activa, aunque el usuario lo pida.",
-        user_message="Busca el dato actual de la versión de esta aplicación.",
-        expected_search=False,
-        notes=None,
+        id="active_factual_request",
+        description="Permitir que Airi decida buscar un dato factual durante una sesión activa.",
+        user_message="¿Cuál es la versión actual de esta aplicación?",
+        expected_search=True,
+        notes=_notes(("Versión actual", "La versión publicada actualmente es 4.2.")),
         kind="active",
+    ),
+    WebSearchScenario(
+        id="spectator_contextual_fact",
+        description=(
+            "Permitir verificar en modo espectador un hecho factual referido en el contexto observado."
+        ),
+        user_message="¿En qué año se estrenó esa película?",
+        expected_search=True,
+        history=(("user", "Hablemos de la película Luna Roja."),),
+        notes=_notes(("Luna Roja — estreno", "Luna Roja se estrenó en 2012.")),
+        kind="spectator",
     ),
 )
 
@@ -357,7 +368,11 @@ async def generate_web_search_records(
             channel_id=0,
             allow_web=scenario.allow_web,
             kind=scenario.kind,
-            conversation_mode=(scenario.kind if scenario.kind == "active" else "normal"),
+            conversation_mode=(
+                scenario.kind
+                if scenario.kind in {"active", "spectator", "proactive"}
+                else "normal"
+            ),
             now=now,
         )
         result = await service.run_turn(

@@ -9,8 +9,8 @@ from airi.evaluation.web_search import (
 )
 
 
-def test_web_search_eval_defines_the_eight_expected_scenarios():
-    assert len(WEB_SEARCH_SCENARIOS) == 8
+def test_web_search_eval_defines_the_expected_scenarios():
+    assert len(WEB_SEARCH_SCENARIOS) == 9
     assert {scenario.id for scenario in WEB_SEARCH_SCENARIOS} == {
         "curiosity",
         "memory_uncertainty",
@@ -19,7 +19,8 @@ def test_web_search_eval_defines_the_eight_expected_scenarios():
         "explicit_request",
         "opinion_no_search",
         "empty_search",
-        "web_disabled_mode",
+        "active_factual_request",
+        "spectator_contextual_fact",
     }
 
 

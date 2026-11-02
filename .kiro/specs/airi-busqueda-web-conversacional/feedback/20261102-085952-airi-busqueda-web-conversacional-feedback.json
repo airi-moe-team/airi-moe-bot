@@ -1,0 +1,37 @@
+{
+  "feature": "airi-busqueda-web-conversacional",
+  "generated_at": "2026-11-02T08:59:52Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Permitir decisión de búsqueda web en turnos spectator y active",
+      "severity": "major",
+      "impact": "El requisito 6.2 actual excluye el modo espectador. La traza 25864c85187b muestra que Airi no pudo verificar una frase factual contextual al despertar por mención. Se pierde una capacidad conversacional prevista aunque el modelo pueda decidir selectivamente si la búsqueda es útil.",
+      "recommendation": "Ofrecer búsqueda nativa en turnos de respuesta normal, spectator y active, dejando tool_choice en auto para que Airi decida cuándo buscar. No buscar automáticamente por el mero hecho de habilitar la herramienta. Mantener los turnos proactivos sin una petición factual excluidos y conservar cualquier otra exclusión deliberada (por ejemplo, citas) explícita.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "WHEN un turno conversacional de respuesta esté en modo normal, spectator o active THEN el sistema SHALL ofrecer la herramienta de búsqueda web al modelo, salvo modos explícitamente excluidos como citas y turnos proactivos sin petición factual.",
+          "WHEN el turno admita búsqueda THEN el sistema SHALL dejar la decisión de invocarla al modelo y SHALL NOT iniciar búsquedas automáticamente por el mero hecho de habilitar la capacidad."
+        ],
+        "design": [
+          "Separar disponibilidad de la herramienta de la decisión de usarla: spectator y active pueden ejecutar la decisión nativa; los modos excluidos permanecen explícitos.",
+          "Mantener el replay determinista con servicios externos deshabilitados y aclarar que no verifica la decisión de búsqueda del turno original."
+        ],
+        "tasks": [
+          "Actualizar pruebas de elegibilidad para cubrir spectator y active con búsqueda habilitada, además de las exclusiones explícitas.",
+          "Actualizar evaluación para comprobar que hechos contextuales pueden buscarse en spectator/active y que opiniones siguen sin disparar búsquedas."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ]
+}

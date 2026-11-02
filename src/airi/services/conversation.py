@@ -596,9 +596,8 @@ class ConversationService:
             web_allowed = (
                 ctx.allow_web
                 and not in_date
-                and ctx.kind not in {"spectator", "active", "proactive"}
-                and getattr(ctx, "conversation_mode", "normal")
-                not in {"spectator", "active", "proactive"}
+                and ctx.kind != "proactive"
+                and getattr(ctx, "conversation_mode", "normal") != "proactive"
             )
             ev.allow_web = web_allowed
             if in_date:

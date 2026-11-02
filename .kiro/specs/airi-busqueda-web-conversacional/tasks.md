@@ -33,3 +33,10 @@
 - [x] 5.2 Actualizar fakes, transcripts y tests existentes.
 - [x] 5.3 Evaluación semántica de los 8 escenarios (sin frases literales).
 - [x] 5.4 Ejecutar suite completa y Ruff.
+
+## Fase 6: Elegibilidad de búsqueda por modo (feedback FB-001)
+
+- [x] 6.1 Ajustar `ConversationService` para permitir tool calling web en turnos `spectator` y `active`, sin cambiar la decisión selectiva `tool_choice="auto"`.
+- [x] 6.2 Añadir pruebas de integración que verifiquen disponibilidad en normal/spectator/active y exclusión en citas y turnos proactivos sin petición factual; conservar el caso de `AIRI_WEB_SEARCH=0`.
+- [x] 6.3 Ampliar escenarios de evaluación: una pregunta factual en contexto spectator/active debe poder buscarse y una opinión debe poder abstenerse.
+- [x] 6.4 Documentar que `airi-replay` valida reproducibilidad, no decisiones de búsqueda web del turno original.

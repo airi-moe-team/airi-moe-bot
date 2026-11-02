@@ -29,6 +29,10 @@ ConversationService.generate_turn
 
 Dos llamadas al LLM cuando hay búsqueda; una de decisión (corta, sin schema) y una de generación (schema estricto, sin tools). Cuando no hay búsqueda, la decisión igualmente se ejecuta: no hay regex ni gate heurístico.
 
+### 3.1 Elegibilidad por modo
+
+La disponibilidad de la herramienta se separa de la decisión del modelo. Los turnos de respuesta normal, `spectator` (incluido el despertar por mención) y `active` pueden ejecutar la decisión nativa con `tool_choice="auto"`; esto no implica que todos busquen. Se mantiene la exclusión para citas y turnos proactivos sin una petición factual. `AIRI_WEB_SEARCH=0` continúa siendo el interruptor global. El replay offline mantiene `search=None` y `allow_web=False`: reproduce la respuesta guardada, pero no evalúa si el modelo habría elegido buscar.
+
 ## 4. Contratos
 
 ### 4.1 LLM
@@ -117,9 +121,10 @@ Nuevos campos de `TurnEvent`: `web_requested`, `web_motivo`, `web_tool_backend`,
 ## 10. Pruebas
 
 - Unitarias: schema/tool, parseo de argumentos, notas sin URLs, hint de años, adaptador LLM (payload y tool_calls).
-- Integración: tool call → una búsqueda → bloque en prompt; sin tool call → sin búsqueda; fallo → bloque de fallo; sin sustitución; `allow_web=False`; límite de una búsqueda.
+- Integración: tool call → una búsqueda → bloque en prompt; sin tool call → sin búsqueda; fallo → bloque de fallo; sin sustitución; modos normal/spectator/active elegibles; citas y proactivos sin petición factual excluidos; límite de una búsqueda.
+- Replay: comprobar fidelidad determinista, sin tomarlo como evaluación de elegibilidad ni decisión web porque mantiene web deshabilitada.
 - Regresión: transcripts actualizados al nuevo flujo.
-- Evaluación semántica: 8 escenarios con juez, sin comparar frases literales.
+- Evaluación semántica: 9 escenarios con juez, incluyendo hechos contextuales en spectator/active y abstención en opiniones, sin comparar frases literales.
 
 ### Resultado de evaluación live (Qwen3.5-9B, GPU, 2026-10-31)
 

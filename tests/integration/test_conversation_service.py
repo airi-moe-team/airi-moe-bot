@@ -522,20 +522,56 @@ def test_turn_no_search_when_web_disabled():
     assert result.web_context is None
 
 
-@pytest.mark.parametrize(
-    "kind,mode", [("active", "active"), ("spectator", "spectator"),
-                  ("proactive", "proactive")]
-)
-def test_turns_in_conversation_sessions_do_not_offer_web(kind, mode):
+@pytest.mark.parametrize("mode", ["active", "spectator"])
+def test_conversational_modes_offer_web_but_model_decides(mode):
     state, _ = make_state()
-    llm = FakeLLM(replies=[llm_json("te contesto sin buscar")])
-    search = FakeSearch(result="nunca debería usarse")
+    llm = FakeLLM(
+        replies=[llm_json("Lo comprobé: aquí están los datos.", stay_active=True)],
+        tool_calls=[_search_tool_call("dato actual", "quería verificarlo")],
+    )
+    search = FakeSearch(result="dato verificado")
     svc = make_service(llm, state, search=search, notifier=FakeNotifier())
 
     result = run(svc.run_turn(
         DAVID,
         [(DAVID, "¿Cuál es el dato actual?")],
-        TurnContext(kind=kind, conversation_mode=mode),
+        TurnContext(kind=mode, conversation_mode=mode),
+    ))
+
+    assert result.trace.allow_web is True
+    assert len(llm.decision_calls) == 1
+    assert search.queries == ["dato actual"]
+    assert result.trace.web_requested is True
+
+
+def test_active_turn_respects_global_web_search_toggle():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Respondo sin búsqueda.", stay_active=True)])
+    search = FakeSearch(result="no debe buscarse")
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+    svc.web_search_enabled = False
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "¿Cuál es el dato actual?")],
+        TurnContext(kind="active", conversation_mode="active"),
+    ))
+
+    assert result.trace.allow_web is True
+    assert not llm.decision_calls
+    assert not search.queries
+
+
+def test_proactive_turn_does_not_offer_web():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Te cuento algo sin buscar.", stay_active=False)])
+    search = FakeSearch(result="no debe buscarse")
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "¿Cuál es el dato actual?")],
+        TurnContext(kind="proactive", conversation_mode="proactive"),
     ))
 
     assert not llm.decision_calls
@@ -652,6 +688,8 @@ def test_turn_in_date_keeps_the_question_and_uses_date_delta_max():
     result = run(svc.run_turn(DAVID, [(DAVID, "la cena está genial")], TurnContext()))
 
     assert result.in_date is True
+    assert result.trace.allow_web is False
+    assert not llm.decision_calls
     assert result.affinity_applied == 8  # tope ampliado durante la cita
     assert result.date_question["text"] == "¿Qué es lo que más te gusta de mí?"
     assert len(result.date_question["options"]) == 2
