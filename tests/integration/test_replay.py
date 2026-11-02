@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import os
 
+import pytest
+
 from airi.domain.dates import new_date_session
-from airi.observability.replay import replay_trace
+from airi.observability import replay as replay_module
+from airi.observability.replay import replay_behavioral, replay_trace
 from airi.observability.trace import save_turn_trace
 from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
-from airi.testing import FakeLLM, FakeNotifier, FakeUser, llm_json, make_state
+from airi.testing import FakeLLM, FakeNotifier, FakeSearch, FakeUser, llm_json, make_state
+from airi.observability.replay_capture import write_web_capture
+from airi.observability.trace import TurnEvent
 
 NOW = 1_000_000.0
 DAVID = FakeUser(42, "David")
@@ -29,6 +34,8 @@ def test_affinity_delta_without_reason_fixture_replays():
     assert result.matches_original, result.checks
     # delta 3 sin motivo (affinity_event="none") no debe aplicarse.
     assert result.affinity_delta_applied == 0
+    assert result.coverage == "partial"
+    assert "search_decision" in result.not_evaluated
 
 
 def test_replay_active_turn_preserves_session_schema_and_stay_active(tmp_path):
@@ -102,3 +109,222 @@ def test_replay_date_turn_without_date_event_is_tolerated(tmp_path):
 
     assert "date_event" not in result.checks
     assert result.matches_original, result.checks
+
+
+def test_behavioral_replay_reports_captured_empty_and_query_match(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="behavioral-empty", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "¿qué tiempo hace hoy?"}],
+        history_in=[{"role": "user", "content": "¿qué tiempo hace hoy?"}],
+        final_reply="Hoy hace sol.", raw_llm="{}",
+    )
+    trace_path = save_turn_trace(trace, str(tmp_path / "traces"))
+    capture_path = tmp_path / "capture.json"
+    write_web_capture(
+        capture_path, correlation_id=trace.correlation_id, status="empty",
+        query="weather today",
+    )
+    llm = FakeLLM(
+        replies=[llm_json("No encontré resultados actuales.")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "weather today", "motivo": "verificar pronóstico",
+        }}]],
+    )
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+    monkeypatch.setenv("AIRI_WEB_SEARCH", "true")
+
+    task_context = {
+        "goal": "consultar el pronóstico", "constraints": ["no inventar datos"],
+        "progress": "buscando", "next_step": "resumir",
+    }
+    result = run(replay_behavioral(trace_path, capture_path, task_context=task_context))
+
+    assert result.mode == "behavioral"
+    assert result.checks["search_decision"]["status"] == "passed"
+    assert result.checks["search_query"]["status"] == "passed"
+    assert result.checks["search_result"]["status"] == "captured_empty"
+    assert result.checks["grounding"]["status"] == "evaluated"
+    assert result.checks["reply"]["status"] == "failed"
+    assert result.checks["task_context"]["status"] == "provided"
+    assert "consultar el pronóstico" in llm.last_system_prompt
+
+
+def test_behavioral_replay_does_not_use_evidence_for_different_query(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="behavioral-mismatch", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "¿qué tiempo hace hoy?"}],
+        history_in=[{"role": "user", "content": "¿qué tiempo hace hoy?"}],
+        final_reply="Hoy hace sol.", raw_llm="{}",
+    )
+    trace_path = save_turn_trace(trace, str(tmp_path / "traces"))
+    capture_path = tmp_path / "capture.json"
+    write_web_capture(
+        capture_path, correlation_id=trace.correlation_id, status="results",
+        query="weather today", results=[{"title": "Forecast", "snippet": "Sunny"}],
+    )
+    llm = FakeLLM(
+        replies=[llm_json("No tengo esa evidencia.")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "weather tomorrow", "motivo": "consulta nueva",
+        }}]],
+    )
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+    monkeypatch.setenv("AIRI_WEB_SEARCH", "true")
+
+    result = run(replay_behavioral(trace_path, capture_path))
+
+    assert result.checks["search_decision"]["status"] == "passed"
+    assert result.checks["search_query"]["status"] == "failed"
+    assert result.checks["search_result"]["status"] == "capture_mismatch"
+    assert result.checks["grounding"]["status"] == "not_evaluated"
+    assert result.checks["reply"]["status"] == "failed"
+
+
+def test_behavioral_replay_uses_matching_captured_results(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="behavioral-results", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "¿tiempo?"}],
+        history_in=[{"role": "user", "content": "¿tiempo?"}],
+        final_reply="Va a llover.", raw_llm="{}",
+    )
+    trace_path = save_turn_trace(trace, str(tmp_path / "traces"))
+    capture_path = tmp_path / "capture.json"
+    write_web_capture(
+        capture_path, correlation_id=trace.correlation_id, status="results",
+        query="weather today",
+        results=[{"title": "Forecast", "snippet": "Rain expected"}],
+    )
+    llm = FakeLLM(
+        replies=[llm_json("Parece que va a llover.")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "weather today", "motivo": "consultar pronóstico",
+        }}]],
+    )
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+    monkeypatch.setenv("AIRI_WEB_SEARCH", "true")
+
+    result = run(replay_behavioral(trace_path, capture_path))
+
+    assert result.checks["search_result"]["status"] == "captured_results"
+    assert result.checks["grounding"]["status"] == "evaluated"
+    assert any("Rain expected" in call["messages"][0]["content"] for call in llm.calls)
+
+
+def test_behavioral_llm_failure_is_an_execution_error(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="behavioral-error", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "¿tiempo?"}],
+        history_in=[{"role": "user", "content": "¿tiempo?"}], raw_llm="{}",
+    )
+    trace_path = save_turn_trace(trace, str(tmp_path / "traces"))
+    capture_path = tmp_path / "capture.json"
+    write_web_capture(
+        capture_path, correlation_id=trace.correlation_id, status="not_requested",
+    )
+
+    def fail(_session):
+        raise RuntimeError("LLM indisponible")
+
+    monkeypatch.setattr(replay_module, "build_llm", fail)
+
+    with pytest.raises(RuntimeError, match="LLM indisponible"):
+        run(replay_behavioral(trace_path, capture_path))
+
+
+def test_deterministic_replay_never_constructs_live_llm(monkeypatch):
+    def unexpected(_session):
+        raise AssertionError("el modo determinista no debe crear un cliente LLM")
+
+    monkeypatch.setattr(replay_module, "build_llm", unexpected)
+    result = run(replay_trace(FIXTURE))
+    assert result.reproducible
+    assert "search_decision" in result.not_evaluated
+
+
+def test_live_web_permission_requires_key_before_client_creation(tmp_path, monkeypatch):
+    trace = TurnEvent(correlation_id="live-key", user_id="42", raw_llm="{}")
+    path = save_turn_trace(trace, str(tmp_path))
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    async def never_create_session(*args, **kwargs):
+        raise AssertionError("no debe inicializar clientes sin clave de web live")
+
+    monkeypatch.setattr(replay_module.aiohttp, "ClientSession", never_create_session)
+
+    with pytest.raises(ValueError, match="BRAVE_API_KEY"):
+        run(replay_module.run_live_trace(path, web_live=True))
+
+
+def test_live_repeat_keeps_prior_sample_when_later_sample_fails(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="live-repeat", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "hola"}],
+        history_in=[{"role": "user", "content": "hola"}], raw_llm="{}",
+    )
+    path = save_turn_trace(trace, str(tmp_path))
+    successful_llm = FakeLLM(replies=[llm_json("Hola.")])
+    calls = iter([successful_llm, RuntimeError("backend indisponible")])
+
+    def build(_session):
+        value = next(calls)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(replay_module, "build_llm", build)
+
+    samples = run(replay_module.run_live_trace(path, repeat=2))
+
+    assert samples[0]["sample"] == 1
+    assert samples[0]["result"].reply == "Hola."
+    assert samples[1] == {"sample": 2, "error": {"type": "RuntimeError"}}
+
+
+def test_live_mode_keeps_search_disabled_without_web_permission(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="live-no-web", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "busca el clima"}],
+        history_in=[{"role": "user", "content": "busca el clima"}], raw_llm="{}",
+    )
+    path = save_turn_trace(trace, str(tmp_path))
+    llm = FakeLLM(replies=[llm_json("Puedo ayudarte.")])
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+
+    samples = run(replay_module.run_live_trace(path))
+
+    assert len(samples) == 1
+    assert not llm.decision_calls
+
+
+def test_live_search_client_is_used_only_with_explicit_permission(tmp_path, monkeypatch):
+    from airi.adapters import brave_search
+
+    trace = TurnEvent(
+        correlation_id="live-web", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "busca el clima"}],
+        history_in=[{"role": "user", "content": "busca el clima"}], raw_llm="{}",
+    )
+    path = save_turn_trace(trace, str(tmp_path))
+    llm = FakeLLM(
+        replies=[llm_json("No encontré datos.")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "weather", "motivo": "petición explícita",
+        }}]],
+    )
+    search = FakeSearch()
+    constructed = []
+
+    def make_search(api_key, session):
+        constructed.append((api_key, session))
+        return search
+
+    monkeypatch.setattr(brave_search, "BraveSearchClient", make_search)
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+    monkeypatch.setenv("BRAVE_API_KEY", "test-key")
+
+    samples = run(replay_module.run_live_trace(path, web_live=True))
+
+    assert constructed and constructed[0][0] == "test-key"
+    assert llm.decision_calls
+    assert search.queries == ["weather"]
+    assert samples[0]["result"].reply == "No encontré datos."

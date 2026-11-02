@@ -120,6 +120,56 @@ precisión/recall de búsqueda y criterios de síntesis; las frases exactas no s
 criterio. El endpoint CPU puede seleccionarse con `--base-url` sin modificar la
 configuración de producción.
 
+## Replay de trazas
+
+`airi-replay <traza.json>` es determinista por defecto: reutiliza la respuesta
+guardada, no crea clientes externos y reporta qué etapas quedan sin verificar.
+Los resultados con `coverage: "partial"` no deben interpretarse como validación
+completa.
+
+La captura de búsqueda está apagada por defecto. Para habilitarla explícitamente
+en los turnos que se quieran investigar, configura un directorio local privado:
+
+```bash
+AIRI_TRACE_WEB_CAPTURE_DIR=./private-web-captures .venv/bin/airi run
+```
+
+Los sidecars contienen consultas y snippets potencialmente sensibles; son JSON
+locales con permisos `0600`, no se sobrescriben y deben excluirse del control de
+versiones y eliminarse según la política local de retención. Las trazas
+principales redactan el contenido web. Un sidecar se vincula a su traza mediante
+`correlation_id`.
+
+Modos explícitos:
+
+```bash
+# Seguro y determinista (predeterminado)
+.venv/bin/airi-replay traces/2026-11-02/<correlation_id>.json
+
+# Inferencia nueva, búsqueda web desactivada
+.venv/bin/airi-replay traces/2026-11-02/<correlation_id>.json --live
+
+# Inferencia nueva con búsqueda limitada al sidecar local; no usa Internet
+.venv/bin/airi-replay traces/2026-11-02/<correlation_id>.json \
+  --behavioral --capture ./private-web-captures/<correlation_id>.web-capture.json
+
+# Solo si también se autoriza explícitamente el acceso web real
+BRAVE_API_KEY=... .venv/bin/airi-replay traces/2026-11-02/<correlation_id>.json \
+  --live --web-live
+
+# Contexto de tarea privado, suministrado lateralmente y no persistido en la traza
+.venv/bin/airi-replay traces/2026-11-02/<correlation_id>.json \
+  --live --task-context ./private-task-context.json
+```
+
+`--web-live` requiere `--live` y `BRAVE_API_KEY`; no es un permiso implícito de
+`--live`. `--behavioral` exige `--capture` válido y no tiene fallback a red.
+Los estados `captured_empty`, `capture_missing` y `capture_mismatch` son
+diferentes: una captura vacía válida no es lo mismo que carecer de captura o que
+el modelo haya pedido otra consulta. Las divergencias de replay salen con código
+1; los errores de ejecución con código 2. El fixture JSON de tarea acepta
+`goal`, `constraints`, `progress` y `next_step`; trátalo como contenido privado.
+
 ## Reglas
 
 - `domain/` no importa `discord`, `aiohttp` ni hace I/O de ficheros.

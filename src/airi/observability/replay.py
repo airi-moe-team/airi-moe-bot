@@ -19,6 +19,7 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import aiohttp
 
@@ -27,6 +28,11 @@ from airi.adapters.http_llm import build_llm
 from airi.domain.affinity import default_entry
 from airi.domain.time_perception import TimeConfig
 from airi.observability.trace import TurnEvent, load_turn_trace
+from airi.observability.replay_capture import (
+    CapturedWebSearchClient,
+    load_web_capture,
+    normalize_query,
+)
 from airi.ports.llm import LLMMeta
 from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
@@ -90,6 +96,9 @@ class ReplayResult:
     matches_original: bool = False
     reproducible: bool = True
     checks: dict | None = None
+    mode: str = "deterministic"
+    coverage: str = "partial"
+    not_evaluated: list | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -216,6 +225,9 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
     # tienen; entonces el paso de cita no es verificable).
     if ev.date_event is not None:
         checks["date_event"] = date_event == ev.date_event
+    not_evaluated = ["search_decision", "captured_search_result", "task_context"]
+    if ev.raw_llm is None:
+        not_evaluated.append("grounding")
     return ReplayResult(
         final_reply=result.reply,
         affinity_delta_applied=result.affinity_applied,
@@ -228,6 +240,9 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
         matches_original=all(checks.values()),
         reproducible=True,
         checks=checks,
+        mode="deterministic",
+        coverage="partial" if not_evaluated else "complete",
+        not_evaluated=not_evaluated,
     )
 
 
@@ -237,7 +252,7 @@ async def replay_trace(trace_path) -> ReplayResult:
     return await _run_event(ev)
 
 
-async def run_live_trace(trace_path, *, repeat=1):
+async def run_live_trace(trace_path, *, repeat=1, web_live=False, task_context=None):
     """Reconstruye el turno de la traza y lo re-infiere con el LLM real.
 
     A diferencia de `replay_trace`, aquí SÍ se consulta el backend configurado
@@ -246,27 +261,163 @@ async def run_live_trace(trace_path, *, repeat=1):
     persiste nada fuera de memoria.
     """
     ev = load_turn_trace(trace_path)
+    if web_live and not os.environ.get("BRAVE_API_KEY", "").strip():
+        raise ValueError("--web-live requiere BRAVE_API_KEY configurada")
     results = []
     async with aiohttp.ClientSession() as session:
+        search = None
+        if web_live:
+            from airi.adapters.brave_search import BraveSearchClient
+
+            search = BraveSearchClient(os.environ.get("BRAVE_API_KEY", ""), session)
         for i in range(max(1, repeat)):
-            state, uid, user, messages = _mount_event(ev)
-            llm = build_llm(session)
-            svc = ConversationService(
-                llm=llm, state=state, search=None, gifs=None, notifier=None,
-                clock=lambda: ev.started_at or 0.0, traces=None,
-                time_config=_time_config_from_event(ev),
-            )
-            result = await svc.run_turn(
-                user, messages,
-                TurnContext(
-                    channel_id=0, allow_web=False,
-                    correlation_id=f"{ev.correlation_id}-live{i + 1}",
-                    conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
-                    conversation_reason=ev.spectator_reason or "",
-                ),
-            )
-            results.append(result)
+            try:
+                state, uid, user, messages = _mount_event(ev)
+                llm = build_llm(session)
+                svc = ConversationService(
+                    llm=llm, state=state, search=search, gifs=None, notifier=None,
+                    clock=lambda: ev.started_at or 0.0, traces=None,
+                    time_config=_time_config_from_event(ev),
+                )
+                result = await svc.run_turn(
+                    user, messages,
+                    TurnContext(
+                        channel_id=0, allow_web=web_live,
+                        task_context=task_context,
+                        correlation_id=f"{ev.correlation_id}-live{i + 1}",
+                        conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
+                        conversation_reason=ev.spectator_reason or "",
+                    ),
+                )
+                results.append({"sample": i + 1, "result": result})
+            except Exception as exc:  # cada muestra falla independientemente
+                results.append({
+                    "sample": i + 1,
+                    "error": {"type": type(exc).__name__},
+                })
     return results
+
+
+def load_task_context(path):
+    """Carga un fixture privado de tarea sin propagar su contenido en errores."""
+    from airi.domain.conversation_task import normalize_task_context_update
+
+    path = Path(path)
+    try:
+        if path.stat().st_size > 16_384:
+            raise ValueError("fixture de tarea excede el tamaño máximo")
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"no se pudo leer fixture de tarea: {path}") from exc
+    allowed = {"goal", "constraints", "progress", "next_step"}
+    if not isinstance(data, dict) or set(data) - allowed:
+        raise ValueError("fixture de tarea inválido: campos desconocidos")
+    if not isinstance(data.get("goal"), str) or not isinstance(data.get("constraints"), list):
+        raise ValueError("fixture de tarea inválido: se requiere goal y constraints")
+    if any(not isinstance(item, str) for item in data["constraints"]):
+        raise ValueError("fixture de tarea inválido: constraints debe contener texto")
+    normalized = normalize_task_context_update({"action": "set", **data})
+    if not normalized or normalized.get("action") != "set":
+        raise ValueError("fixture de tarea inválido: se requiere goal y constraints")
+    return {key: value for key, value in normalized.items() if key != "action"}
+
+
+async def replay_behavioral(trace_path, capture_path, *, task_context=None):
+    """Reejecuta decisión/síntesis usando solo evidencia local capturada."""
+    ev = load_turn_trace(trace_path)
+    capture = load_web_capture(capture_path, correlation_id=ev.correlation_id)
+    client = CapturedWebSearchClient(capture)
+    state, uid, user, messages = _mount_event(ev)
+    async with aiohttp.ClientSession() as session:
+        llm = build_llm(session)
+        svc = ConversationService(
+            llm=llm, state=state, search=client, gifs=None, notifier=None,
+            clock=lambda: ev.started_at or 0.0, traces=None,
+            time_config=_time_config_from_event(ev),
+        )
+        result = await svc.run_turn(
+            user, messages,
+            TurnContext(
+                channel_id=0, allow_web=True, correlation_id=ev.correlation_id,
+                conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
+                conversation_reason=ev.spectator_reason or "",
+                task_context=task_context,
+            ),
+        )
+    checks = _behavioral_checks(
+        original=ev,
+        actual_requested=result.trace.web_requested,
+        actual_query=result.trace.web_query,
+        capture=capture,
+        capture_status=client.status,
+        actual_reply=result.reply,
+        task_context=task_context,
+        actual_grounded=result.trace.web_grounded,
+    )
+    comparable = [
+        value["status"] for key, value in checks.items()
+        if key in {"search_decision", "search_query", "reply"}
+        and value["status"] != "not_evaluated"
+    ]
+    return ReplayResult(
+        final_reply=result.reply,
+        matches_original=bool(comparable) and all(value == "passed" for value in comparable),
+        reproducible=True,
+        checks=checks,
+        mode="behavioral",
+        coverage="complete" if not any(
+            value["status"] == "not_evaluated" for value in checks.values()
+        ) else "partial",
+        not_evaluated=[
+            key for key, value in checks.items() if value["status"] == "not_evaluated"
+        ],
+    )
+
+
+def _behavioral_checks(
+    *, original, actual_requested, actual_query, capture, capture_status,
+    actual_reply, task_context, actual_grounded,
+):
+    """Clasifica resultados por etapa sin mezclar ausencia, vacío y mismatch."""
+    expected_requested = capture.status != "not_requested"
+    checks = {
+        "search_decision": {
+            "status": "passed" if actual_requested == expected_requested else "failed",
+            "expected": expected_requested,
+            "actual": actual_requested,
+        },
+    }
+    if actual_requested:
+        if capture.query is None:
+            query_status = "not_evaluated"
+        else:
+            query_status = (
+                "passed" if normalize_query(actual_query or "") == normalize_query(capture.query)
+                else "failed"
+            )
+        checks["search_query"] = {"status": query_status}
+        checks["search_result"] = {"status": capture_status}
+        checks["grounding"] = {
+            "status": "not_evaluated"
+            if capture_status in {"capture_missing", "capture_mismatch", "captured_error"}
+            else "evaluated",
+            "grounded": actual_grounded,
+        }
+    else:
+        checks["search_query"] = {"status": "not_evaluated"}
+        checks["search_result"] = {
+            "status": "not_requested" if capture.status == "not_requested" else "captured_not_used"
+        }
+        checks["grounding"] = {"status": "not_evaluated"}
+    checks["reply"] = {
+        "status": "passed" if actual_reply == original.final_reply else "failed",
+        "matches_original": actual_reply == original.final_reply,
+    }
+    checks["task_context"] = {
+        "status": "provided" if task_context is not None else "not_evaluated",
+    }
+    return checks
 
 
 def check_trace(trace):
@@ -323,9 +474,34 @@ def main(argv=None):
     parser.add_argument("--live", action="store_true",
                         help="re-infiere el turno contra el LLM real (LLM_BASE_URL) "
                              "en vez de reutilizar la respuesta guardada")
-    parser.add_argument("--repeat", type=int, default=1,
+    parser.add_argument("--repeat", type=int, default=None,
                         help="número de inferencias con --live (default 1)")
+    parser.add_argument("--behavioral", action="store_true",
+                        help="reejecuta decisión y síntesis con búsqueda capturada localmente")
+    parser.add_argument("--capture", default=None,
+                        help="sidecar de búsqueda airi.web-capture.v1 requerido por --behavioral")
+    parser.add_argument("--task-context", default=None,
+                        help="fixture JSON lateral de contexto privado de tarea")
+    parser.add_argument("--web-live", action="store_true",
+                        help="permite búsqueda web real; requiere --live")
     args = parser.parse_args(argv)
+
+    if args.web_live and not args.live:
+        parser.error("--web-live requiere --live; use --behavioral para búsqueda capturada")
+    if args.behavioral and (args.live or args.web_live):
+        parser.error("--behavioral es incompatible con --live y --web-live")
+    if args.behavioral and not args.capture:
+        parser.error("--behavioral requiere --capture <archivo>")
+    if args.capture and not args.behavioral:
+        parser.error("--capture solo se admite con --behavioral")
+    if args.task_context and not (args.behavioral or args.live):
+        parser.error("--task-context requiere --behavioral o --live")
+    if args.repeat is not None and not args.live:
+        parser.error("--repeat requiere --live")
+    if args.repeat is not None and args.repeat < 1:
+        parser.error("--repeat debe ser al menos 1")
+    if args.emit_test and (args.live or args.behavioral or args.web_live or args.capture):
+        parser.error("--emit-test es incompatible con modos de inferencia y capturas")
 
     try:
         load_turn_trace(args.trace)
@@ -340,18 +516,66 @@ def main(argv=None):
 
     if args.live:
         try:
-            results = asyncio.run(run_live_trace(args.trace, repeat=args.repeat))
+            task_context = load_task_context(args.task_context) if args.task_context else None
+            if args.web_live and not os.environ.get("BRAVE_API_KEY", "").strip():
+                raise ValueError("--web-live requiere BRAVE_API_KEY configurada")
+            from airi.adapters.http_llm import LlmConfig
+
+            backend = LlmConfig.from_env()
+            if args.web_live:
+                print(
+                    "AVISO: se realizarán inferencias con el backend "
+                    f"{backend.provider} ({backend.model}) en {backend.base_url} "
+                    "y se permitirán solicitudes web externas.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"Se realizará inferencia con {backend.provider} "
+                    f"({backend.model}) en {backend.base_url}; búsqueda web desactivada.",
+                    file=sys.stderr,
+                )
+            results = asyncio.run(run_live_trace(
+                args.trace, repeat=args.repeat or 1, web_live=args.web_live,
+                task_context=task_context,
+            ))
         except Exception as exc:
             print(f"ERROR: la inferencia live falló: {exc}", file=sys.stderr)
             return 2
-        for i, result in enumerate(results, start=1):
-            print(json.dumps({
-                "sample": i,
-                "reply": result.reply,
-                "gif": result.gif,
-                "skipped": result.skipped,
-            }, ensure_ascii=False, indent=2))
-        return 0
+        for result in results:
+            if result.get("error"):
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            else:
+                sample = result["result"]
+                print(json.dumps({
+                    "sample": result["sample"],
+                    "status": "completed",
+                    "reply": sample.reply,
+                    "gif": sample.gif,
+                    "skipped": sample.skipped,
+                }, ensure_ascii=False, indent=2))
+        return 2 if any(result.get("error") for result in results) else 0
+
+    if args.behavioral:
+        try:
+            ev = load_turn_trace(args.trace)
+            capture = load_web_capture(args.capture, correlation_id=ev.correlation_id)
+            task_context = load_task_context(args.task_context) if args.task_context else None
+            from airi.adapters.http_llm import LlmConfig
+
+            backend = LlmConfig.from_env()
+            print(
+                "Se realizará inferencia con "
+                f"{backend.provider} ({backend.model}) en {backend.base_url}; "
+                "búsqueda limitada a la captura local.",
+                file=sys.stderr,
+            )
+            result = asyncio.run(replay_behavioral(args.trace, args.capture, task_context=task_context))
+        except Exception as exc:
+            print(f"ERROR: replay conductual falló: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        return 0 if result.matches_original else 1
 
     result = asyncio.run(replay_trace(args.trace))
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))

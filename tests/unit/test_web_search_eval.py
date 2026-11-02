@@ -30,6 +30,11 @@ def test_decision_policy_allows_initiative_for_open_factual_curiosity():
     assert "algo reciente" in WEB_SEARCH_DECISION_PROMPT
 
 
+def test_decision_policy_does_not_turn_prior_context_into_search_intent():
+    assert "según la intención del mensaje actual" in WEB_SEARCH_DECISION_PROMPT
+    assert "confirme o celebre" in WEB_SEARCH_DECISION_PROMPT
+
+
 def test_evaluation_reports_search_decision_precision_recall_and_case_results():
     report = evaluate_web_search_records([
         {"scenario": "curiosity", "expected_search": True, "actual_search": True},

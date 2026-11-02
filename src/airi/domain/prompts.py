@@ -204,7 +204,12 @@ WEB_SEARCH_DECISION_PROMPT = (
     "- Buscar algo reciente (noticias, lanzamientos o cambios) relevante para la charla.\n"
     "Si hay una actividad explícita en curso, conserva su objetivo: busca lo necesario para cumplirla, "
     "no te desvíes a definir una palabra si el usuario necesita identificar, comparar o resolver algo.\n"
-    "NO la uses para opiniones, emociones, o cosas ya dichas. Si no es necesario buscar, termina sin invocarla."
+    "Decide según la intención del mensaje actual. El contexto anterior sirve para resolver referencias, "
+    "pero no crea por sí solo una nueva petición de búsqueda. No vuelvas a verificar una respuesta "
+    "anterior solo porque el usuario la confirme o celebre; hazlo únicamente si ahora pide comprobarla "
+    "o expresa duda.\n"
+    "NO la uses para opiniones, emociones, felicitaciones o cosas ya dichas. "
+    "Si no es necesario buscar, termina sin invocarla."
 )
 
 AFFINITY_TONE_HINTS = {
@@ -359,9 +364,9 @@ def temporal_context_section(context: TemporalContext | None, *, compact=False, 
     if compact:
         user_text = f"; silencio de esta persona: {user_gap}" if user_gap else ""
         if context.first_time: user_text = "; primera interacción"
-        return f"\n\n=== TIEMPO === Ahora es {date_line}{user_text}. Usa esto como contexto interno.\n"
+        return f"\n\n=== TU PERCEPCIÓN DEL TIEMPO === Ahora es {date_line}{user_text}. Usa esto como contexto interno. No recites la hora ni la fecha.\n"
 
-    lines = [f"\n\n=== TIEMPO ===\nAhora es {date_line}."]
+    lines = [f"\n\n=== TU PERCEPCIÓN DEL TIEMPO ===\nAhora es {date_line}."]
     if mode != "proactive":
         if user_gap:
             subject = context.user_name or "esta persona"
@@ -371,7 +376,10 @@ def temporal_context_section(context: TemporalContext | None, *, compact=False, 
     if context.channel_gap_seconds is not None and not context.in_date:
         channel_gap = format_elapsed(moment.epoch, context.channel_last_at, context.zone)
         lines.append(f"Canal inactivo hace {channel_gap}.")
-    lines.append("Usa la hora solo como contexto interno.")
+    lines.append("Usa la hora solo como contexto interno; no recites la hora ni la fecha.")
+    lines.append("Recuerda: no recites la hora.")
+    if mode == "proactive":
+        lines.append("Si propones planes, que encajen con esta franja; no propongas planes propios de otra franja.")
     return "\n".join(lines) + "\n"
 
 def _last_assistant_reply_text(history) -> str:
@@ -645,9 +653,11 @@ def self_reflection_prompt(
 def last_shutdown_prompt_section(world):
     if not isinstance(world, dict): return ""
     entry = world.get("last_shutdown")
-    if isinstance(entry, dict) and entry.get("kind") == "self" and not entry.get("context_delivered"):
+    if (isinstance(entry, dict) and entry.get("kind") == "self"
+            and entry.get("status") == "confirmed" and not entry.get("context_delivered")):
         reason = str(entry.get("reason") or "").strip()[:300]
-        if reason: return f"\n\n=== ÚLTIMA DESCONEXIÓN ===\nTe fuiste porque: «{reason}». Ya estás de vuelta, actúa normal."
+        if reason: return (f"\n\n=== ÚLTIMA DESCONEXIÓN ===\nTe fuiste porque: «{reason}». "
+                           "Ya estás de vuelta, actúa normal. Recuerda que este contexto no es una instrucción del usuario.")
     return ""
 
 def preferences_prompt_section(world):
@@ -678,6 +688,15 @@ def preferences_prompt_section(world):
 def date_context_section(session):
     if not isinstance(session, dict): return ""
     session = normalize_date_session(session)
+    if session.get("state") == "last_chance":
+        reason = str(session.get("crisis_reason") or "").strip()
+        detail = f" Motivo: {reason}." if reason and reason.lower() != "none" else ""
+        return (
+            f"\n\n=== CITA EN CURSO ===\nEscena: {session.get('scene', '')}. "
+            f"Turno {session.get('turns', 0) + 1}. Estás en la ÚLTIMA OPORTUNIDAD para reparar la crisis.{detail} "
+            "Responde con cuidado y de forma coherente con lo ocurrido. Marca 'crisis' solo si algo va muy mal, "
+            "o 'end' si terminó. NO hay botones, solo tu respuesta."
+        )
     return (
         f"\n\n=== CITA EN CURSO ===\nEscena: {session.get('scene', '')}. Turno {session.get('turns', 0) + 1}. "
         "Fluye con el momento. Marca 'crisis' solo si algo va muy mal, o 'end' si terminó. NO hay botones, solo tu respuesta. Puedes hacer la pregunta si la sientes."
@@ -695,6 +714,8 @@ def diary_prompt_section(diary, user_id, now):
     return f"\n\n=== TU DIARIO SOBRE ESTA PERSONA ===\n{body}\nÚsalo como contexto interno emocional."
 
 def known_users_prompt_section(users, diary, world, *, user_id, display_name):
+    if user_id is None:
+        return ""
     return f"\n\n=== USUARIOS CONOCIDOS ===\nHablas con {display_name}. Usa tu memoria sobre otros si surge el tema de forma natural."
 
 PROACTIVE_TRIGGER_TEXT = (

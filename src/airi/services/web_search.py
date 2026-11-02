@@ -9,7 +9,9 @@ enteramente en manos del modelo.
 from __future__ import annotations
 
 import logging
+import re
 import time
+import unicodedata
 from dataclasses import dataclass
 
 from airi.domain.constants import (
@@ -27,6 +29,42 @@ from airi.domain.web_tool import (
 from airi.ports.web_search import WebSearchNotes
 
 log = logging.getLogger(__name__)
+
+_ACKNOWLEDGMENT_WORDS = {
+    "si", "bim", "bom", "otra", "respuesta", "correcta", "correcto",
+    "bien", "genial", "perfecto", "acertaste", "ganaste", "bravo",
+    "jaja", "exacto", "exacta", "gracias", "vale", "de", "acuerdo",
+    "que", "bueno", "buenisimo",
+}
+_ACKNOWLEDGMENT_MARKERS = {
+    "si", "bien", "genial", "perfecto", "acertaste", "ganaste", "bravo",
+    "jaja", "exacto", "exacta", "gracias", "vale",
+}
+_CONFIRMATION_MARKERS = {
+    "correcta", "correcto", "acertaste", "ganaste", "exacto", "exacta",
+}
+
+
+def _is_acknowledgment_only(text: str) -> bool:
+    """Reconoce confirmaciones breves, solo para suprimir búsquedas contextuales.
+
+    La lista es deliberadamente restrictiva: una pregunta, una petición o texto
+    ajeno a la lista devuelve False y conserva la decisión normal del modelo.
+    """
+    folded = unicodedata.normalize("NFKD", text.lower())
+    folded = "".join(char for char in folded if not unicodedata.combining(char))
+    words = [
+        # Colapsa solo vocales repetidas: "siiii" → "si", "bieeeen" → "bien".
+        # No colapsar consonantes evita convertir "correcta" en "coreta".
+        re.sub(r"([aeiou])\1+", r"\1", word)
+        for word in re.findall(r"[a-z]+", folded)
+    ]
+    if not words or len(words) > 24 or any(word not in _ACKNOWLEDGMENT_WORDS for word in words):
+        return False
+    return (
+        any(word in _ACKNOWLEDGMENT_MARKERS for word in words)
+        and any(word in _CONFIRMATION_MARKERS for word in words)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +155,8 @@ class WebSearchService:
         """Pregunta al modelo si necesita buscar. Sin respuesta = no busca."""
         if not current_text.strip():
             return None, None
+        if _is_acknowledgment_only(current_text):
+            return None, "acknowledgment_suppressed"
         user_content = current_text
         if context:
             user_content = (

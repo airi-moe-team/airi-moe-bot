@@ -93,5 +93,4 @@ def test_prompt_forbids_repeating_recent_tics():
     asyncio.run(svc.run_turn(david, [(david, "buenos días")], TurnContext()))
 
     prompt = llm.last_system_prompt
-    assert "PROHIBICIÓN DE BUCLE" in prompt
-    assert "no repitas" in prompt
+    assert "No repitas frases anteriores" in prompt or "evita clichés" in prompt

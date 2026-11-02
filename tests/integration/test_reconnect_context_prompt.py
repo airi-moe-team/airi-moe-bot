@@ -39,7 +39,7 @@ def test_prompt_contains_last_shutdown_reason():
         _service(llm, state).run_turn(DAVID, [(DAVID, "hola")], TurnContext())
     )
 
-    assert "=== TU ÚLTIMA DESCONEXIÓN ===" in llm.last_system_prompt
+    assert "=== ÚLTIMA DESCONEXIÓN ===" in llm.last_system_prompt
     assert "«me fui a dormir»" in llm.last_system_prompt
 
 
@@ -52,4 +52,4 @@ def test_prompt_omits_delivered_reason():
         _service(llm, state).run_turn(DAVID, [(DAVID, "hola")], TurnContext())
     )
 
-    assert "TU ÚLTIMA DESCONEXIÓN" not in llm.last_system_prompt
+    assert "ÚLTIMA DESCONEXIÓN" not in llm.last_system_prompt

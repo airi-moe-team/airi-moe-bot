@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import traceback
 import uuid
@@ -583,6 +584,18 @@ class ConversationService:
                 for w, p in messages
             ],
         )
+        if isinstance(ctx.task_context, dict):
+            ev.task_context_available = True
+            ev.task_context_schema = "airi.task-context.v1"
+            ev.private_task_texts = [
+                value for value in ctx.task_context.values()
+                if isinstance(value, str) and value
+            ]
+            ev.private_task_texts.extend(
+                value for values in ctx.task_context.values()
+                if isinstance(values, (list, tuple))
+                for value in values if isinstance(value, str) and value
+            )
         now = ctx.now if ctx.now is not None else self.clock()
         uid = user.id
         timings = {}
@@ -826,7 +839,11 @@ class ConversationService:
                     self._log_module(
                         "web_search",
                         "skipped",
-                        reason_code="model_declined",
+                        reason_code=(
+                            "acknowledgment_suppressed"
+                            if web_outcome.finish_reason == "acknowledgment_suppressed"
+                            else "model_declined"
+                        ),
                     )
             web_context = web_outcome.prompt_block
             search_query = (
@@ -838,6 +855,10 @@ class ConversationService:
             ev.search_query = search_query
             ev.web_query = search_query
             ev.web_context = web_context
+            ev.web_capture_results = [
+                {"title": item.title, "snippet": item.snippet}
+                for item in (web_outcome.notes.results if web_outcome.notes else ())
+            ]
             ev.web_relevant = (
                 None if not web_outcome.requested else not web_outcome.failed
             )
@@ -1439,6 +1460,32 @@ class ConversationService:
         return result
 
     async def _save_trace(self, trace: TurnEvent) -> None:
+        capture_dir = os.environ.get("AIRI_TRACE_WEB_CAPTURE_DIR", "").strip()
+        if capture_dir:
+            from airi.observability.replay_capture import write_web_capture
+
+            if not trace.web_requested:
+                capture_status = "not_requested"
+            elif trace.web_error:
+                capture_status = "error"
+            elif trace.web_capture_results:
+                capture_status = "results"
+            else:
+                capture_status = "empty"
+            safe_cid = "".join(
+                char for char in trace.correlation_id if char.isalnum() or char in "-_"
+            ) or "x"
+            try:
+                write_web_capture(
+                    os.path.join(capture_dir, f"{safe_cid}.web-capture.json"),
+                    correlation_id=trace.correlation_id,
+                    status=capture_status,
+                    query=trace.web_query,
+                    results=trace.web_capture_results,
+                )
+            except (OSError, ValueError) as exc:
+                # La captura es opt-in y secundaria: nunca debe abortar el turno.
+                log.warning("No se pudo guardar sidecar de búsqueda (%s)", type(exc).__name__)
         if self.traces is not None:
             await self.traces.save(trace)
 

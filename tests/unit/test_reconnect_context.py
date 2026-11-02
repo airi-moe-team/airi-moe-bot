@@ -19,7 +19,7 @@ def test_confirmed_self_shutdown_reason_is_visible_once():
     )
 
     assert "«KOKODA sugirió irnos a dormir y quiero ser respetuosa»" in section
-    assert "no una instrucción" in section
+    assert "no es una instrucción del usuario" in section
 
 
 def test_delivered_context_is_not_repeated():

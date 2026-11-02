@@ -25,6 +25,8 @@
 - `airi-reparaciones-parseo-calidad` — Fusionar las 5 reparaciones del turno en 2 políticas (parse_repair + quality_repair) con revisión del borrador, añadir conversation_review semántico para coherencia de hilo, y parches deterministas (ChatML, OOC, strip_leaving_claims).  - Spec: `.kiro/specs/airi-percepcion-temporal/`
 - `airi-busqueda-web-conversacional` — Sustituir el disparador por regex por tool calling nativo decidido por el modelo; síntesis reactiva con voz propia, duda ante contradicciones y grounding solo en traza.
   - Spec: `.kiro/specs/airi-busqueda-web-conversacional/`
+- `airi-replay-conductual` — Añadir replay conductual con resultados capturados opt-in y replay live explícito, preservando aislamiento y privacidad por defecto.
+  - Spec: `.kiro/specs/airi-replay-conductual/`
 
 ## Flujo de trabajo
 

@@ -146,6 +146,37 @@ def test_trace_round_trip_json():
     assert clone == trace
 
 
+def test_trace_serialization_redacts_web_query_and_content_but_keeps_status():
+    trace = TurnEvent(
+        correlation_id="private", web_query="consulta privada",
+        search_query="consulta privada", web_context="snippet privado",
+        web_requested=True, web_grounded=False,
+    )
+
+    data = trace.to_dict()
+
+    assert "web_query" not in data
+    assert "search_query" not in data
+    assert "web_context" not in data
+    assert data["web_requested"] is True
+    assert data["web_grounded"] is False
+
+
+def test_trace_serialization_redacts_private_fixture_text_and_keeps_presence():
+    secret = "objetivo reservado"
+    trace = TurnEvent(
+        prompt_system=f"Contexto: {secret}", private_task_texts=[secret],
+        task_context_available=True, task_context_schema="airi.task-context.v1",
+    )
+
+    data = trace.to_dict()
+
+    assert secret not in json.dumps(data, ensure_ascii=False)
+    assert data["task_context_available"] is True
+    assert data["task_context_schema"] == "airi.task-context.v1"
+    assert "private_task_texts" not in data
+
+
 def test_kind_survives_round_trip():
     ev = TurnEvent(kind="gift", correlation_id="g1", raw_input="!regalo rosas")
     clone = TurnEvent.from_dict(ev.to_dict())

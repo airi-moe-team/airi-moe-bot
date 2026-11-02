@@ -192,7 +192,7 @@ def test_relationship_section_novio_counts_days():
         world, {}, user_id=42, display_name="David", now=NOW
     )
     assert "es TU NOVIO" in text
-    assert "3 día(s)" in text
+    assert "hace 3 días" in text
 
 
 def test_relationship_section_winner_known_and_unknown():
@@ -200,11 +200,11 @@ def test_relationship_section_winner_known_and_unknown():
     with_name = P.relationship_status_section(
         world, {"9": {"name": "Ana"}}, user_id=42, display_name="David", now=NOW
     )
-    assert "Ya tienes novio: Ana" in with_name
+    assert "Tienes novio (Ana)" in with_name
     unknown = P.relationship_status_section(
         world, {}, user_id=42, display_name="David", now=NOW
     )
-    assert "Ya tienes novio: otra persona" in unknown
+    assert "Tienes novio (otra persona)" in unknown
 
 
 def test_prompt_sections_user_none_are_empty():
@@ -218,10 +218,10 @@ def test_prompt_sections_user_none_are_empty():
 def test_memories_prompt_section_with_entries():
     text = P.memories_prompt_section([{"text": "Le gusta el ramen"}])
     assert "1. Le gusta el ramen" in text
-    assert "olvidar: <número>" in text
+    assert "Actualiza 'memory' si te da datos nuevos." in text
     assert "Todavía no recuerdas" not in text
     empty = P.memories_prompt_section([])
-    assert "Todavía no recuerdas" in empty
+    assert "(ninguna)" in empty
 
 
 def test_known_users_monogamy_hides_others():
@@ -243,6 +243,12 @@ def test_date_context_section_last_chance_mentions_reason():
     text = P.date_context_section(session)
     assert "ÚLTIMA OPORTUNIDAD" in text
     assert "se pasó de la raya" in text
+
+
+def test_known_users_section_is_empty_without_user_id():
+    assert P.known_users_prompt_section(
+        {}, [], {}, user_id=None, display_name="David"
+    ) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +416,3 @@ def test_date_service_time_fallback_without_clock():
     ))
     assert event == "continue"
     assert session["started_at"] > 0
-
-
-

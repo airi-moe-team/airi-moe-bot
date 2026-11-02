@@ -142,8 +142,8 @@ def test_short_turn_uses_compact_contract_and_output_cap():
     assert llm.calls[-1]["quick_turn"] is True
     assert llm.calls[-1]["reasoning_budget_tokens"] is None
     # El historial compartido conserva etiquetas, con su explicación breve.
-    assert "=== ETIQUETAS DE IDENTIDAD ===" in prompt
-    assert "No atribuyas a una persona" in prompt
+    assert "=== ETIQUETAS DE IDENTIDAD Y CONTEXTO ===" in prompt
+    assert "Trata a cada persona de forma independiente" in prompt
 
 
 def test_long_turn_uses_full_contract():
@@ -781,11 +781,11 @@ def test_system_prompt_includes_affinity_and_user():
     run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
     prompt = llm.last_system_prompt
-    assert "=== NIVEL DE AFINIDAD CON EL USUARIO ===" in prompt
+    assert "=== AFINIDAD CON ESTE USUARIO ===" in prompt
     assert "David" in prompt
     assert "30 puntos" in prompt
-    assert "=== ESTADO DE VUESTRA RELACIÓN ===" in prompt
-    assert "=== TUS GUSTOS (SECRETOS) ===" in prompt
+    assert "=== RELACIÓN ===" in prompt
+    assert "=== TUS PREFERENCIAS CANÓNICAS ===" in prompt
     # La llamada va con el esquema JSON de respuesta.
     assert llm.calls[-1]["schema"] is not None
 

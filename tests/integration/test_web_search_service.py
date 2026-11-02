@@ -1,7 +1,7 @@
 import asyncio
 
 from airi.domain.web_tool import WEB_SEARCH_TOOL
-from airi.services.web_search import WebSearchService
+from airi.services.web_search import WebSearchService, _is_acknowledgment_only
 from airi.testing import FakeLLM, FakeNotifier, FakeSearch
 
 
@@ -15,6 +15,13 @@ def _tool_call(query="precio bitcoin hoy", motivo="me entró curiosidad"):
         "name": "buscar_web",
         "arguments": {"query": query, "motivo": motivo},
     }]
+
+
+def test_acknowledgment_classifier_collapses_vowels_without_corrupting_words():
+    assert _is_acknowledgment_only(
+        "siiiiiiiiiiiiiii bim bom otra respuesta correcta  bieeeen"
+    )
+    assert not _is_acknowledgment_only("¡Sí, acertaste! ¿Quién escribió One Piece?")
 
 
 def test_model_tool_call_triggers_one_search_and_produces_prompt_notes():
@@ -48,6 +55,40 @@ def test_no_tool_call_means_no_search_and_no_notice():
     assert search.queries == []
     assert notifier.sent == []
     assert llm.replies == ["respuesta final"]
+
+
+def test_confirming_correct_guess_does_not_search_even_with_search_tool_call():
+    llm = FakeLLM(tool_calls=[_tool_call(
+        "One Piece frase de Luffy", "quiero volver a comprobar la respuesta anterior"
+    )])
+    search = FakeSearch(result="no debe buscarse")
+    notifier = FakeNotifier()
+    service = WebSearchService(llm=llm, search=search, notifier=notifier)
+
+    outcome = run(service.run(
+        current_text="siiiiiiiiiiiiiii bim bom otra respuesta correcta bieeeen",
+        context="Airi respondió One Piece; el usuario confirmó que acertó.",
+    ))
+
+    assert outcome.requested is False
+    assert outcome.finish_reason == "acknowledgment_suppressed"
+    assert llm.decision_calls == []
+    assert search.queries == []
+    assert notifier.sent == []
+
+
+def test_confirmation_with_explicit_followup_question_still_allows_search():
+    llm = FakeLLM(tool_calls=[_tool_call("autor de One Piece")])
+    search = FakeSearch(result="Eiichiro Oda")
+    service = WebSearchService(llm=llm, search=search)
+
+    outcome = run(service.run(
+        current_text="¡Sí, acertaste! ¿Quién escribió One Piece?",
+        context="Estábamos jugando a adivinar animes.",
+    ))
+
+    assert outcome.requested is True
+    assert search.queries == ["autor de One Piece"]
 
 
 def test_failed_search_returns_control_context_not_reply_template():

@@ -88,13 +88,54 @@ def test_run_turn_trace_captures_search_and_grounding():
     ))
 
     assert result.trace.search_query == "precio bitcoin"
-    assert result.trace.to_dict()["search_query"] == "precio bitcoin"
+    assert "search_query" not in result.trace.to_dict()
     assert result.trace.web_context is not None
+    assert result.trace.web_capture_results
     assert result.trace.web_relevant is True
     assert result.trace.grounded is True
     assert result.trace.web_requested is True
     assert result.trace.web_motivo == "quería comprobarlo"
     assert result.trace.timings_ms["search_ms"] >= 0
+
+
+def test_search_sidecar_is_opt_in_and_trace_stays_redacted(tmp_path, monkeypatch):
+    from airi.observability.replay_capture import load_web_capture
+
+    monkeypatch.setenv("AIRI_TRACE_WEB_CAPTURE_DIR", str(tmp_path / "captures"))
+    state, _ = make_state()
+    llm = FakeLLM(
+        replies=[llm_json("ronda los 30k")],
+        tool_calls=[[{"name": "buscar_web", "arguments": {
+            "query": "precio bitcoin", "motivo": "verificar",
+        }}]],
+    )
+    svc = make_service(llm, state, search=FakeSearch(result="Bitcoin ronda los 30k"))
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "busca el precio de bitcoin")],
+        TurnContext(correlation_id="capture-test"),
+    ))
+
+    sidecar = tmp_path / "captures" / "capture-test.web-capture.json"
+    assert sidecar.exists()
+    assert result.trace.search_query == "precio bitcoin"
+    serialized = result.trace.to_json()
+    assert "precio bitcoin" not in serialized
+    assert "Bitcoin ronda los 30k" not in serialized
+    capture = load_web_capture(sidecar, correlation_id="capture-test")
+    assert capture.status == "results"
+    assert capture.results[0].snippet == "Bitcoin ronda los 30k"
+
+
+def test_search_capture_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("AIRI_TRACE_WEB_CAPTURE_DIR", raising=False)
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("hola")])
+    svc = make_service(llm, state)
+    result = run(svc.run_turn(
+        DAVID, [(DAVID, "hola")], TurnContext(correlation_id="no-capture"),
+    ))
+    assert not (tmp_path / "no-capture.web-capture.json").exists()
+    assert result.trace.web_capture_results == []
 
 
 def test_run_turn_broken_hook_does_not_break_turn():

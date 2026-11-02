@@ -88,6 +88,11 @@ class TurnEvent:
     web_query: str | None = None
     search_query: str | None = None
     web_context: str | None = None
+    # Datos estructurados solo en memoria; el sidecar opt-in es el único destino.
+    web_capture_results: list = field(default_factory=list, repr=False)
+    private_task_texts: list = field(default_factory=list, repr=False)
+    task_context_available: bool = False
+    task_context_schema: str | None = None
     web_relevant: bool | None = None
     # Decisión de búsqueda por tool calling (nunca por regex).
     web_requested: bool = False
@@ -234,6 +239,21 @@ class TurnEvent:
           reproducible y `replay` lo detecta).
         """
         data = asdict(self)
+        # Texto de búsqueda y contextos de tarea son potencialmente sensibles.
+        # Permanecen disponibles en memoria durante el turno, nunca en la traza normal.
+        private_web_text = [self.web_query, self.search_query, self.web_context]
+        private_web_text.extend(self.private_task_texts)
+        for key in ("prompt_system", "raw_llm", "final_reply"):
+            value = data.get(key)
+            if isinstance(value, str):
+                for private in private_web_text:
+                    if private:
+                        value = value.replace(private, "[contenido web redactado]")
+                data[key] = value
+        for key in ("web_query", "search_query", "web_context"):
+            data.pop(key, None)
+        data.pop("web_capture_results", None)
+        data.pop("private_task_texts", None)
         data["prompt_system"] = _clip(data["prompt_system"], MAX_SYSTEM_PROMPT_CHARS)
         data["history_in"] = _clip(data["history_in"], MAX_HISTORY_CHARS)
         data["messages_in"] = _clip(data["messages_in"], 4_000)

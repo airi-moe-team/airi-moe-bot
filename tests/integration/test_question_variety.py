@@ -44,8 +44,8 @@ def test_nudge_extracts_reply_from_raw_json_history():
         _assistant_json("¿Y tú qué tal estás?"),
     ]
     section = question_variety_nudge_section(history)
-    assert "NOTA DE VARIEDAD" in section
-    assert "NO cierres con una pregunta" in section
+    assert "VARIEDAD Y NATURALIDAD" in section
+    assert "PROHIBIDO cerrar con pregunta" in section
 
 
 def _run_turn(state, llm, message):
@@ -64,7 +64,7 @@ def test_turn_after_question_closing_includes_nudge():
 
     _run_turn(state, llm, "nada, curioseando")
 
-    assert "NOTA DE VARIEDAD" in llm.last_system_prompt
+    assert "VARIEDAD Y NATURALIDAD" in llm.last_system_prompt
 
 
 def test_turn_after_statement_closing_has_no_nudge():
@@ -78,5 +78,6 @@ def test_turn_after_statement_closing_has_no_nudge():
     _run_turn(state, llm, "hola")
 
     prompt = llm.last_system_prompt
-    assert "NOTA DE VARIEDAD" not in prompt
-    assert "TU ÚLTIMA DESCONEXIÓN" not in prompt
+    assert prompt.count("VARIEDAD Y NATURALIDAD") == 1
+    assert "PROHIBIDO cerrar con pregunta" in prompt
+    assert "ÚLTIMA DESCONEXIÓN" not in prompt
