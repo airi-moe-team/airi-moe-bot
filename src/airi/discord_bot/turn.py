@@ -307,6 +307,11 @@ async def run_user_turn(
 
     state = ctx.state
     registry = getattr(ctx, "spectator_session", None)
+    task_registry = getattr(ctx, "conversation_task_context", None)
+    task_frame = (
+        task_registry.get(channel_id, author_id)
+        if task_registry is not None else None
+    )
     if registry is not None:
         registry.mark_turn_started(channel.id)
     if registry is not None and kind in ("spectator", "proactive"):
@@ -347,6 +352,7 @@ async def run_user_turn(
                     suppress_affinity=suppress_affinity,
                     spectator_reason=spectator_reason,
                     spectator_snapshot=tuple(spectator_snapshot),
+                    task_context=task_frame.as_dict() if task_frame is not None else None,
                 )
                 journal = getattr(ctx, "turn_journal", None)
                 persistence = getattr(ctx, "persistence", None)
@@ -444,6 +450,15 @@ async def run_user_turn(
                 await _publish_result(
                     ctx, channel, author, result, reply_target=reply_target,
                     suppress_affinity=suppress_affinity,
+                )
+                published = True
+            if (
+                task_registry is not None
+                and not result.skipped
+                and (published or silent)
+            ):
+                task_registry.apply(
+                    channel_id, author_id, result.task_context_update
                 )
             _pub_tracker = current_tracker()
             if _pub_tracker is not None:

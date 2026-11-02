@@ -81,3 +81,35 @@ def test_semantic_judge_adds_phrase_agnostic_labels_to_records():
     assert "no frases literales" in judge_system
     assert "query_resolved" in judge_system
     assert llm.calls[0]["strict_schema"] is True
+
+
+def test_live_eval_passes_active_task_goal_to_web_decision():
+    scenario = WebSearchScenario(
+        id="task_goal",
+        description="Busca según el objetivo acordado, no por significado aislado.",
+        user_message="La siguiente frase es Moantai.",
+        expected_search=True,
+        notes=WebSearchNotes((WebResult("Digimon", "Moumantai se asocia con Terriermon."),)),
+        kind="spectator",
+        task_context={
+            "goal": "Identificar el anime de cada frase",
+            "constraints": ["cinco frases", "dos vidas"],
+            "progress": "La primera era Evangelion",
+            "next_step": "Resolver la segunda",
+        },
+    )
+    llm = FakeLLM(
+        tool_calls=[[
+            {"name": "buscar_web", "arguments": {
+                "query": "Moantai anime frase", "motivo": "quiero identificar el anime",
+            }}
+        ]],
+        replies=[llm_json("Creo que es Digimon.", stay_active=True)],
+    )
+
+    records = run(generate_web_search_records(llm=llm, scenarios=(scenario,)))
+
+    assert records[0]["actual_search"] is True
+    assert records[0]["allow_web"] is True
+    assert records[0]["task_context"]["goal"] == "Identificar el anime de cada frase"
+    assert "Identificar el anime de cada frase" in llm.decision_calls[0]["messages"][-1]["content"]

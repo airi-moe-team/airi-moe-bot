@@ -94,6 +94,13 @@ def _result(**overrides):
         diary_saved=False,
         affinity_delta=0,
         notices=[],
+        task_context_update={
+            "action": "none",
+            "goal": "",
+            "constraints": [],
+            "progress": "",
+            "next_step": "",
+        },
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -138,6 +145,47 @@ def test_disconnect_requests_global_shutdown(monkeypatch):
     run(turn_module.run_user_turn(ctx, channel, author, [(author, "vamos a dormir")]))
 
     assert shutdown_calls == [("me voy a dormir", 1, "")]
+
+
+def test_turn_supplies_and_updates_ephemeral_conversation_task(monkeypatch):
+    from airi.services.conversation_task import ConversationTaskRegistry
+
+    monkeypatch.setattr(turn_module.aiohttp, "ClientSession", _FakeClientSession)
+    shutdown_calls = []
+    registry = ConversationTaskRegistry(clock=lambda: 100.0)
+    registry.apply("7", "1", {
+        "action": "set",
+        "goal": "Identificar el anime de cada frase",
+        "constraints": ["cinco frases", "dos vidas"],
+        "progress": "Primera frase: Evangelion",
+        "next_step": "Identificar la segunda frase",
+    })
+    captured = {}
+
+    class TaskService:
+        async def run_turn(self, author, messages, turn_context):
+            captured["task_context"] = turn_context.task_context
+            return _result(task_context_update={
+                "action": "set",
+                "goal": "Identificar el anime de cada frase",
+                "constraints": ["cinco frases", "dos vidas"],
+                "progress": "Segunda frase: Digimon",
+                "next_step": "Esperar la tercera frase",
+            })
+
+    ctx = _ctx(_result(), shutdown_calls)
+    ctx.conversation_task_context = registry
+    ctx.build_service = lambda session, state, channel: TaskService()
+    channel = _FakeChannel()
+    author = SimpleNamespace(id=1, display_name="Ana")
+
+    run(turn_module.run_user_turn(ctx, channel, author, [(author, "Moantai")]))
+
+    assert captured["task_context"]["goal"] == "Identificar el anime de cada frase"
+    frame = registry.get("7", "1")
+    assert frame.progress == "Segunda frase: Digimon"
+    assert registry.get("7", "2") is None
+    assert "conversation_task_context" not in ctx.state.world
     assert any("Buenas noches" in (content or "") for content, _ in channel.sent)
 
 

@@ -113,7 +113,7 @@ SEARCH_CONTEXT_ENTRY_MAX_CHARS = 300
 SEARCH_CONTEXT_TOTAL_MAX_CHARS = 2000
 
 
-def _search_query_context(history, snapshot=()):
+def _search_query_context(history, snapshot=(), task_context=None):
     """Contexto reciente legible para construir una query con sentido."""
     lines = []
     for entry in list(history or ())[-SEARCH_CONTEXT_MESSAGES:]:
@@ -138,7 +138,28 @@ def _search_query_context(history, snapshot=()):
         text = " ".join(str(text).split())
         if text:
             lines.append(f"{speaker}: {text[:SEARCH_CONTEXT_ENTRY_MAX_CHARS]}")
-    return "\n".join(lines)[-SEARCH_CONTEXT_TOTAL_MAX_CHARS:]
+    recent = "\n".join(lines)[-SEARCH_CONTEXT_TOTAL_MAX_CHARS:]
+    task_section = domain_prompts.conversation_task_section(task_context)
+    if task_section:
+        return task_section + "\nCONTEXTO RECIENTE:\n" + recent
+    return recent
+
+
+def _redact_task_context_from_raw(raw_llm):
+    """Conserva la respuesta reproducible, pero no persiste el marco efímero."""
+    parsed = extract_json_object(raw_llm)
+    if not isinstance(parsed, dict) or "task_context_update" not in parsed:
+        return raw_llm
+    parsed["task_context_update"] = {
+        "action": "none",
+        "goal": "",
+        "constraints": [],
+        "progress": "",
+        "next_step": "",
+    }
+    import json
+
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 def _last_assistant_text(history):
@@ -380,6 +401,8 @@ class TurnContext:
     stream_llm: bool = False
     # Override opcional exclusivo de evaluaciones/controladores explícitos.
     llm_max_tokens: int | None = None
+    # Resumen efímero de una actividad explícita, aislado por canal/usuario.
+    task_context: dict | None = None
 
 
 @dataclass
@@ -419,6 +442,7 @@ class TurnResult:
     relationship_claims_repaired: bool = False
     disconnect_reason: str | None = None
     stay_active: bool = True
+    task_context_update: dict | None = None
     history: list = field(default_factory=list)
     notices: list = field(default_factory=list)
     skipped: bool = False
@@ -778,7 +802,7 @@ class ConversationService:
                 web_outcome = await self.web_search.run(
                     current_text=merged_text,
                     context=_search_query_context(
-                        prior_history, ctx.spectator_snapshot
+                        prior_history, ctx.spectator_snapshot, ctx.task_context
                     ),
                 )
                 timings["search_ms"] = int((_time.perf_counter() - t0) * 1000)
@@ -864,6 +888,7 @@ class ConversationService:
                     conversation_reason=getattr(ctx, "conversation_reason", ""),
                     turn_kind=getattr(ctx, "kind", "message"),
                     temporal=temporal,
+                    task_context=ctx.task_context,
                 )
             except Exception as exc:
                 self._log_module(
@@ -879,8 +904,15 @@ class ConversationService:
                 duration_ms=int((_time.perf_counter() - t0) * 1000),
             )
             timings["llm_ms"] = int((_time.perf_counter() - t0) * 1000)
-            ev.prompt_system = system_prompt
-            ev.raw_llm = raw_llm
+            trace_prompt = system_prompt
+            task_section = domain_prompts.conversation_task_section(ctx.task_context)
+            if task_section:
+                trace_prompt = trace_prompt.replace(
+                    task_section,
+                    "\n\n=== ACTIVIDAD ACTUAL ===\n[marco efímero omitido de la traza]\n",
+                )
+            ev.prompt_system = trace_prompt
+            ev.raw_llm = _redact_task_context_from_raw(raw_llm)
             ev.llm_latency_ms = timings["llm_ms"]
             ev.llm_ms = timings["llm_ms"]
             ev.llm_finish_reason = meta.finish_reason
@@ -1380,6 +1412,7 @@ class ConversationService:
             relationship_claims_repaired=claims_repaired,
             disconnect_reason=disconnect_reason,
             stay_active=getattr(draft, "stay_active", True),
+            task_context_update=output.task_context_update,
             history=history,
             notices=notices,
             trace=ev,
@@ -1672,6 +1705,7 @@ class ConversationService:
         conversation_reason="",
         turn_kind="message",
         temporal=None,
+        task_context=None,
     ):
         now = self.clock() if now is None else now
         session_mode = conversation_mode in ("spectator", "active", "proactive")
@@ -1768,6 +1802,9 @@ class ConversationService:
                 ),
                 domain_prompts.diary_prompt_section(state.diary, user.id, now),
             ]
+        task_section = domain_prompts.conversation_task_section(task_context)
+        if task_section:
+            sections.append(task_section)
         # Nudge anti-encadenamiento: solo si el último turno de Airi cerró con
         # pregunta. Fuera de ese patrón devuelve "" y no añade nada.
         sections.append(domain_prompts.question_variety_nudge_section(history))
@@ -1915,7 +1952,8 @@ class ConversationService:
         ):
             review_started = time.perf_counter()
             review = await self._review(
-                calls, history=history, draft=output.reply, stream_llm=stream_llm
+                calls, history=history, draft=output.reply, stream_llm=stream_llm,
+                task_context=task_context,
             )
             repair_telemetry["review_ms"] = int(
                 round((time.perf_counter() - review_started) * 1000)
@@ -2027,7 +2065,9 @@ class ConversationService:
         # `session_mode` no las excluye, pero el silencio sí se excluyó arriba.
         return True
 
-    async def _review(self, calls, *, history, draft, stream_llm=False):
+    async def _review(
+        self, calls, *, history, draft, stream_llm=False, task_context=None
+    ):
         """Juez corto y sin personalidad; cualquier fallo abre el paso."""
         if not isinstance(draft, str) or not draft.strip():
             return ReviewResult(valid=False)
@@ -2051,8 +2091,10 @@ class ConversationService:
             content = " ".join(content.split())[:350]
             lines.append(f"{author} ({role}): {content}")
         transcript = "\n".join(lines) or "(sin historial previo)"
+        task_section = domain_prompts.conversation_task_section(task_context)
         user_prompt = (
-            "HILO RECIENTE:\n" + transcript + "\n\nBORRADOR:\n" + draft[:700]
+            ("OBJETIVO ACTIVO (contexto):\n" + task_section if task_section else "")
+            + "HILO RECIENTE:\n" + transcript + "\n\nBORRADOR:\n" + draft[:700]
         )
         try:
             raw, _meta = await self._chat(

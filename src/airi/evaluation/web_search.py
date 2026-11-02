@@ -35,6 +35,7 @@ class WebSearchScenario:
     history: tuple[tuple[str, str], ...] = ()
     allow_web: bool = True
     kind: str = "message"
+    task_context: dict | None = None
     uncertainty_expected: bool = False
 
 
@@ -153,6 +154,22 @@ WEB_SEARCH_SCENARIOS: tuple[WebSearchScenario, ...] = (
         history=(("user", "Hablemos de la película Luna Roja."),),
         notes=_notes(("Luna Roja — estreno", "Luna Roja se estrenó en 2012.")),
         kind="spectator",
+    ),
+    WebSearchScenario(
+        id="task_goal_search",
+        description=(
+            "Interpretar una frase según el objetivo del juego (identificar anime), no traducirla aisladamente."
+        ),
+        user_message="La siguiente frase es «Moantai».",
+        expected_search=True,
+        notes=_notes(("Digimon Tamers", "Moumantai es una expresión asociada a Terriermon.")),
+        kind="spectator",
+        task_context={
+            "goal": "Identificar el anime al que pertenece cada frase del juego",
+            "constraints": ["Son cinco frases", "Hay dos vidas"],
+            "progress": "La primera frase era de Evangelion",
+            "next_step": "Averiguar el anime de la segunda frase",
+        },
     ),
 )
 
@@ -373,6 +390,7 @@ async def generate_web_search_records(
                 if scenario.kind in {"active", "spectator", "proactive"}
                 else "normal"
             ),
+            task_context=scenario.task_context,
             now=now,
         )
         result = await service.run_turn(
@@ -384,6 +402,7 @@ async def generate_web_search_records(
             "description": scenario.description,
             "user": scenario.user_message,
             "history": list(scenario.history),
+            "task_context": scenario.task_context,
             "expected_search": scenario.expected_search,
             "uncertainty_expected": scenario.uncertainty_expected,
             "actual_search": bool(trace.web_requested),

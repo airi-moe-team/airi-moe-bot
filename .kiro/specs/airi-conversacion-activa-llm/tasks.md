@@ -76,3 +76,13 @@
   - Verificar el modo espectador deshabilitado mantiene exactamente el comportamiento conversacional normal y sus pruebas existentes verdes.
   - Cubrir con pruebas de integración: cierre del cliente con tareas pendientes, eventos de transición limpios y modo deshabilitado inerte.
   - _Requirements: 2.5, 4.4, 5.1, 5.2, 6.1, 6.2, 6.3, 6.4_
+
+
+- [x] 10. Continuidad genérica del objetivo conversacional (feedback FB-001)
+  - Auditar truncado/compresión del historial y añadir un escenario de evaluación controlado derivado de la traza 02699f283523; documentar qué contexto reciben generación, búsqueda y revisión.
+  - Definir un modelo efímero y compacto para actividades explícitas (objetivo, restricciones, progreso/próximo paso, ciclo de vida y participantes pertinentes) con límites de tamaño y expiración.
+  - Escribir primero pruebas unitarias para crear, continuar, corregir, reemplazar, completar, abandonar y expirar el marco; cubrir charla sin tarea y aislamiento.
+  - Integrar el marco al contexto de generación, revisión de coherencia y decisiones de herramientas en modos normal/spectator/active, sin añadir una llamada de resumen obligatoria por turno; verificar que la consulta de búsqueda avance el objetivo.
+  - Añadir pruebas de integración/evaluación genéricas: quiz, tarea de varios pasos, interrupción/reanudación, mensaje automático lateral, cambio de tema, corrección y varios usuarios.
+  - Verificar privacidad (no persistencia ni contenido sensible en logs), límites de contexto, latencia/coste, timeout/retirada y replay determinista.
+  - _Requirements: 3.1–3.7, 6.1–6.4, 8.1–8.8_

@@ -5,7 +5,7 @@ Nueva feature para evolucionar el modo espectador existente de Airi hacia una m�
 
 ## Introduction
 
-El modo espectador actual permite a Airi observar el canal autorizado sin llamar al LLM y despertar ante señales locales. Esta feature añade continuidad: una vez que Airi participa, el LLM decide si responde y si sigue en la conversación, mientras el sistema conserva filtros de entrada, serialización por canal y un límite local de inactividad. El estado conversacional será temporal, por canal y no persistido.
+El modo espectador actual permite a Airi observar el canal autorizado sin llamar al LLM y despertar ante señales locales. Esta feature añade continuidad: una vez que Airi participa, el LLM decide si responde y si sigue en la conversación, mientras el sistema conserva filtros de entrada, serialización por canal y un límite local de inactividad. El estado conversacional será temporal, por canal y no persistido. La conversación activa también conservará el objetivo y las restricciones de una actividad explícita a través de turnos breves, interrupciones y retomadas, sin convertir ese contexto efímero en memoria permanente del usuario.
 
 ## Requirements
 
@@ -82,6 +82,22 @@ El modo espectador actual permite a Airi observar el canal autorizado sin llamar
 8. THE registro de mensajes respondidos SHALL persistir en el estado del bot para que, tras un reinicio, un mensaje ya atendido no vuelva a ser candidato (invariante I2), y SHALL solo marcarse tras la publicación exitosa en Discord.
 9. WHEN la publicación esté en estado incierto (confirmación perdida tras el envío), THEN la recuperación SHALL conciliar el registro de turnos antes de reintentar (T15) y SHALL reanudar respuestas confirmadas pendientes al arrancar.
 10. THE Airi SHALL excluir del cómputo de actividad humana sus propios embeds de conexión/desconexión y los mensajes de otros bots (invariante I5), y SHALL aislar estado y temporizadores por canal (T21).
+
+### Requirement 8: Continuidad del objetivo conversacional
+**Objective:** Como participante, quiero que Airi recuerde temporalmente qué actividad acordamos y en qué punto estamos, para que un mensaje breve o una interrupción no desvíen la tarea.
+
+#### Acceptance Criteria
+1. WHEN el usuario inicia una tarea o actividad explícita en una conversación con Airi THEN Airi SHALL mantener un contexto efímero con su objetivo, restricciones relevantes y progreso/próximo paso.
+2. WHEN el usuario continúa la actividad con un mensaje breve, referencia indirecta o retoma tras una interrupción, en cualquier modo conversacional dirigido al usuario, THEN Airi SHALL responder priorizando ese objetivo activo sobre la interpretación aislada de palabras del mensaje actual.
+3. WHEN el usuario corrige, reemplaza o termina la actividad THEN Airi SHALL actualizar o cerrar el contexto y SHALL NOT aplicar instrucciones obsoletas a turnos posteriores.
+4. WHEN Airi decida usar una herramienta THEN la decisión SHALL recibir el objetivo activo y SHALL orientar la consulta a avanzar la actividad; la herramienta SHALL NOT sustituir el objetivo por una exploración lateral de una entidad mencionada.
+5. WHEN el contexto incluya mensajes automáticos o laterales THEN estos SHALL NOT reemplazar ni alterar por sí solos el objetivo acordado con el usuario.
+6. THE contexto de actividad SHALL ser temporal, limitarse al hilo `(canal, usuario)` y a su TTL en memoria, SHALL NOT filtrarse a otro usuario/canal y SHALL NOT guardarse como memoria permanente. Podrá sobrevivir a una interrupción breve o a la retirada del modo activo hasta su expiración o cierre explícito de la actividad.
+7. WHEN el objetivo no pueda recuperarse con confianza THEN Airi SHALL pedir una aclaración breve antes de asumir una tarea incompatible.
+8. WHEN no exista una actividad explícita activa THEN Airi SHALL mantener el comportamiento normal de conversación sin inventar un objetivo.
+
+#### Verificabilidad
+THE test suite SHALL cubrir inicio, continuación breve, interrupción/reanudación, corrección, cambio de objetivo, finalización, mensaje automático lateral, ausencia de tarea y aislamiento entre conversaciones/participantes.
 
 #### Configuración
 | Variable | Responsabilidad |

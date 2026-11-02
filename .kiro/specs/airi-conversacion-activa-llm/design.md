@@ -51,9 +51,9 @@ flowchart TD
 
 **Architecture Integration**
 - Se mantienen la arquitectura hexagonal, el debounce por autor, el dispatcher FIFO, las APIs de Discord y el historial canónico existentes.
-- El nuevo `SpectatorSessionRegistry` (en `services/`) es dueño únicamente del estado de ciclo de vida por canal y de versiones de temporizador.
+- El `SpectatorSessionRegistry` (en `services/`) mantiene el ciclo de vida por canal y las versiones de temporizador. El `ConversationTaskRegistry` (en `services/conversation_task.py`) mantiene marcos efímeros independientes del estado spectator/active, indexados por canal y usuario; así una retirada no pierde una tarea que el usuario puede retomar antes del TTL.
 - `client.py` conserva la orquestación asíncrona y los timers; el dominio/servicio de sesión no importa Discord ni crea tareas asyncio.
-- `ConversationService` recibe el modo conversacional y el motivo como contexto del turno; el snapshot pasivo sigue siendo solo de prompt/traza.
+- `ConversationService` recibe el modo conversacional, el motivo y, cuando existe, el marco efímero del objetivo activo en turnos dirigidos al usuario (normal, spectator y active). El mismo marco se incluye en la generación, la revisión de coherencia y decisiones de herramientas; el snapshot pasivo sigue siendo solo de prompt/traza.
 - No se introduce una librería nueva. Los umbrales y relojes siguen siendo inyectables.
 
 ### Technology Alignment
@@ -76,7 +76,15 @@ Python 3.11+, `discord.py`, `asyncio`, arquitectura hexagonal y configuración p
    - **Rationale:** limita el cambio de comportamiento, evita que un sentinel se publique como texto y elimina el riesgo de unión de tipos en la gramática del motor; el string es aceptado por todas las gramáticas locales.
    - **Trade-offs:** el validador debe distinguir entre silencio intencional (`""`) y fallo real (claves ausentes o tipos inválidos). Se amplían `TurnContext`, `ModelOutput`/`TurnResult` y las pruebas del esquema; el prompt debe indicar explícitamente que `""` es la única forma válida de guardar silencio.
 
-3. **Decisión: temporizadores asíncronos con generación/versionado y comprobación en cola.**
+3. **Decisión: contexto de actividad efímero y acotado, no más historial indiscriminado.**
+   - **Contexto:** los mensajes recientes pueden omitir las reglas/objetivos iniciales; aumentar el historial añade ruido y tokens sin garantizar continuidad.
+   - **Seleccionado:** mantener por hilo conversacional un marco compacto solo cuando el usuario inicia una actividad explícita: objetivo, restricciones pertinentes, progreso/próximo paso y ciclo de vida. Se actualiza con señales claras de continuación/corrección/cambio/cierre y se entrega a la generación, la revisión de coherencia y la decisión de herramientas.
+   - **Mensajes automáticos:** los turnos `system_generated` pueden aportar contexto, pero no crean ni reemplazan el objetivo del usuario por sí solos.
+   - **Aislamiento y privacidad:** el marco es volátil, asociado a la sesión y a participantes pertinentes; al cerrar, expirar o cambiar de sesión se limpia. No se escribe en `AppState` persistido ni en memoria duradera del usuario.
+   - **Ambigüedad:** si no hay objetivo explícito o el marco quedó obsoleto, se conserva la charla normal o se pide una aclaración; no se inventa una tarea.
+   - **Trade-offs:** añade un contrato y lógica de actualización que deben probarse contra cambios de tema y costes de contexto; se evita una llamada de resumen obligatoria por turno y se mantiene el límite de tamaño.
+
+4. **Decisión: temporizadores asíncronos con generación/versionado y comprobación en cola.**
    - **Contexto:** los mensajes, los turnos largos y los timers pueden competir por cambiar el estado.
    - **Alternativas:** depender solo de comprobaciones en cada mensaje; mantener un poller global; cancelar sin validar timers antiguos.
    - **Seleccionado:** `client.py` mantiene una tarea cancelable por canal/tipo y una generación monotónica en el registro. Cada callback verifica generación, estado y actividad vigente antes de encolar; el job revalida dentro de la cola FIFO antes de actuar.
@@ -150,6 +158,7 @@ sequenceDiagram
 | 4.1–4.5 | `client.py`, `SpectatorSessionRegistry`, `ChannelDispatcher` | Timers por canal versionados, cancelables y revalidados en FIFO. |
 | 5.1–5.2 | `SpectatorSessionRegistry`, `turn.py` | Retirada local; `disconnect` permanece reservado al cierre global. |
 | 6.1–6.4 | `SpectatorSessionRegistry`, observabilidad, tests | Estado efímero, logs sin contenido, reloj inyectable y pruebas de ciclo completo. |
+| 8.1–8.8 | `ConversationTaskFrame`, `ConversationService`, prompts/herramientas, tests | Objetivo explícito efímero; continuidad/corrección/cierre; aislamiento, ausencia de tarea y decisiones de herramienta orientadas al propósito. |
 
 ## Components and Interfaces
 
@@ -206,7 +215,7 @@ sequenceDiagram
 
 **Responsabilidad:** construir el contexto prompt, solicitar la salida adecuada y validar el contrato.
 
-**Contrato de salida de sesión:** respuesta spectator/activa usa un esquema separado, derivado sin mutar el esquema normal. Todos los campos son de tipo único (sin uniones String | Null por incompatibilidad práctica con las gramáticas GBNF/Outlines de los servidores locales):
+**Contrato de salida de sesión:** respuesta spectator/activa usa un esquema separado, derivado sin mutar el esquema normal. Cuando hay una actividad explícita activa, el contexto compacto del objetivo se inyecta en este prompt para que la respuesta continúe el propósito acordado. Todos los campos son de tipo único (sin uniones String | Null por incompatibilidad práctica con las gramáticas GBNF/Outlines de los servidores locales):
 
 ```json
 {
@@ -219,7 +228,7 @@ El esquema completo conserva las propiedades de respuesta existentes para turnos
 
 **Interpretación contextual del silencio:** la combinación `reply=""` + `stay_active=true` es válida SOLO en estado Activo (escucha deliberada sin interrumpir). En estado Despertando es siempre un aborto: la sesión no se abre sin texto inicial, se ignora `stay_active`, se rearma el cooldown y se consume el snapshot. Esta regla perteneece al dominio del turno, no a la heurística de cliente.
 
-**Prompt:** el modo `spectator` incluye motivo y snapshot pasivo; `active` pide evaluar el hilo de grupo y puede guardar silencio devolviendo `""` cuando sea más natural, siendo esta la única forma válida de callarse; `proactive` pide iniciar un tema sin fingir que un usuario lo preguntó. El estado de conversación es una instrucción de sistema, nunca un texto de usuario no confiable.
+**Prompt:** el modo `spectator` incluye motivo y snapshot pasivo; `active` pide evaluar el hilo de grupo y puede guardar silencio devolviendo `""` cuando sea más natural, siendo esta la única forma válida de callarse; `proactive` pide iniciar un tema sin fingir que un usuario lo preguntó. Cuando hay una actividad explícita, objetivo/restricciones/progreso se incluyen como contexto de sistema compacto tanto en generación como en tool calling. Mensajes automáticos no reemplazan el objetivo. El estado de conversación es una instrucción de sistema, nunca un texto de usuario no confiable.
 
 **Silencio y efectos:** `reply=""` es una decisión intencional, no una respuesta vacía reparable. No publica, no aplica cambios de afinidad/memoria/diario/relación y no añade una respuesta vacía al historial. Aun así produce resultado de turno y traza con decisión de silencio. Los turnos proactivos tienen el principal sintético de grupo y no aplican efectos ligados a usuario; su texto publicado se agrega al historial canónico con una entrada fiable para consumidores downstream (ver Data Models).
 
@@ -240,7 +249,7 @@ No se modifica el esquema persistido de `AppState`. Estado en memoria:
 | `last_proactive_attempt` | `float \| None` | Evita repetir dentro del mismo periodo o tras silencio |
 | `active_since` | `float \| None` | Diagnóstico y ciclo activo |
 
-Los textos pasivos permanecen exclusivamente en el `PassiveBuffer` ya existente, con TTL. No se copia el buffer al registro de sesión. El historial canónico de canal continúa sujeto a la política existente y no se borra al retirarse.
+Los textos pasivos permanecen exclusivamente en el `PassiveBuffer` ya existente, con TTL. No se copia el buffer al registro de sesión. El historial canónico de canal continúa sujeto a la política existente y no se borra al retirarse. El marco del objetivo activo se conserva solo dentro del contexto volátil del hilo, indexado por `(channel_id, user_id)`; no se añade al historial persistido ni a memorias de usuario. Su esquema incluye `goal`, `constraints`, `progress` y `next_step`; las operaciones `none`/`set`/`clear` definen su ciclo de vida. Se limita cada campo, usa expiración deslizante de una hora y admite como máximo 256 marcos en memoria para evitar que se convierta en un segundo historial.
 
 **Entrada de historial para turnos proactivos:** la respuesta del turno sintético entra al `state.histories[channel_id]` con una firma estable que los consumidores deben tolerar:
 
@@ -287,6 +296,14 @@ Emitir eventos estructurados con canal, estado previo/nuevo, motivo (`mention`, 
 - Parser: silencio intencional (`reply == ""`) no entra en reparación de respuesta vacía; salida inválida (claves ausentes/tipos erróneos) no produce una decisión de retirada ni de silencio.
 - Entrada de historial system-generated: consumidores (`build_inference_history`, etiquetas de afinidad, known users, mixtura de turno rápido) toleran `author_id`/`author_name` vacíos y `system_generated: true`.
 - Política de entorno: defaults y valores inválidos/no positivos.
+
+### Conversational Task-Continuity Tests
+- Inicio explícito crea un marco compacto; charla normal sin actividad no lo crea.
+- Mensaje breve o referencia indirecta retoma el objetivo; la decisión de herramienta recibe el objetivo y la consulta sirve a la tarea, no a una interpretación lexical lateral.
+- Interrupción/reanudación preserva objetivo y progreso; mensajes `system_generated` laterales no lo reemplazan.
+- Corrección/cambio/finalización actualiza o limpia el marco; timeout y retirada lo limpian.
+- Dos sesiones/participantes no comparten información; no se persiste el contenido del marco.
+- Casos genéricos: juego de frases, tarea de varios pasos, planificación/actividad colaborativa, corrección, cambio de tema y ausencia de tarea.
 
 ### Integration Tests
 - Espectadora sin señal no llama al LLM; señal actual inicia despertar con snapshot y motivo.

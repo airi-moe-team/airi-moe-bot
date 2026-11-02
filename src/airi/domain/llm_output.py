@@ -9,6 +9,7 @@ import re
 from typing import NamedTuple
 
 from airi.domain.affinity import clamp_delta
+from airi.domain.conversation_task import normalize_task_context_update
 from airi.domain.constants import (
     AFFINITY_DELTA_MAX,
     DATE_ACTION_LABEL_MAX,
@@ -97,6 +98,7 @@ class ModelOutput(NamedTuple):
     relationship_action: object = None
     # Ánimo transitorio del turno: {"label","valence","energy","warmth","cause"}.
     mood: object = None
+    task_context_update: object = None
 
 
 def _model_output(
@@ -115,11 +117,12 @@ def _model_output(
     romantic_update=None,
     relationship_action=None,
     mood=None,
+    task_context_update=None,
 ):
     return ModelOutput(
         reply, gif, memory, diary, delta, decision, reason, last_chance,
         question, event, disconnect, self_update,
-        romantic_update, relationship_action, mood,
+        romantic_update, relationship_action, mood, task_context_update,
     )
 
 
@@ -466,6 +469,9 @@ def parse_model_output(
     self_update = parse_self_update(parsed.get("self_update"))
     # Ánimo transitorio del turno (opcional; si falta se usa el fallback).
     mood = parse_mood(parsed.get("mood"))
+    task_context_update = normalize_task_context_update(
+        parsed.get("task_context_update")
+    )
     # Marcharse: decisión contextual y excepcional de Airi.
     disconnect = parse_disconnect(parsed.get("disconnect"))
     # Relación: etapa afectiva y acción de pareja propuestas por el modelo.
@@ -489,7 +495,7 @@ def parse_model_output(
         reply, gif_type, memory_action, diary_action, delta,
         date_decision, date_reason, last_chance_result, date_question,
         affinity_event, disconnect, self_update, romantic_update,
-        relationship_action, mood,
+        relationship_action, mood, task_context_update,
     )
 
 # Esquema dedicado para turnos de sesión (espectador/activa/proactiva).
@@ -625,6 +631,18 @@ RESPONSE_SCHEMA = {
             "required": ["leave", "reason"],
             "additionalProperties": False,
         },
+        "task_context_update": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["none", "set", "clear"]},
+                "goal": {"type": "string"},
+                "constraints": {"type": "array", "items": {"type": "string"}},
+                "progress": {"type": "string"},
+                "next_step": {"type": "string"},
+            },
+            "required": ["action", "goal", "constraints", "progress", "next_step"],
+            "additionalProperties": False,
+        },
     },
     # Modo estricto (json_schema): TODAS las propiedades deben ir en `required`
     # y `additionalProperties: false` en cada nivel. `parse_model_output` tolera
@@ -645,6 +663,7 @@ RESPONSE_SCHEMA = {
         "romantic_update",
         "relationship_action",
         "disconnect",
+        "task_context_update",
     ],
     "additionalProperties": False,
 }

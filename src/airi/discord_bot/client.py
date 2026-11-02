@@ -29,6 +29,7 @@ from airi.observability.interaction_tracker import (
 )
 from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
+from airi.services.conversation_task import ConversationTaskRegistry
 from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
 from airi.services.pending_message import PendingMessageTracker
 from airi.services.spectator_policy import ActivitiesCooldown
@@ -1462,6 +1463,7 @@ def run_bot(argv=None):
         active_idle_seconds=spectator_effective.active_idle_seconds,
         proactive_idle_seconds=spectator_effective.proactive_idle_seconds,
     )
+    shared_conversation_tasks = ConversationTaskRegistry(clock=time.monotonic)
 
     # Pegamentos Discord↔dominio (citas, regalos, diario). Ver `build_date_glue`.
     glue = build_date_glue(
@@ -1550,6 +1552,7 @@ def run_bot(argv=None):
         ctx.spectator_policy = spectator_policy
         ctx.spectator_gate = shared_spectator_gate
         ctx.spectator_session = shared_spectator_session
+        ctx.conversation_task_context = shared_conversation_tasks
         ctx.timers = getattr(client, "_spectator_timers", None)
         ctx.dispatcher = getattr(client, "_spectator_dispatcher", None)
         ctx.handle_scene_choice = (

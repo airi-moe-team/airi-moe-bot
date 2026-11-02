@@ -1,0 +1,45 @@
+{
+  "feature": "airi-conversacion-activa-llm",
+  "generated_at": "2026-11-02T09:34:39Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Conservar el objetivo activo a través de interrupciones y turnos",
+      "severity": "major",
+      "impact": "El contexto efectivo puede conservar mensajes recientes y aun así perder el propósito y las reglas establecidos por el usuario. Esto hace que Airi responda a una palabra literal en vez de cumplir la actividad acordada, como ocurrió al traducir “Moantai” en vez de identificar el anime. El mismo riesgo afecta tareas de varios pasos, correcciones y retomadas.",
+      "recommendation": "Extender la conversación activa con un marco de trabajo efímero y compacto para objetivos explícitos: objetivo, restricciones relevantes, progreso/próximo paso y estado (activo, completado, abandonado o reemplazado). Mantenerlo disponible tanto para la generación como para la decisión de herramientas; actualizarlo en inicios, correcciones, cambios de tema, interrupciones y cierre. No persistirlo como memoria duradera y evitar contaminarlo con contenido automático o lateral.",
+      "targets": [
+        "requirements",
+        "design",
+        "tasks"
+      ],
+      "updates": {
+        "requirements": [
+          "WHEN el usuario inicia o continúa una actividad/tarea explícita THEN Airi SHALL conservar el objetivo, las restricciones vigentes y el progreso necesario para responder al siguiente turno coherentemente, incluso si el mensaje actual es breve o la conversación fue interrumpida.",
+          "WHEN el usuario corrige, reemplaza o termina el objetivo THEN Airi SHALL actualizar o cerrar el contexto activo y SHALL NOT seguir aplicando instrucciones obsoletas.",
+          "WHEN se invoque una herramienta THEN la decisión SHALL recibir el objetivo activo y SHALL formular la consulta para avanzar el objetivo, no limitarse a interpretar literalmente una entidad aislada.",
+          "THE contexto activo SHALL ser temporal, estar aislado por conversación/participantes relevantes, y SHALL NOT convertirse automáticamente en memoria permanente del usuario.",
+          "WHEN el objetivo no pueda recuperarse con confianza THEN Airi SHALL pedir una aclaración breve antes de asumir una tarea incompatible."
+        ],
+        "design": [
+          "Añadir un marco de trabajo conversacional efímero, compacto y estructurado para objetivos explícitos (goal, constraints, progress/next_step, lifecycle), integrado con el ciclo de conversación activa existente.",
+          "Definir actualización y cierre frente a continuación, corrección, cambio de tema, interrupción/reanudación, finalización, timeout y mensajes system_generated; los apartes automáticos no sustituyen el objetivo del usuario.",
+          "Inyectar el marco en generación y decisiones de herramientas (incluida búsqueda) sin ampliar indiscriminadamente el historial ni persistir contenido como memoria del usuario.",
+          "Aislar el estado para evitar contaminación entre canales/participantes; mantener el comportamiento normal cuando no exista actividad/tarea explícita."
+        ],
+        "tasks": [
+          "Auditar dónde se recorta/comprime el historial y qué contexto reciben generación, búsqueda y revisores; añadir una fixture basada en la traza 02699f283523.",
+          "Definir e implementar el contrato/modelo efímero del objetivo activo y su ciclo de vida (crear, actualizar, reemplazar, completar, expirar), con tests unitarios primero.",
+          "Integrar el marco en generación y decisión de herramientas, con tests que verifiquen que búsquedas se orientan al objetivo y que mensajes automáticos laterales no lo reemplazan.",
+          "Añadir evaluaciones genéricas: quiz de frases, tarea de varios pasos, interrupción/reanudación, corrección/cambio de objetivo, charla sin tarea y aislamiento multiusuario.",
+          "Validar regresiones, privacidad, observabilidad sin registrar contenido sensible, comportamiento de timeout y coste/latencia; documentar los límites del replay offline."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": [
+    "requirements",
+    "design",
+    "tasks"
+  ]
+}

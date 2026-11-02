@@ -463,6 +463,54 @@ def _search_tool_call(query="precio bitcoin hoy", motivo="me dio curiosidad"):
     }]
 
 
+def test_active_task_context_guides_search_and_is_returned_by_model():
+    state, _ = make_state()
+    state.histories[0] = [{
+        "role": "assistant",
+        "content": json.dumps({"reply": "Acabo de pensar en juegos de rol online."}),
+        "system_generated": True,
+    }]
+    task_context = {
+        "goal": "Identificar el anime de cada frase",
+        "constraints": ["cinco frases", "dos vidas"],
+        "progress": "Primera frase: Evangelion",
+        "next_step": "Identificar la segunda frase",
+    }
+    output = json.loads(llm_json("Creo que es Digimon."))
+    output["task_context_update"] = {
+        "action": "set",
+        **task_context,
+        "progress": "Segunda frase: Digimon",
+        "next_step": "Esperar la tercera frase",
+    }
+    llm = FakeLLM(
+        replies=[json.dumps(output, ensure_ascii=False)],
+        tool_calls=[_search_tool_call(
+            "Moantai anime frase Digimon", "quiero identificar el anime del juego"
+        )],
+    )
+    search = FakeSearch(result="La expresión aparece en Digimon Tamers.")
+    svc = make_service(llm, state, search=search, notifier=FakeNotifier())
+    svc.conversation_review_enabled = True
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "La siguiente frase es Moantai")],
+        TurnContext(task_context=task_context),
+    ))
+
+    decision_context = llm.decision_calls[0]["messages"][-1]["content"]
+    assert "Identificar el anime de cada frase" in decision_context
+    assert "Identificar el anime de cada frase" in llm.calls[0]["messages"][0]["content"]
+    assert "Identificar el anime de cada frase" in llm.calls[-1]["messages"][-1]["content"]
+    assert search.queries == ["Moantai anime frase Digimon"]
+    assert result.task_context_update["progress"] == "Segunda frase: Digimon"
+    trace_json = json.dumps(result.trace.to_dict(), ensure_ascii=False)
+    assert "Identificar el anime de cada frase" not in trace_json
+    assert "Adivinar la segunda frase" not in trace_json
+    assert "marco efímero omitido de la traza" in result.trace.prompt_system
+
+
 def test_turn_web_search_is_decided_by_native_tool_call():
     state, _ = make_state()
     notifier = FakeNotifier()
