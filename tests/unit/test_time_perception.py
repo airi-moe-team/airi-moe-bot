@@ -10,7 +10,10 @@ from airi.domain.time_perception import (
     day_part,
     elapsed_text,
     format_elapsed,
+    habitual_pattern,
+    local_day_label,
     local_moment,
+    previous_session,
     resolve_zone,
 )
 
@@ -114,6 +117,116 @@ def test_build_temporal_context_uses_latest_history_and_snapshot_activity():
     assert ctx.user_gap_seconds == 120
     assert ctx.channel_gap_seconds == 30
     assert ctx.first_time is False
+
+
+def _madrid_stamp(day, hour, minute=0):
+    madrid = resolve_zone("Europe/Madrid")[0]
+    return datetime(2026, 10, day, hour, minute, tzinfo=madrid).timestamp()
+
+
+def test_habitual_pattern_detects_a_nocturnal_schedule_across_midnight():
+    madrid = resolve_zone("Europe/Madrid")[0]
+    stamps = [
+        _madrid_stamp(17, 22), _madrid_stamp(17, 23),
+        _madrid_stamp(18, 0), _madrid_stamp(18, 1),
+        _madrid_stamp(18, 23), _madrid_stamp(19, 22),
+        _madrid_stamp(19, 0), _madrid_stamp(19, 23),
+    ]
+    now = _madrid_stamp(20, 2)
+    pattern = habitual_pattern(stamps, now, madrid)
+    assert pattern is not None
+    assert pattern.typical_hour in (23, 0)
+    assert pattern.offset_hours is not None and pattern.offset_hours > 0
+    assert pattern.confidence == "alta"
+
+
+def test_habitual_pattern_rejects_scattered_hours_and_few_samples():
+    madrid = resolve_zone("Europe/Madrid")[0]
+    now = _madrid_stamp(20, 12)
+    scattered = [_madrid_stamp(day, hour) for day, hour in
+                 ((17, 3), (18, 9), (19, 15), (20, 21))]
+    assert habitual_pattern(scattered, now, madrid) is None
+    few = [_madrid_stamp(day, 22) for day in (17, 18, 19)]
+    assert habitual_pattern(few, now, madrid) is None
+
+
+def test_habitual_pattern_flags_earlier_and_later_arrivals():
+    madrid = resolve_zone("Europe/Madrid")[0]
+    stamps = [_madrid_stamp(day, hour) for day, hour in
+              ((16, 22), (17, 22), (18, 23), (19, 22))]
+    early = _madrid_stamp(20, 18)
+    late = _madrid_stamp(21, 3)
+    assert habitual_pattern(stamps, early, madrid).offset_hours < -1.5
+    assert habitual_pattern(stamps, late, madrid).offset_hours > 1.5
+
+
+def test_build_temporal_context_exposes_habitual_pattern_from_activity_history():
+    madrid = resolve_zone("Europe/Madrid")[0]
+    now = _madrid_stamp(20, 2)
+    stamps = [
+        _madrid_stamp(17, 22), _madrid_stamp(18, 23),
+        _madrid_stamp(19, 0), _madrid_stamp(19, 1),
+        _madrid_stamp(19, 23),
+    ]
+    ctx = build_temporal_context(
+        now,
+        TimeConfig(timezone="Europe/Madrid"),
+        users={
+            "7": {
+                "name": "A",
+                "last_seen": now - 3600,
+                "activity_ts": stamps,
+            }
+        },
+        history=[],
+        user_id="7",
+        in_date=False,
+    )
+    assert ctx is not None and ctx.habitual is not None
+    assert ctx.habitual.sessions == 5
+
+
+def test_previous_session_skips_the_current_session_start():
+    # Sesión anterior a las 05:49 y sesión actual abierta a las 20:18.
+    stamps = [_madrid_stamp(19, 21), _madrid_stamp(20, 5, 49), _madrid_stamp(20, 20, 18)]
+    now = _madrid_stamp(20, 20, 26)
+    assert previous_session(stamps, now) == stamps[-2]
+
+
+def test_previous_session_is_the_last_one_when_a_new_session_starts():
+    stamps = [_madrid_stamp(19, 21), _madrid_stamp(20, 5, 49)]
+    now = _madrid_stamp(20, 20, 26)
+    assert now - stamps[-1] > 30 * 60
+    assert previous_session(stamps, now) == stamps[-1]
+
+
+def test_previous_session_is_none_without_history():
+    assert previous_session([], 1000.0) is None
+    assert previous_session([1000.0], 1000.0) is None
+
+
+def test_build_temporal_context_exposes_previous_session_gap():
+    now = _madrid_stamp(20, 20, 26)
+    prev = _madrid_stamp(20, 5, 49)
+    ctx = build_temporal_context(
+        now,
+        TimeConfig(timezone="Europe/Madrid"),
+        users={"7": {"name": "A", "last_seen": now - 60, "activity_ts": [prev, now - 480]}},
+        history=[],
+        user_id="7",
+        in_date=False,
+    )
+    assert ctx is not None
+    assert ctx.previous_session_at == prev
+    assert ctx.previous_session_gap_seconds == now - prev
+
+
+def test_local_day_label_uses_calendar_days():
+    madrid = resolve_zone("Europe/Madrid")[0]
+    now = _madrid_stamp(20, 20, 26)
+    assert local_day_label(now, _madrid_stamp(20, 5, 49), madrid) == "hoy"
+    assert local_day_label(now, _madrid_stamp(19, 23, 10), madrid) == "ayer"
+    assert local_day_label(now, _madrid_stamp(17, 22, 15), madrid) == "17/10"
 
 
 def test_build_temporal_context_first_time_and_disabled():

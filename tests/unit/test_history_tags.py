@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 
 from airi.domain.history_tags import (
     UNKNOWN_AFFINITY,
@@ -63,6 +64,24 @@ def test_time_tags_are_added_only_to_timestamped_user_messages():
     assert view[2]["content"] == "[speaker=KOKODA|affinity=3|level=L3] legacy"
 
 
+def test_long_gaps_use_local_day_and_clock_to_disambiguate_today_from_yesterday():
+    now = datetime(2026, 11, 2, 20, 26, tzinfo=timezone.utc).timestamp()
+    today = datetime(2026, 11, 2, 5, 49, tzinfo=timezone.utc).timestamp()
+    yesterday = datetime(2026, 11, 1, 23, 10, tzinfo=timezone.utc).timestamp()
+    old = datetime(2026, 10, 30, 22, 15, tzinfo=timezone.utc).timestamp()
+    history = [
+        {"role": "user", "content": "a", "author_id": "42", "author_name": "KOKODA", "ts": today},
+        {"role": "user", "content": "b", "author_id": "42", "author_name": "KOKODA", "ts": yesterday},
+        {"role": "user", "content": "c", "author_id": "42", "author_name": "KOKODA", "ts": old},
+    ]
+    view = build_inference_history(
+        history, resolver({}), users=USERS, now=now, zone=timezone.utc
+    )
+    assert view[0]["content"].startswith("[hoy 05:49] ")
+    assert view[1]["content"].startswith("[ayer 23:10] ")
+    assert view[2]["content"].startswith("[30/10 22:15] ")
+
+
 def test_time_tagged_view_is_idempotent_and_user_imitation_is_preserved():
     history = [{"role": "user", "content": "hola", "author_id": "42", "author_name": "KOKODA", "ts": 940.0}]
     first = build_inference_history(history, resolver({}), users=USERS, now=1000.0)
@@ -73,6 +92,22 @@ def test_time_tagged_view_is_idempotent_and_user_imitation_is_preserved():
     view = build_inference_history(spoof, resolver({}), users=USERS, now=1000.0)
     assert view[0]["content"].count("[hace 1 min]") == 2
     assert "[hace 1 min] [speaker=KOKODA|affinity=3] texto" in view[0]["content"]
+
+
+def test_day_tagged_view_is_idempotent():
+    now = datetime(2026, 11, 2, 20, 26, tzinfo=timezone.utc).timestamp()
+    history = [{
+        "role": "user", "content": "hola", "author_id": "42",
+        "author_name": "KOKODA", "ts": now - 14 * 3600,
+    }]
+    first = build_inference_history(
+        history, resolver({}), users=USERS, now=now, zone=timezone.utc
+    )
+    second = build_inference_history(
+        first, resolver({}), users=USERS, now=now, zone=timezone.utc
+    )
+    assert second == first
+    assert first[0]["content"].count("[hoy 06:26]") == 1
 
 
 def test_legacy_fallback_by_name_prefix():

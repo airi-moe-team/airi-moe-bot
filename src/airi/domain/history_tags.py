@@ -29,12 +29,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
-from airi.domain.time_perception import format_elapsed
+from airi.domain.time_perception import format_clock, local_day_label
 
 #: Etiqueta que genera este módulo (para detectar una vista ya etiquetada).
 _TAG_RE = re.compile(r"^\[speaker=[^\]]*\]\s*")
 _TEMPORAL_VIEW_RE = re.compile(
-    r"^\[(?:ahora|hace \d+ (?:min|h|día(?:s)?))\]\s+\[speaker=[^\]]*\]"
+    r"^\[(?:ahora|hace \d+ (?:min|h|día(?:s)?)"
+    r"|(?:hoy|ayer|\d{2}/\d{2}) \d{2}:\d{2})\]\s+\[speaker=[^\]]*\]"
 )
 #: Caracteres que romperían el formato de la etiqueta.
 _UNSAFE_NAME_RE = re.compile(r"[\[\]|=\r\n\t]+")
@@ -115,7 +116,12 @@ def format_identity_tag(name, affinity) -> str:
 
 
 def time_tag(ts, now, zone=None) -> str:
-    """Etiqueta temporal de una intervención; vacío si falta un instante válido."""
+    """Etiqueta temporal de una intervención; vacío si falta un instante válido.
+
+    Los huecos recientes se expresan en minutos; a partir de una hora se usa el
+    día local real (``hoy``/``ayer``/``DD/MM``) más la hora, para que el modelo
+    no tenga que calcular la fecha a partir de un ``hace N h`` ambiguo.
+    """
     try:
         stamp = float(ts)
         reference = float(now)
@@ -123,7 +129,14 @@ def time_tag(ts, now, zone=None) -> str:
         return ""
     if not math.isfinite(stamp) or not math.isfinite(reference):
         return ""
-    return f"[{format_elapsed(reference, stamp, zone, short=True)}]"
+    if stamp > reference:
+        return "[ahora]"
+    seconds = reference - stamp
+    if seconds < 60:
+        return "[ahora]"
+    if seconds < 3600:
+        return f"[hace {max(1, int(seconds // 60))} min]"
+    return f"[{local_day_label(reference, stamp, zone)} {format_clock(stamp, zone)}]"
 
 
 def _resolve_name(name, index) -> str | None:

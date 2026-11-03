@@ -33,7 +33,12 @@ from airi.domain.self_model import (
     preferences_view,
     render_self_section,
 )
-from airi.domain.time_perception import TemporalContext, format_elapsed
+from airi.domain.time_perception import (
+    TemporalContext,
+    format_clock,
+    format_elapsed,
+    local_day_label,
+)
 
 # ============================================================
 # BLOQUES DE PROMPT (FASE 2)
@@ -212,6 +217,8 @@ WEB_SEARCH_DECISION_PROMPT = (
     "la actividad requiere resolver, sí puedes buscar para comprobarlo, incluso si no pide literalmente "
     "‘buscar’.\n"
     "NO la uses para opiniones, emociones, felicitaciones o cosas ya dichas. "
+    "Tampoco para fechas de conversaciones privadas ni para saber cuándo ocurrió algo "
+    "en este chat: eso se resuelve con el historial y la percepción temporal, no con internet. "
     "Si no es necesario buscar, termina sin invocarla."
 )
 
@@ -355,6 +362,49 @@ def affinity_prompt_section(points, level_name, display_name):
         "La afinidad es social; la etapa afectiva se gestiona aparte. Aplica este tono sutilmente en tu respuesta, sin mencionar puntuaciones ni niveles explícitamente."
     )
 
+def _habitual_prompt_line(habitual, *, mode="normal"):
+    """Frase interna sobre el horario habitual, sin repetir el reloj actual."""
+    if habitual is None:
+        return ""
+    hour = f"{habitual.typical_hour:02d}:00"
+    line = (
+        f"Suele aparecer sobre las {hour} "
+        f"({habitual.sessions} apariciones; confianza {habitual.confidence})."
+    )
+    if mode == "proactive":
+        return line + " Si inicias la conversación, ten en cuenta su horario habitual."
+    offset = habitual.offset_hours
+    if offset is None:
+        return line
+    delta = abs(offset)
+    if delta < 1.5:
+        timing = "está dentro de su horario habitual"
+    elif offset > 0:
+        timing = f"llega unas {max(1, int(round(delta)))} h más tarde de lo habitual"
+    else:
+        timing = f"llega unas {max(1, int(round(delta)))} h antes de lo habitual"
+    return f"{line} Ahora {timing}."
+
+
+#: Un hueco menor a esto no merece una línea de "sesión anterior".
+PREVIOUS_SESSION_MIN_SECONDS = 90 * 60
+
+
+def _previous_session_prompt_line(context):
+    at = context.previous_session_at
+    gap = context.previous_session_gap_seconds
+    if at is None or gap is None or gap < PREVIOUS_SESSION_MIN_SECONDS:
+        return ""
+    subject = context.user_name or "esta persona"
+    day = local_day_label(context.moment.epoch, at, context.zone)
+    clock = format_clock(at, context.zone)
+    when = f"{day} a las {clock}" if day in ("hoy", "ayer") else f"el {day} a las {clock}"
+    elapsed = format_elapsed(context.moment.epoch, at, context.zone)
+    if elapsed == day:
+        return f"Sesión anterior con {subject}: {when}."
+    return f"Sesión anterior con {subject}: {when} ({elapsed})."
+
+
 def temporal_context_section(context: TemporalContext | None, *, compact=False, mode="normal"):
     if context is None:
         return ""
@@ -363,24 +413,52 @@ def temporal_context_section(context: TemporalContext | None, *, compact=False, 
     user_gap = None
     if context.user_gap_seconds is not None and context.user_last_at is not None:
         user_gap = format_elapsed(moment.epoch, context.user_last_at, context.zone)
-        
+    habitual_text = ""
+    if context.habitual is not None:
+        habitual_text = f"suele aparecer sobre las {context.habitual.typical_hour:02d}:00"
+
+    session_line = (
+        _previous_session_prompt_line(context) if mode != "proactive" else ""
+    )
     if compact:
         user_text = f"; silencio de esta persona: {user_gap}" if user_gap else ""
         if context.first_time: user_text = "; primera interacción"
+        if habitual_text: user_text += f"; {habitual_text}"
+        if session_line:
+            session_at = context.previous_session_at
+            user_text += (
+                f"; sesión anterior: {local_day_label(context.moment.epoch, session_at, context.zone)}"
+            )
         return f"\n\n=== TU PERCEPCIÓN DEL TIEMPO === Ahora es {date_line}{user_text}. Usa esto como contexto interno. No recites la hora ni la fecha.\n"
 
     lines = [f"\n\n=== TU PERCEPCIÓN DEL TIEMPO ===\nAhora es {date_line}."]
     if mode != "proactive":
         if user_gap:
             subject = context.user_name or "esta persona"
-            lines.append(f"Última charla con {subject} hace {user_gap}.")
+            lines.append(f"Última charla con {subject}: {user_gap}.")
         elif context.first_time:
             lines.append("Es la primera vez que hablas con esta persona.")
     if context.channel_gap_seconds is not None and not context.in_date:
         channel_gap = format_elapsed(moment.epoch, context.channel_last_at, context.zone)
-        lines.append(f"Canal inactivo hace {channel_gap}.")
+        lines.append(f"Canal inactivo: {channel_gap}.")
+    if session_line:
+        lines.append(session_line)
+    if context.habitual is not None and not context.in_date:
+        lines.append(_habitual_prompt_line(context.habitual, mode=mode))
     lines.append("Usa la hora solo como contexto interno; no recites la hora ni la fecha.")
     lines.append("Recuerda: no recites la hora.")
+    lines.append(
+        "Las marcas [hoy HH:MM] y [ayer HH:MM] del historial indican el día local real: "
+        "úsalas para no confundir hoy con ayer."
+    )
+    lines.append(
+        "Si alguien dice que algo fue hoy o ayer y el historial lo contradice, "
+        "corrige con suavidad; no inventes una sesión que no aparece en el historial."
+    )
+    lines.append(
+        "No uses la búsqueda web para fechas de conversaciones privadas; "
+        "usa el historial y esta sección."
+    )
     if mode == "proactive":
         lines.append("Si propones planes, que encajen con esta franja; no propongas planes propios de otra franja.")
     return "\n".join(lines) + "\n"
@@ -718,10 +796,21 @@ def memories_prompt_section(entries):
     memories = "\n".join(f"{i}. {e.get('text', '')}" for i, e in enumerate(active, 1)) if active else "(ninguna)"
     return f"\n\n=== RECUERDOS DEL USUARIO ===\n{memories}\nActualiza 'memory' si te da datos nuevos."
 
-def diary_prompt_section(diary, user_id, now):
+def diary_prompt_section(diary, user_id, now, zone=None):
     if user_id is None: return ""
     entries = diary_for_user(diary, user_id, limit=DIARY_PROMPT_MAX_USER)
-    body = "\n".join(f"- {e.get('text', '')}" for e in entries)[:DIARY_PROMPT_MAX_CHARS] if entries else "(vacío)"
+
+    def _line(entry):
+        text = entry.get("text", "")
+        ts = entry.get("ts")
+        try:
+            float(ts)
+        except (TypeError, ValueError, OverflowError):
+            return f"- {text}"
+        elapsed = format_elapsed(now, ts, zone)
+        return f"- {elapsed}: {text}"
+
+    body = "\n".join(_line(e) for e in entries)[:DIARY_PROMPT_MAX_CHARS] if entries else "(vacío)"
     return f"\n\n=== TU DIARIO SOBRE ESTA PERSONA ===\n{body}\nÚsalo como contexto interno emocional."
 
 def known_users_prompt_section(users, diary, world, *, user_id, display_name):

@@ -218,10 +218,20 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 ### Percepción temporal
 
 Airi recibe la fecha, hora local y franja del día, el tiempo desde la última
-interacción y marcas relativas por mensaje. Las marcas se calculan para cada
-prompt y no se guardan en el historial; los mensajes nuevos conservan solo su
-epoch. La hora exacta se incluye como contexto para responder preguntas directas,
-pero el prompt le pide a Airi no recitarla espontáneamente.
+interacción, el hueco de la sesión anterior y marcas temporales por mensaje. Las
+marcas se calculan para cada prompt y no se guardan en el historial; los mensajes
+nuevos conservan solo su epoch. Para huecos de una hora o más, la marca incluye el
+día local real (`[hoy 05:49]`, `[ayer 23:10]`, `[30/10 22:15]`) y así Airi no tiene
+que deducir la fecha a partir de un `hace N h` ambiguo. La hora exacta se incluye
+como contexto para responder preguntas directas, pero el prompt le pide a Airi no
+recitarla espontáneamente.
+
+Además, Airi infiere el horario habitual de cada persona con las horas locales de
+sus sesiones de actividad (una muestra por sesión, separadas al menos 30 minutos,
+con un máximo de 60 por usuario). Si hay al menos cuatro sesiones y las horas
+están concentradas, el prompt indica la hora habitual y si la persona llega antes,
+dentro o más tarde de lo habitual. Con pocas muestras u horarios dispersos no se
+declara ningún patrón.
 
 El valor por defecto usa la zona del sistema operativo. En contenedores suele ser
 UTC: fija `TZ=Europe/Madrid` o `AIRI_TIMEZONE=Europe/Madrid` si quieres hora de
@@ -327,6 +337,7 @@ AIRI_SPECTATOR_PROB_AFFINITY=0.35  # probabilidad cuando hay afinidad
 AIRI_SPECTATOR_COOLDOWN_SECONDS=300
 AIRI_SPECTATOR_SNAPSHOT_MAX=12     # ventana máxima del snapshot efímero
 AIRI_SPECTATOR_HANDOFF_SECONDS=180 # ventana para contestar a la pregunta de Airi
+AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS=300 # ventana activa al conectar y tras cada mensaje
 # Perfil estable de gustos (JSON). Si está definida y es válida, prevalece
 # sobre lo persistido y sobre cualquier cambio posterior de identidad.
 AIRI_PROFILE='{"loves":["videojuegos","ramen"],"dislikes":["grosero"],"favorite_food":"postres y dulces","favorite_flower":"las rosas"}'
@@ -336,6 +347,12 @@ El **handoff**: tras una intervención espontánea (que pudo dejar una pregunta)
 el interlocutor tiene una ventana (`HANDOFF_SECONDS`) para responder una vez
 sin cooldown; después vuelve el cooldown normal. El mensaje disparador y el
 snapshot se consumen del buffer al publicar, así el tema no queda latente.
+
+Al **conectar** con el modo espectador activado, el canal arranca en Activa
+durante `AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS` (300 s por defecto) aunque no haya
+nadie a quien responder. Cada mensaje humano reinicia esa ventana. Si hay un
+mensaje pendiente, Airi responde solo a ese y también queda en Activa. Cuando la
+ventana vence sin actividad, vuelve a Espectadora.
 
 - `!debug ultimo [n]` (solo dueño): resumen de los últimos `n` eventos del
   ring (def. 1, máx. 20) — incluye comandos, regalos y citas.

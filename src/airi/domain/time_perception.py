@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from airi.domain.users import ACTIVITY_SESSION_GAP_SECONDS
+
 _WEEKDAYS = (
     "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"
 )
@@ -56,6 +58,17 @@ class LocalMoment:
 
 
 @dataclass(frozen=True)
+class HabitualPattern:
+    """Horario habitual inferido de las sesiones de actividad de una persona."""
+
+    typical_hour: int
+    sessions: int
+    confidence: str
+    #: Diferencia circular entre la hora actual y la habitual (None en iniciativa).
+    offset_hours: float | None = None
+
+
+@dataclass(frozen=True)
 class TemporalContext:
     """Contexto temporal calculado para un turno."""
 
@@ -68,6 +81,10 @@ class TemporalContext:
     zone: ZoneInfo | None = None
     user_last_at: float | None = None
     channel_last_at: float | None = None
+    habitual: HabitualPattern | None = None
+    #: Inicio de la sesión anterior (no la del mensaje actual).
+    previous_session_at: float | None = None
+    previous_session_gap_seconds: float | None = None
 
 
 def resolve_zone(name: str | None) -> tuple[ZoneInfo | None, str, str]:
@@ -184,9 +201,107 @@ def format_elapsed(
     return f"hace {days} días"
 
 
+def format_clock(ts: float, zone: ZoneInfo | None = None) -> str:
+    """Hora local HH:MM de un epoch."""
+    dt = _datetime_at(float(ts), zone)
+    return f"{dt.hour:02d}:{dt.minute:02d}"
+
+
+def local_day_label(now: float, ts: float, zone: ZoneInfo | None = None) -> str:
+    """Etiqueta de día local: ``hoy``, ``ayer`` o ``DD/MM``."""
+    current = _datetime_at(float(now), zone).date()
+    moment = _datetime_at(float(ts), zone)
+    days = (current - moment.date()).days
+    if days <= 0:
+        return "hoy"
+    if days == 1:
+        return "ayer"
+    return moment.strftime("%d/%m")
+
+
 def _timestamp(value) -> float | None:
     result = _valid_epoch(value)
     return result if result is not None and result >= 0 else None
+
+
+#: Mínimo de sesiones para atreverse a hablar de un horario habitual.
+HABITUAL_MIN_SESSIONS = 4
+#: Concentración circular mínima (0..1) para aceptar el patrón.
+HABITUAL_MIN_CONCENTRATION = 0.45
+
+
+def habitual_pattern(
+    activity_ts, now: float, zone: ZoneInfo | None = None
+) -> HabitualPattern | None:
+    """Infiere la hora habitual de actividad con estadística circular.
+
+    Cada muestra es el inicio de una sesión (ver ``domain.users``). Se usa la
+    media circular para que un hábito nocturno que cruza medianoche (22, 23,
+    00, 01) no se promedie como mediodía. Si las horas están repartidas o hay
+    pocas muestras, no se declara ningún patrón.
+    """
+    epoch = _valid_epoch(now)
+    if epoch is None or not isinstance(activity_ts, (list, tuple)):
+        return None
+    hours: list[float] = []
+    for value in activity_ts:
+        stamp = _timestamp(value)
+        if stamp is None or stamp > epoch:
+            continue
+        dt = _datetime_at(stamp, zone)
+        hours.append(dt.hour + dt.minute / 60)
+    if len(hours) < HABITUAL_MIN_SESSIONS:
+        return None
+
+    sin_sum = sum(math.sin(2 * math.pi * hour / 24) for hour in hours)
+    cos_sum = sum(math.cos(2 * math.pi * hour / 24) for hour in hours)
+    concentration = math.hypot(sin_sum, cos_sum) / len(hours)
+    if concentration < HABITUAL_MIN_CONCENTRATION:
+        return None
+    mean_angle = math.atan2(sin_sum, cos_sum)
+    typical = (mean_angle / (2 * math.pi) * 24) % 24
+    typical_hour = int(round(typical)) % 24
+
+    sessions = len(hours)
+    if sessions >= 8 and concentration >= 0.75:
+        confidence = "alta"
+    elif sessions >= 5 and concentration >= 0.55:
+        confidence = "media"
+    else:
+        confidence = "baja"
+
+    current = _datetime_at(epoch, zone)
+    current_hour = current.hour + current.minute / 60
+    offset = (current_hour - typical + 12) % 24 - 12
+    return HabitualPattern(
+        typical_hour=typical_hour,
+        sessions=sessions,
+        confidence=confidence,
+        offset_hours=offset,
+    )
+
+
+def previous_session(
+    activity_ts, now: float, *, session_gap=ACTIVITY_SESSION_GAP_SECONDS
+) -> float | None:
+    """Inicio de la sesión anterior a la actual, si consta.
+
+    ``activity_ts`` guarda el inicio de cada sesión. Si el último inicio está
+    dentro de la ventana de sesión, el turno continúa esa sesión y el anterior
+    es el penúltimo; si no, el último inicio ya es la sesión anterior.
+    """
+    epoch = _valid_epoch(now)
+    if epoch is None or not isinstance(activity_ts, (list, tuple)):
+        return None
+    stamps = sorted(
+        stamp for stamp in (_timestamp(value) for value in activity_ts)
+        if stamp is not None and stamp <= epoch
+    )
+    if not stamps:
+        return None
+    if epoch - stamps[-1] < session_gap:
+        return stamps[-2] if len(stamps) > 1 else None
+    return stamps[-1]
 
 
 def build_temporal_context(
@@ -214,6 +329,17 @@ def build_temporal_context(
         else None
     )
     user_gap = max(0.0, epoch - last_seen) if last_seen is not None else None
+    habitual = (
+        habitual_pattern(user_entry.get("activity_ts"), epoch, zone)
+        if isinstance(user_entry, Mapping)
+        else None
+    )
+    previous_at = (
+        previous_session(user_entry.get("activity_ts"), epoch)
+        if isinstance(user_entry, Mapping)
+        else None
+    )
+    previous_gap = max(0.0, epoch - previous_at) if previous_at is not None else None
 
     channel_last = None
     if not in_date:
@@ -245,4 +371,7 @@ def build_temporal_context(
         zone=zone,
         user_last_at=last_seen,
         channel_last_at=channel_last,
+        habitual=habitual,
+        previous_session_at=previous_at,
+        previous_session_gap_seconds=previous_gap,
     )

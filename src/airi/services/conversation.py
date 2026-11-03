@@ -690,6 +690,21 @@ class ConversationService:
                         else None
                     ),
                 })
+                if temporal.previous_session_gap_seconds is not None:
+                    ev.time_context["minutes_since_previous_session"] = int(
+                        temporal.previous_session_gap_seconds // 60
+                    )
+                if temporal.habitual is not None:
+                    ev.time_context.update({
+                        "habitual_hour": temporal.habitual.typical_hour,
+                        "habitual_sessions": temporal.habitual.sessions,
+                        "habitual_confidence": temporal.habitual.confidence,
+                        "habitual_offset_hours": (
+                            round(temporal.habitual.offset_hours, 2)
+                            if temporal.habitual.offset_hours is not None
+                            else None
+                        ),
+                    })
 
             # Modo espectador: la captura efímera del buffer pasivo se inyecta
             # EN el prompt (y solo en la traza), nunca en el historial
@@ -1847,7 +1862,10 @@ class ConversationService:
                     user_id=user.id,
                     display_name=user.display_name,
                 ),
-                domain_prompts.diary_prompt_section(state.diary, user.id, now),
+                domain_prompts.diary_prompt_section(
+                    state.diary, user.id, now,
+                    zone=temporal.zone if temporal is not None else None,
+                ),
             ]
         task_section = domain_prompts.conversation_task_section(task_context)
         if task_section:
@@ -2281,7 +2299,7 @@ class ConversationService:
             self.state.log_diary_event(
                 "meet",
                 who,
-                f"Hoy he conocido a {who.display_name} por primera vez.",
+                f"Conocí a {who.display_name} por primera vez.",
             )
         self.state.save_users()
         return is_new
