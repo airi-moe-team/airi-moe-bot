@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import discord
 
 from airi.discord_bot import embeds, turn
+from airi.discord_bot.spectator_timers import arm_active_timer
 from airi.domain import spectator
 from airi.domain.constants import AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS, DATE_DELTA_MAX
 from airi.domain.spectator import load_policy, load_stable_profile
@@ -34,6 +35,7 @@ from airi.services.passive_buffer import PassiveBuffer, apply_stable_profile
 from airi.services.pending_message import PendingMessageTracker
 from airi.services.spectator_policy import ActivitiesCooldown
 from airi.services.spectator_session import (
+    ConversationState,
     SpectatorSessionRegistry,
 )
 
@@ -153,6 +155,174 @@ async def acknowledge_reconnect_context(ctx):
             log.exception(
                 "No se pudo marcar el contexto de reconexión como entregado"
             )
+
+
+async def _resolve_startup_channel(discord_client, channel_id):
+    """Resuelve el canal del arranque sin romper la conexión si falla."""
+    getter = getattr(discord_client, "get_channel", None)
+    channel = getter(channel_id) if callable(getter) else None
+    if channel is not None:
+        return channel
+    fetcher = getattr(discord_client, "fetch_channel", None)
+    if not callable(fetcher):
+        return None
+    try:
+        return await fetcher(channel_id)
+    except Exception:
+        log.exception("No se pudo resolver el canal de arranque %s", channel_id)
+        return None
+
+
+async def _read_recent_history(channel, limit=50):
+    """Lee el historial reciente de un canal soportando dobles de prueba."""
+    history = []
+    result = channel.history(limit=limit)
+    if asyncio.iscoroutine(result):
+        result = await result
+    async for message in result:
+        history.append(message)
+    return history
+
+
+async def seed_last_human_activity(
+    discord_client,
+    *,
+    channel_id,
+    session,
+    build_ctx,
+    timers=None,
+    dispatcher=None,
+    run_turn=None,
+    tracker=None,
+    policy_loader=load_policy,
+    clock=time.time,
+):
+    """Decide y siembra el estado conversacional inicial del canal.
+
+    - Con mensaje humano pendiente: entra en Activa y responde solo a ese
+      mensaje con el modo de conversación activa.
+    - Sin pendiente válido: entra en Activa y arma la ventana de inactividad,
+      de modo que el canal queda activo durante ``active_idle_seconds``.
+
+    La ventana usa la misma variable que el retiro normal
+    (``AIRI_SPECTATOR_ACTIVE_IDLE_SECONDS``) y se rearma con cada mensaje
+    humano desde el handler de Discord. Con el modo espectador desactivado,
+    o con una ventana <= 0, no se fuerza el estado Activa.
+    """
+    if session is None:
+        return
+
+    try:
+        policy = policy_loader()
+    except Exception:
+        log.exception("No se pudo cargar la política del modo espectador")
+        return
+    if policy is None or not getattr(policy, "enabled", False):
+        return
+
+    window = float(getattr(session, "active_idle_seconds", 0.0) or 0.0)
+    can_activate = window > 0.0 and timers is not None and dispatcher is not None
+
+    channel = await _resolve_startup_channel(discord_client, channel_id)
+    if channel is None:
+        # Aun sin objeto canal podemos activar: el temporizador usa el id.
+        if can_activate:
+            session.enter_active(channel_id, now=clock())
+            arm_active_timer(
+                registry=session,
+                timers=timers,
+                dispatcher=dispatcher,
+                channel_id=channel_id,
+                timeout=window,
+                clock=clock,
+            )
+        return
+
+    target_channel_id = getattr(channel, "id", channel_id)
+
+    try:
+        history = await _read_recent_history(channel)
+    except Exception:
+        log.exception("No se pudo leer el historial de arranque del canal %s", target_channel_id)
+        history = []
+
+    if tracker is None:
+        tracker = getattr(discord_client, "_pending_message_tracker", None)
+    if tracker is None:
+        tracker = PendingMessageTracker()
+
+    user = getattr(discord_client, "user", None)
+    bot_id = int(getattr(user, "id", 0) or 0)
+    try:
+        pending = tracker.find_pending_message(
+            history,
+            bot_id=bot_id,
+            max_age=AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS,
+            now=clock(),
+        )
+    except Exception:
+        log.exception("No se pudo buscar el mensaje pendiente de arranque")
+        pending = None
+
+    if pending is not None:
+        epoch = _epoch(getattr(pending, "created_at", None))
+        if epoch > 0:
+            if can_activate:
+                session.record_human_activity(target_channel_id, now=epoch)
+                session.enter_active(target_channel_id, now=clock())
+            log.info(
+                "Mensaje pendiente encontrado en canal %s (id=%s); "
+                "iniciando respuesta dirigida",
+                target_channel_id,
+                getattr(pending, "id", ""),
+            )
+            pending_author = getattr(pending, "author", None)
+            if pending_author is None or getattr(pending_author, "bot", False):
+                pending_author = type(
+                    "SyntheticUser", (), {"id": 0, "display_name": "usuario", "bot": False}
+                )()
+            pending_text = (getattr(pending, "content", "") or "").strip()
+            if not pending_text:
+                pending_text = "(mensaje sin texto)"
+            runner = run_turn or turn.run_user_turn
+            try:
+                await runner(
+                    build_ctx(channel, tracker),
+                    channel,
+                    pending_author,
+                    [(pending_author, pending_text)],
+                    reply_target=pending,
+                    kind="active",
+                    suppress_affinity=True,
+                    consumed_message_ids=[getattr(pending, "id", None)],
+                )
+            except Exception:
+                log.exception("Fallo la respuesta al mensaje pendiente")
+            finally:
+                if (
+                    can_activate
+                    and session.state(target_channel_id) == ConversationState.ACTIVE
+                ):
+                    arm_active_timer(
+                        registry=session,
+                        timers=timers,
+                        dispatcher=dispatcher,
+                        channel_id=target_channel_id,
+                        timeout=window,
+                        clock=clock,
+                    )
+            return
+
+    if can_activate:
+        session.enter_active(target_channel_id, now=clock())
+        arm_active_timer(
+            registry=session,
+            timers=timers,
+            dispatcher=dispatcher,
+            channel_id=target_channel_id,
+            timeout=window,
+            clock=clock,
+        )
 
 
 def create_client(
@@ -487,37 +657,15 @@ def create_client(
                 return
 
             if spectator_session is not None and spectator_policy is not None and spectator_policy.enabled:
-                generation = spectator_session.record_human_activity(message.channel.id)
+                spectator_session.record_human_activity(message.channel.id)
                 st_name = spectator_session.state(message.channel.id).name
                 if st_name == "ACTIVE":
-                    key = (str(message.channel.id), "active")
-                    old = timers.pop(key, None)
-                    if old is not None:
-                        old.cancel()
-                    timeout = getattr(spectator_session, "active_idle_seconds", 300.0)
-                    gen = generation
-
-                    async def _active_timer():
-                        try:
-                            await asyncio.sleep(float(timeout))
-                        except asyncio.CancelledError:
-                            return
-                        async def _job():
-                            reg = spectator_session
-                            if reg.retire_if_idle(
-                                message.channel.id, gen, time.time(), timeout
-                            ):
-                                log.info(
-                                    "Retirada por inactividad en canal %s",
-                                    message.channel.id,
-                                )
-
-                        try:
-                            await dispatcher.submit(message.channel.id, _job)
-                        except Exception:
-                            log.exception("No se pudo procesar el retiro por inactividad")
-
-                    timers[key] = asyncio.create_task(_active_timer())
+                    arm_active_timer(
+                        registry=spectator_session,
+                        timers=timers,
+                        dispatcher=dispatcher,
+                        channel_id=message.channel.id,
+                    )
                 elif st_name == "SPECTATING":
                     key = (str(message.channel.id), "proactive")
                     old = timers.pop(key, None)
@@ -526,7 +674,6 @@ def create_client(
                     timeout = getattr(
                         spectator_session, "proactive_idle_seconds", 21600.0
                     )
-                    gen = generation
 
                     async def _proactive_timer():
                         try:
@@ -1599,88 +1746,17 @@ def run_bot(argv=None):
                     state.save_affinity()
         return None
 
-    async def seed_last_human_activity(discord_client):
-        """Siembra last_human_activity y decide el estado inicial.
-
-        Si hay un mensaje humano pendiente (no respondido y reciente),
-        responde a ese mensaje y entra en ACTIVE. Si no hay pendiente
-        válido, entra en SPECTATING.
-        """
-        try:
-            if not load_policy().enabled:
-                return
-            channel = discord_client.get_channel(CHANNEL_ID)
-            if channel is None:
-                channel = await discord_client.fetch_channel(CHANNEL_ID)
-            if channel is None:
-                return
-
-            # Leer historial del canal (limite conservador para busqueda)
-            history = []
-            hist = channel.history(limit=50)
-            if asyncio.iscoroutine(hist):
-                hist = await hist
-            async for message in hist:
-                history.append(message)
-
-            tracker = getattr(discord_client, "_pending_message_tracker", None)
-            if tracker is None:
-                tracker = PendingMessageTracker()
-
-            # Encontrar el ultimo mensaje humano pendiente (no respondido)
-            pending = tracker.find_pending_message(
-                history,
-                bot_id=int(discord_client.user.id),
-                max_age=AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS,
-            )
-
-            if pending is not None:
-                # Hay mensaje pendiente: responder a el y entrar en ACTIVE
-                epoch = _epoch(getattr(pending, "created_at", None))
-                if epoch <= 0:
-                    return
-                shared_spectator_session.record_human_activity(
-                    channel.id, now=epoch
-                )
-                log.info(
-                    "Mensaje pendiente encontrado en canal %s (id=%s); "
-                    "iniciando respuesta dirigida",
-                    channel.id,
-                    getattr(pending, "id", ""),
-                )
-                pending_author = getattr(pending, "author", None)
-                if pending_author is None or getattr(pending_author, "bot", False):
-                    pending_author = type(
-                        "SyntheticUser", (),
-                        {"id": 0, "display_name": "usuario", "bot": False},
-                    )()
-                pending_text = (getattr(pending, "content", "") or "").strip()
-                if not pending_text:
-                    pending_text = "(mensaje sin texto)"
-                try:
-                    await turn.run_user_turn(
-                        build_ctx(channel, tracker),
-                        channel,
-                        pending_author,
-                        [(pending_author, pending_text)],
-                        reply_target=pending,
-                        kind="active",
-                        suppress_affinity=True,
-                        consumed_message_ids=[getattr(pending, "id", None)],
-                    )
-                except Exception:
-                    log.exception("Fallo la respuesta al mensaje pendiente")
-                # Notamos respuesta; sin timer proactivo (usuario activo).
-            else:
-                # No hay mensaje pendiente: entrar en SPECTATING.
-                pass
-        except Exception:
-            log.exception("No se pudo sembrar la actividad inicial del canal")
-
     async def on_ready_extra(discord_client):
         # Seed PRIMERO para no "matar" la última interacción humana.
         try:
-            await seed_last_human_activity(discord_client)
+            await seed_last_human_activity(
+                discord_client,
+                channel_id=CHANNEL_ID,
+                session=shared_spectator_session,
+                build_ctx=build_ctx,
+                timers=getattr(discord_client, "_spectator_timers", None),
+                dispatcher=getattr(discord_client, "_spectator_dispatcher", None),
+            )
         except Exception:
             log.exception("Fallo al sembrar la actividad inicial; se continúa el arranque")
         await resume_pending(discord_client)

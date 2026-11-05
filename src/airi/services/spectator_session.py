@@ -151,6 +151,22 @@ class SpectatorSessionRegistry:
     # Turno activo
     # ------------------------------------------------------------------
 
+    def enter_active(self, channel_id, *, now=None) -> ConversationState:
+        """Fuerza el paso a Activa (arranque de proceso o conexión).
+
+        Refresca ``last_human_activity`` para que la ventana de inactividad
+        empiece a contar desde este momento, aunque el canal ya estuviera en
+        Activa. Conserva ``active_since`` original si ya había una sesión.
+        """
+        s = self._session(channel_id)
+        at = self._now() if now is None else float(now)
+        if s.state != ConversationState.ACTIVE or s.active_since is None:
+            s.active_since = at
+        s.state = ConversationState.ACTIVE
+        s.last_human_activity = at
+        s.generation += 1
+        return s.state
+
     def finish_active_turn(
         self, channel_id, *, stay_active: bool, published: bool, silent: bool = False
     ) -> ConversationState:

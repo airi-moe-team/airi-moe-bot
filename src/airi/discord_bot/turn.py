@@ -22,6 +22,7 @@ import discord
 from airi.adapters.http_llm import health_check
 from airi.discord_bot import embeds
 from airi.discord_bot.persistence import async_state_transaction, state_transaction
+from airi.discord_bot.spectator_timers import arm_active_timer
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import entry_points, is_winner
 from airi.domain.constants import (
@@ -512,35 +513,13 @@ async def run_user_turn(
             # arranque con mensaje pendiente; evita quedarse ACTIVE indefinido).
             try:
                 _reg = getattr(ctx, "spectator_session", None)
-                _timers = getattr(ctx, "timers", None)
-                _dispatcher = getattr(ctx, "dispatcher", None)
-                if _reg is not None and _timers is not None and _dispatcher is not None:
-                    if _reg.state(channel.id).name == "ACTIVE":
-                        key = (str(channel.id), "active")
-                        old = _timers.pop(key, None)
-                        if old is not None:
-                            old.cancel()
-                        timeout = getattr(_reg, "active_idle_seconds", 120.0)
-                        gen = _reg.session(channel.id).generation
-                        async def _active_timer():
-                            try:
-                                await asyncio.sleep(float(timeout))
-                            except asyncio.CancelledError:
-                                return
-                            async def _job():
-                                r = _reg
-                                if r.retire_if_idle(channel.id, gen, time.time(), timeout):
-                                    log.info(
-                                        "Retirada por inactividad en canal %s",
-                                        channel.id,
-                                    )
-                            try:
-                                await _dispatcher.submit(channel.id, _job)
-                            except Exception:
-                                log.exception(
-                                    "No se pudo procesar el retiro por inactividad"
-                                )
-                        _timers[key] = asyncio.create_task(_active_timer())
+                if _reg is not None and _reg.state(channel.id).name == "ACTIVE":
+                    arm_active_timer(
+                        registry=_reg,
+                        timers=getattr(ctx, "timers", None),
+                        dispatcher=getattr(ctx, "dispatcher", None),
+                        channel_id=channel.id,
+                    )
             except Exception:
                 log.exception("No se pudo armar el temporizador de inactividad activa")
 

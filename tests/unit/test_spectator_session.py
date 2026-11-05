@@ -186,6 +186,38 @@ def test_clear_elimina_sesion():
     assert reg.session("c1").generation == 0
 
 
+def test_enter_active_fuerza_activa_desde_espectadora():
+    reg = SpectatorSessionRegistry(clock=lambda: 1000.0)
+    reg.record_human_activity("c1", now=10.0)
+    assert reg.enter_active("c1", now=50.0) == ConversationState.ACTIVE
+    session = reg.session("c1")
+    assert session.state == ConversationState.ACTIVE
+    assert session.active_since == 50.0
+    assert session.last_human_activity == 50.0
+    assert session.generation == 2
+
+
+def test_enter_active_refresca_actividad_sin_resetear_active_since():
+    reg = SpectatorSessionRegistry(clock=lambda: 1000.0)
+    reg.enter_active("c1", now=50.0)
+    reg.enter_active("c1", now=80.0)
+    session = reg.session("c1")
+    assert session.state == ConversationState.ACTIVE
+    assert session.active_since == 50.0
+    assert session.last_human_activity == 80.0
+    assert session.generation == 2
+
+
+def test_enter_active_permite_retiro_por_inactividad():
+    reg = SpectatorSessionRegistry(clock=lambda: 1000.0, active_idle_seconds=300.0)
+    reg.enter_active("c1", now=100.0)
+    gen = reg.session("c1").generation
+    assert reg.retire_if_idle("c1", gen, now=200.0, timeout=300.0) is False
+    assert reg.state("c1") == ConversationState.ACTIVE
+    assert reg.retire_if_idle("c1", gen, now=500.0, timeout=300.0) is True
+    assert reg.state("c1") == ConversationState.SPECTATING
+
+
 def test_aislamiento_entre_canales():
     reg = SpectatorSessionRegistry(clock=lambda: 1000.0)
     reg.record_human_activity("c1", now=1.0)
