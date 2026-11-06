@@ -413,6 +413,9 @@ class TurnContext:
     stream_llm: bool = False
     # Override opcional exclusivo de evaluaciones/controladores explícitos.
     llm_max_tokens: int | None = None
+    # Override opcional de razonamiento para barridos de evaluación; nunca se
+    # configura desde el flujo normal del bot.
+    llm_reasoning_budget_tokens: int | None = None
     # Resumen efímero de una actividad explícita, aislado por canal/usuario.
     task_context: dict | None = None
 
@@ -931,6 +934,7 @@ class ConversationService:
                     prompt_variant=ctx.system_prompt_variant,
                     stream_llm=ctx.stream_llm,
                     max_tokens_override=ctx.llm_max_tokens,
+                    reasoning_budget_override=ctx.llm_reasoning_budget_tokens,
                     conversation_mode=getattr(ctx, "conversation_mode", "normal"),
                     conversation_reason=getattr(ctx, "conversation_reason", ""),
                     turn_kind=getattr(ctx, "kind", "message"),
@@ -1824,6 +1828,7 @@ class ConversationService:
         prompt_variant: domain_prompts.PromptVariant = "current",
         stream_llm=False,
         max_tokens_override: int | None = None,
+        reasoning_budget_override: int | None = None,
         conversation_mode="normal",
         conversation_reason="",
         turn_kind="message",
@@ -1991,6 +1996,7 @@ class ConversationService:
             messages,
             schema=schema,
             max_tokens=request_tokens,
+            reasoning_budget_tokens=reasoning_budget_override,
             quick_turn=quick,
             stream_llm=stream_llm,
         )

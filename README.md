@@ -424,6 +424,40 @@ al servidor (`stream_options`), de modo que `completion_tokens` deja de ser nulo
 `server_timings` y `ttft_ms` describen la primera llamada; `llm_ms` incluye las
 reparaciones.
 
+### Barrer presupuestos de razonamiento con hilos sintéticos
+
+`airi-reasoning-sweep` compara topes por llamada con cinco hilos sintéticos
+(recuerdo antiguo, corrección, restricciones de proyecto, retorno a un tema y
+recuperación de varios datos), agregando mensajes distractores para probar
+distancias crecientes. Requiere que el `llama-server` configurado esté activo.
+El revisor semántico se desactiva para aislar la generación principal; cada
+respuesta se incluye en el reporte porque las entradas son sintéticas. Los
+anchors automáticos solo filtran hechos críticos: no evalúan la calidad del
+español ni el sentido. Para puntuar cada respuesta a ciegas respecto al
+presupuesto, añade `--review`; valora naturalidad del español, coherencia,
+fidelidad al hilo, pertinencia y calidad reflexiva (1–5). No premies la longitud
+por sí sola. El reporte solo propone un punto dulce si todas las muestras de un
+presupuesto tienen revisión, pasan los anchors y obtienen al menos 3/5 en cada
+dimensión; `anchor_only_candidate_tokens` es únicamente un filtro preliminar.
+
+```bash
+airi-reasoning-sweep \
+  --budgets 256,512,1024,2048,4096 \
+  --depths 0,8,20 --repeats 2 \
+  --review \
+  --out /tmp/opencode/reasoning-sweep.json
+```
+
+La revisión se hace después de generar el corpus completo y se mezcla el orden
+de las muestras. Es una evaluación exploratoria, no ajusta
+`LLM_THINKING_MODE=auto`. Si el modelo no está disponible o se desea una corrida
+inicial más breve, se puede limitar a un escenario y dos valores:
+
+```bash
+airi-reasoning-sweep --scenario old_preference --depths 0,20 \
+  --budgets 1024,2048 --out /tmp/opencode/reasoning-smoke.json
+```
+
 ## Regresión y cobertura (Fase 6)
 
 ### Transcripts

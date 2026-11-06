@@ -146,6 +146,20 @@ def test_short_turn_uses_compact_contract_and_output_cap():
     assert "Trata a cada persona de forma independiente" in prompt
 
 
+def test_explicit_reasoning_budget_override_is_applied_only_to_primary_call():
+    state, _ = make_state()
+    llm = FakeLLM(replies=[llm_json("Sí, lo recuerdo.")])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    run(svc.run_turn(
+        DAVID,
+        [(DAVID, "Con todo lo que hemos hablado, ¿qué preferencia te comenté?")],
+        TurnContext(llm_reasoning_budget_tokens=2048),
+    ))
+
+    assert llm.calls[0]["reasoning_budget_tokens"] == 2048
+
+
 def test_long_turn_uses_full_contract():
     state, _ = make_state()
     llm = FakeLLM(replies=[llm_json("Claro")])
