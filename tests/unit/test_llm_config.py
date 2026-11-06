@@ -41,6 +41,8 @@ ENV_KEYS = (
     "LLM_REASONING_OUTPUT_RESERVE_TOKENS",
     "LLM_TIMEOUT",
     "LLM_MAX_TOKENS",
+    "LLM_SHORT_MAX_TOKENS",
+    "LLM_GENERATION_PROFILE",
 )
 
 
@@ -92,6 +94,12 @@ def test_config_reads_thinking_mode(monkeypatch):
     assert cfg.thinking_mode == "medium"
 
 
+def test_config_reads_generation_profile(monkeypatch):
+    monkeypatch.setenv("LLM_GENERATION_PROFILE", "balanced")
+    cfg = LlmConfig.from_env()
+    assert cfg.generation_profile == "balanced"
+
+
 def test_config_rejects_off_and_falls_back_to_auto(monkeypatch):
     monkeypatch.setenv("LLM_THINKING_MODE", "off")
     assert LlmConfig.from_env().thinking_mode == "auto"
@@ -107,6 +115,12 @@ def test_build_llm_rejects_on_and_falls_back_to_auto(monkeypatch):
     monkeypatch.setenv("LLM_THINKING_MODE", "on")
     client = build_llm(_make_session())
     assert client.thinking_mode == "auto"
+
+
+def test_build_llm_propagates_generation_profile(monkeypatch):
+    monkeypatch.setenv("LLM_GENERATION_PROFILE", "balanced")
+    client = build_llm(_make_session())
+    assert client.generation_profile == "balanced"
 
 
 def test_config_openai_compatible_profile_default_field(monkeypatch):

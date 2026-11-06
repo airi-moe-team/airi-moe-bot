@@ -1,0 +1,20 @@
+{
+  "feature": "llm-esfuerzo-razonamiento",
+  "generated_at": "2026-11-06T03:13:01Z",
+  "items": [
+    {
+      "id": "FB-LLM-GEN-001",
+      "title": "Agrupar topes de salida en perfil de generación",
+      "severity": "major",
+      "impact": "LLM_MAX_TOKENS y LLM_SHORT_MAX_TOKENS describían juntos los límites general y breve, pero podían configurarse independientemente y quedar descoordinados.",
+      "recommendation": "Introducir LLM_GENERATION_PROFILE independiente de LLM_THINKING_MODE. El preset balanced agrupa max_tokens=8182 y short_max_tokens=2048; retirar el ajuste por entorno de las variables anteriores. Mantener overrides programáticos y expansión para reasoning más la reserva de 512 tokens.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": ["Añadir LLM_GENERATION_PROFILE con default balanced y límites 8182/2048.", "Las variables legacy LLM_MAX_TOKENS y LLM_SHORT_MAX_TOKENS no modifican los presets; se preservan overrides explícitos.", "Mantener la reserva de salida requerida por el presupuesto de reasoning."],
+        "design": ["Propagar generation_profile mediante LlmConfig/build_llm/HttpLlmClient.", "quick_turn elige el tope breve y las llamadas normales el tope general del mismo perfil."],
+        "tasks": ["Añadir preset balanced y fallback/validación; migrar configuración, documentación y pruebas.", "Verificar que el límite efectivo conserva reasoning más 512 tokens de reserva."]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

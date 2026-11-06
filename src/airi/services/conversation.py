@@ -40,6 +40,7 @@ from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.grounding import reply_seems_grounded
 from airi.domain.history_tags import AffinityInfo, build_inference_history, normalize_name
 from airi.domain.llm_output import (
+    RESPONSE_SCHEMA,  # noqa: F401 - compatibilidad y reexport usado por tests
     ModelOutput,
     assistant_history_content,
     assistant_reply_text,

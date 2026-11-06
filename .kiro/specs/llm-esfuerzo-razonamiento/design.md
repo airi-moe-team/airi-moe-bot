@@ -32,8 +32,11 @@ Se conserva la arquitectura hexagonal y se extienden las capas existentes, sin i
 - `airi.services.conversation`: selección del override según llamada primaria o reparación, y registro por llamada.
 - `airi.services.self_service`: presupuesto `low` para introspección estructurada.
 - `airi.observability.prompt_benchmark`: aceptar los modos nuevos y guardar el modo solicitado en los resultados.
+- `airi.domain.constants` y `airi.adapters.http_llm`: resolver el perfil de generación y compartir sus topes normal/breve.
 
 La fábrica continúa leyendo `LLM_THINKING_MODE` en `LlmConfig`. El valor se resuelve al construir el cliente; no se modifica durante una llamada. El adaptador agrega los campos propietarios de llama únicamente al payload del proveedor `llama`.
+
+El perfil de generación es una dimensión independiente. `LLM_GENERATION_PROFILE=balanced` selecciona de forma agrupada el límite normal de 8182 y el de turno breve de 2048. La clasificación `quick_turn` solo decide cuál de los dos límites se usa. Los overrides de entorno `LLM_MAX_TOKENS` y `LLM_SHORT_MAX_TOKENS` se retiran; los overrides programáticos de evaluación y de petición siguen siendo posibles.
 
 ### Flujo de resolución por llamada
 
@@ -60,6 +63,8 @@ sequenceDiagram
 
 3. **Decisión — registrar límite enviado, no inferir cumplimiento.** `LLMMeta` y el registro de llamada exponen `reasoning_budget_tokens` como presupuesto resuelto/enviado por el cliente. `reasoning_present` y `reasoning_tokens` son evidencia independiente. Se añade un campo nullable a `llm_calls`, sin guardar texto sensible.
 
+4. **Decisión — separar presets de generación y razonamiento.** `LLM_GENERATION_PROFILE` selecciona un mapa inmutable de límites de salida normal/breve (`balanced`: 8182/2048). `LLM_THINKING_MODE` conserva su política y presupuestos propios. Si el presupuesto de reasoning y su reserva superan el límite general o breve, el adaptador eleva el máximo efectivo sin reducir reasoning.
+
 ### Alineación tecnológica
 
 El diseño usa Python, el `Protocol` existente, el adaptador `aiohttp`, configuración por entorno y pruebas pytest. Respeta la separación port/adapters, TDD y la regla de privacidad: nunca se almacena prompt, contenido de respuesta ni contenido de reasoning.
@@ -79,6 +84,7 @@ El diseño usa Python, el `Protocol` existente, el adaptador `aiohttp`, configur
 - `auto` mantiene reasoning activo: turnos rápidos usan 256 tokens y turnos normales usan el default del servidor.
 - En `llama`, enviar `chat_template_kwargs.enable_thinking=true` y, cuando haya límite, `thinking_budget_tokens` por petición. No enviar `reasoning_effort`.
 - Resolver precedencia: override local, presupuesto del modo, luego default del servidor. Rechazar overrides negativos antes del POST.
+- Resolver `generation_profile` por separado y suministrar `max_output_tokens`/`short_max_tokens` desde el preset; no leer las variables legacy de topes.
 - En proveedores `openai` y `openai-compatible`, omitir campos propietarios y exponer presupuesto nulo.
 
 **Validación live:** en el servidor activo Qwen3.5-9B, `thinking_budget_tokens=64` y `128` devolvieron HTTP 200 con reasoning y respuestas; los completion tokens observados fueron 67 y 230 respectivamente. La ruta de producción del adaptador con `low=256` también devolvió `reasoning_present=true`. El backend no informó `reasoning_tokens`, así que no se conoce el consumo exacto ni se generaliza el resultado a otras builds/modelos. La petición no reinició ni reconfiguró el servidor. Si se fija `--reasoning-budget` al arrancar, upstream indica que puede impedir el override por petición. Un presupuesto es un tope y puede cortar reasoning abruptamente.

@@ -67,3 +67,14 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 2. WHEN una reparación o reintento se realiza THEN SHALL usar presupuesto `low` y no una bandera de apagado.
 3. WHEN se ejecuta una llamada normal en modo `auto` THEN SHALL mantener el razonamiento activo y usar el default del servidor si no se especifica presupuesto.
 4. WHEN el operador consulta `.env.example` o README THEN SHALL ver la política de razonamiento siempre activo, el mapeo de niveles y la advertencia de compatibilidad del backend.
+
+### Requisito 7: Perfil de generación
+**Objetivo:** Como operador, quiero seleccionar juntos los límites de salida normal y breve, para que ambos topes mantengan valores coherentes sin mezclarse con el perfil de razonamiento.
+
+#### Criterios de aceptación
+1. WHEN `LLM_GENERATION_PROFILE` no está definido, está vacío o no es válido THEN la configuración SHALL seleccionar `balanced`; los valores inválidos SHALL generar una advertencia.
+2. WHEN se usa el perfil `balanced` THEN el límite general SHALL ser 8182 tokens y el límite de turno breve SHALL ser 2048 tokens.
+3. WHEN el sistema clasifica una llamada como turno breve THEN SHALL usar el límite breve del perfil; en caso contrario SHALL usar el límite general del mismo perfil.
+4. WHEN están presentes `LLM_MAX_TOKENS` o `LLM_SHORT_MAX_TOKENS` THEN SHALL NOT modificar los límites del perfil; SHALL mantenerse disponibles los overrides explícitos programáticos por llamada.
+5. WHEN se eleva el máximo de salida para alojar el presupuesto de reasoning THEN el cliente SHALL conservar el presupuesto solicitado más la reserva fija de 512 tokens.
+6. THE perfil de generación SHALL ser independiente de `LLM_THINKING_MODE`.

@@ -24,6 +24,8 @@ def _clear_llm_env(monkeypatch):
         "LLM_MODEL",
         "LLM_TIMEOUT",
         "LLM_MAX_TOKENS",
+        "LLM_SHORT_MAX_TOKENS",
+        "LLM_GENERATION_PROFILE",
         "LLM_PROVIDER",
         "LLM_BASE_URL",
         "LLM_API_KEY",
@@ -89,13 +91,16 @@ def test_reads_llm_timeout_from_env(monkeypatch):
     assert client.timeout == 600
 
 
-def test_reads_llm_max_tokens_from_env(monkeypatch):
+def test_legacy_output_token_env_vars_do_not_override_generation_profile(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
+    monkeypatch.setenv("LLM_SHORT_MAX_TOKENS", "999")
     client = HttpLlmClient(
         base_url="http://localhost:8080",
         session=_make_session(),
     )
-    assert client.max_output_tokens == 4096
+    assert client.generation_profile == "balanced"
+    assert client.max_output_tokens == 8182
+    assert client.short_output_tokens == 2048
 
 
 # ---------------------------------------------------------------------------
@@ -113,13 +118,19 @@ def test_invalid_timeout_fallback(monkeypatch, value):
     assert client.timeout == 300
 
 
-@pytest.mark.parametrize("value", ["abc", "", "   ", "1.2.3"])
-def test_invalid_max_tokens_fallback(monkeypatch, value):
-    monkeypatch.setenv("LLM_MAX_TOKENS", value)
-    client = HttpLlmClient(
-        base_url="http://localhost:8080",
-        session=_make_session(),
-    )
+@pytest.mark.parametrize("value", ["compact", "", "   ", "unknown"])
+def test_invalid_generation_profile_fallback(monkeypatch, value):
+    monkeypatch.setenv("LLM_GENERATION_PROFILE", value)
+    if value.strip():
+        with pytest.warns(UserWarning, match="LLM_GENERATION_PROFILE"):
+            client = HttpLlmClient(
+                base_url="http://localhost:8080", session=_make_session()
+            )
+    else:
+        client = HttpLlmClient(
+            base_url="http://localhost:8080", session=_make_session()
+        )
+    assert client.generation_profile == "balanced"
     assert client.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS
 
 
@@ -169,15 +180,16 @@ def test_none_explicit_uses_env(monkeypatch):
     assert client.timeout == 420
 
 
-def test_none_explicit_uses_env_max_tokens(monkeypatch):
-    """`max_output_tokens=None` (por defecto) debe respetar LLM_MAX_TOKENS."""
+def test_none_explicit_uses_generation_profile(monkeypatch):
+    """`max_output_tokens=None` usa el perfil configurado, no variables legacy."""
     monkeypatch.setenv("LLM_MAX_TOKENS", "777")
+    monkeypatch.setenv("LLM_GENERATION_PROFILE", "balanced")
     client = HttpLlmClient(
         base_url="http://localhost:8080",
         session=_make_session(),
         max_output_tokens=None,
     )
-    assert client.max_output_tokens == 777
+    assert client.max_output_tokens == 8182
 
 
 # ---------------------------------------------------------------------------
@@ -512,13 +524,13 @@ def test_payload_max_tokens_zero_uses_adapter():
     assert payload["max_tokens"] == 500
 
 
-def test_payload_llm_max_tokens_minus_one_is_unlimited(monkeypatch):
-    """LLM_MAX_TOKENS=-1 → payload["max_tokens"] == -1 (ilimitado)."""
-    monkeypatch.setenv("LLM_MAX_TOKENS", "-1")
+def test_payload_explicit_max_tokens_minus_one_is_unlimited():
+    """Un override interno max_output_tokens=-1 conserva el ilimitado."""
     session = _make_async_session()
     client = HttpLlmClient(
         base_url="http://localhost:8080",
         session=session,
+        max_output_tokens=-1,
     )
     run(
         client.chat_with_meta(
@@ -529,17 +541,17 @@ def test_payload_llm_max_tokens_minus_one_is_unlimited(monkeypatch):
     assert payload["max_tokens"] == -1
 
 
-def test_payload_llm_max_tokens_zero_is_no_output(monkeypatch):
-    """LLM_MAX_TOKENS=0 → payload["max_tokens"] == 0.
+def test_payload_explicit_max_tokens_zero_is_no_output():
+    """Un override interno max_output_tokens=0 conserva el límite cero.
 
     Footgun: en llama.cpp, max_tokens=0 produce respuesta vacía.
     El usuario que quiera sin límite debe usar -1.
     """
-    monkeypatch.setenv("LLM_MAX_TOKENS", "0")
     session = _make_async_session()
     client = HttpLlmClient(
         base_url="http://localhost:8080",
         session=session,
+        max_output_tokens=0,
     )
     run(
         client.chat_with_meta(

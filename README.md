@@ -207,6 +207,7 @@ Ambos métodos requieren un archivo `.env` con las variables de entorno:
 - `CHANNEL_ID`: ID del canal autorizado
 - `LLM_PROVIDER`: perfil del proveedor (`llama`, `openai` u `openai-compatible`)
 - `LLM_BASE_URL`: URL base del proveedor (default: http://127.0.0.1:7000)
+- `LLM_GENERATION_PROFILE`: perfil de límites de salida. Actualmente solo existe `balanced` (default), que agrupa 8182 tokens generales y 2048 para turnos breves. Los antiguos `LLM_MAX_TOKENS` y `LLM_SHORT_MAX_TOKENS` ya no cambian esos límites.
 - `LLM_THINKING_MODE`: preset de razonamiento (`auto`, `low`, `medium`, `high`; default: `auto`). Los presets son cerrados: `low=256`, `medium=1.024`, `high=4.096` tokens; `auto` usa el preset low en turnos rápidos y el default del servidor en turnos normales. No hay variables de entorno para cambiar esos valores ni la reserva fija de 512 tokens de salida. Un modo desconocido —incluidos `on` y `off`— advierte y vuelve a `auto`. Con `LLM_PROVIDER=llama`, los presupuestos se envían por petición mediante `thinking_budget_tokens`; dependen de la versión/template y son topes, no garantías de calidad. Si el servidor se inició con `--reasoning-budget`, puede prevalecer su presupuesto global. Las reparaciones y reflexiones estructuradas usan el preset low. Ninguna llamada apaga reasoning.
 - `DATA_DIR`: directorio de datos (default: data)
 - `TRACE_DIR`: directorio de trazas (opcional)

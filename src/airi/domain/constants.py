@@ -42,6 +42,39 @@ def env_flag(name, default):
     return default
 
 
+LLM_GENERATION_PROFILE_DEFAULT = "balanced"
+LLM_GENERATION_PROFILES = MappingProxyType(
+    {
+        "balanced": MappingProxyType(
+            {"max_tokens": 8182, "short_max_tokens": 2048}
+        ),
+    }
+)
+
+
+def resolve_generation_profile(raw=None):
+    """Normaliza el perfil de generación; los valores desconocidos usan balanced."""
+    profile = (raw or "").strip().lower()
+    if not profile:
+        return LLM_GENERATION_PROFILE_DEFAULT
+    if profile in LLM_GENERATION_PROFILES:
+        return profile
+    warnings.warn(
+        f"LLM_GENERATION_PROFILE={raw!r} no es válido; "
+        f"se usa {LLM_GENERATION_PROFILE_DEFAULT!r}."
+    )
+    return LLM_GENERATION_PROFILE_DEFAULT
+
+
+LLM_GENERATION_PROFILE = resolve_generation_profile(
+    os.environ.get("LLM_GENERATION_PROFILE")
+)
+LLM_MAX_TOKENS = LLM_GENERATION_PROFILES[LLM_GENERATION_PROFILE]["max_tokens"]
+LLM_SHORT_MAX_TOKENS = LLM_GENERATION_PROFILES[LLM_GENERATION_PROFILE][
+    "short_max_tokens"
+]
+
+
 def env_float(name, default):
     """Lee un float del entorno; si falta o no es válido, devuelve `default`."""
     raw = os.getenv(name)
@@ -310,7 +343,6 @@ AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS = env_int("AIRI_SPECTATOR_PENDING_MAX_AGE
 # reducido, menos historial y un tope de salida bajo para responder antes.
 QUICK_REPLY_MAX_CHARS = env_int("QUICK_REPLY_MAX_CHARS", 60)
 QUICK_HISTORY_MESSAGES = env_int("QUICK_HISTORY_MESSAGES", 6)
-LLM_SHORT_MAX_TOKENS = env_int("LLM_SHORT_MAX_TOKENS", 400)
 # Presets cerrados de razonamiento. Son topes por petición, no objetivos de
 # consumo ni garantías de calidad; sus valores no se modifican desde el env.
 LLM_REASONING_PRESETS = MappingProxyType(

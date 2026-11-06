@@ -76,3 +76,12 @@
   - Actualizar pruebas, benchmark, `.env.example`, `.env` local y README.
   - Pruebas unitarias y de integración relacionadas ejecutadas correctamente.
   - _Requirements: 1.2, 1.3, 2.1, 2.2, 2.3, 5.1, 5.2_
+
+- [x] 6. Agrupar límites de salida en perfil de generación
+- [x] 6.1 Incorporar el perfil `balanced`
+  - Agrupar topes general=8182 y breve=2048 en `LLM_GENERATION_PROFILE=balanced`, separado del modo de razonamiento.
+  - Retirar los overrides de entorno `LLM_MAX_TOKENS` y `LLM_SHORT_MAX_TOKENS`, conservando overrides programáticos.
+  - Mantener la selección del tope breve basada en `quick_turn` y la reserva de 512 tokens tras reasoning.
+  - Actualizar pruebas, `.env`, `.env.example`, README y benchmark/configuración.
+  - Ejecutar pruebas unitarias e integración relacionadas y Ruff.
+  - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_

@@ -20,16 +20,20 @@ from dataclasses import dataclass
 import aiohttp
 
 from airi.domain.constants import (
+    LLM_GENERATION_PROFILE_DEFAULT,
+    LLM_GENERATION_PROFILES,
     LLM_REASONING_OUTPUT_RESERVE_TOKENS,
     LLM_REASONING_PRESETS,
     env_flag,
-    env_int,
+    resolve_generation_profile,
 )
 from airi.ports.llm import LLMCallContext, LLMMeta, LlmPayloadCapture
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MAX_OUTPUT_TOKENS = 8000
+DEFAULT_MAX_OUTPUT_TOKENS = LLM_GENERATION_PROFILES[
+    LLM_GENERATION_PROFILE_DEFAULT
+]["max_tokens"]
 #: URL por defecto para el backend local.
 DEFAULT_BASE_URL = "http://127.0.0.1:7000"
 #: Modelo por defecto (GGUF local); en perfiles remotos debe configurarse.
@@ -227,6 +231,7 @@ class LlmConfig:
     response_format: bool = True
     health_check: bool = True
     thinking_mode: str = "auto"
+    generation_profile: str = LLM_GENERATION_PROFILE_DEFAULT
 
     @classmethod
     def from_env(cls) -> "LlmConfig":
@@ -245,6 +250,9 @@ class LlmConfig:
             health_check=_env_flag("LLM_HEALTH_CHECK", True),
             thinking_mode=resolve_thinking_mode(
                 os.environ.get("LLM_THINKING_MODE")
+            ),
+            generation_profile=resolve_generation_profile(
+                os.environ.get("LLM_GENERATION_PROFILE")
             ),
         )
 
@@ -279,6 +287,7 @@ def build_llm(
         max_tokens_field=cfg.max_tokens_field,
         response_format=cfg.response_format,
         thinking_mode=cfg.thinking_mode,
+        generation_profile=cfg.generation_profile,
         payload_capture=payload_capture,
     )
 
@@ -378,6 +387,7 @@ class HttpLlmClient:
         max_tokens_field: str | None = None,
         response_format: bool | None = None,
         thinking_mode: str | None = None,
+        generation_profile: str | None = None,
         payload_capture: LlmPayloadCapture | None = None,
     ):
         self.base_url = normalize_base_url(base_url)
@@ -394,10 +404,19 @@ class HttpLlmClient:
             except (ValueError, TypeError):
                 log.warning("LLM_TIMEOUT tiene valor inválido, usando 300")
                 self.timeout = 300
-        if max_output_tokens is not None:
-            self.max_output_tokens = max_output_tokens
-        else:
-            self.max_output_tokens = env_int("LLM_MAX_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
+        self.generation_profile = resolve_generation_profile(
+            generation_profile
+            if generation_profile is not None
+            else os.environ.get("LLM_GENERATION_PROFILE")
+        )
+        self.short_output_tokens = LLM_GENERATION_PROFILES[
+            self.generation_profile
+        ]["short_max_tokens"]
+        self.max_output_tokens = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else LLM_GENERATION_PROFILES[self.generation_profile]["max_tokens"]
+        )
         # Perfil de compatibilidad y diferencias de payload (ver LlmConfig).
         self.provider = resolve_provider(
             provider if provider is not None else os.environ.get("LLM_PROVIDER")
