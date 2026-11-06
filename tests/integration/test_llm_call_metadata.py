@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 
-from airi.ports.llm import LLMMeta
+import aiohttp
+
+from airi.ports.llm import LLMCallContext, LLMMeta, PayloadCaptureResult
 from airi.services.conversation import ConversationService, TurnContext
 from airi.testing import FakeLLM, FakeUser, llm_json, make_state
 
@@ -51,7 +53,7 @@ def _turn(llm, message=PRIVATE_TOKEN, thinking_mode=None, history=None):
 
 def test_normal_turn_records_one_primary_call():
     llm = FakeLLM(replies=[llm_json("hola")])
-    trace = _turn(llm, thinking_mode="on")
+    trace = _turn(llm, message=PRIVATE_TOKEN + " x" * 100, thinking_mode="auto")
 
     assert len(trace.llm_calls) == 1
     call = trace.llm_calls[0]
@@ -72,7 +74,7 @@ def test_truncated_first_call_keeps_its_finish_reason_and_repair_purpose():
             LLMMeta(finish_reason="stop", usage={"completion_tokens": 120}),
         ],
     )
-    trace = _turn(llm, thinking_mode="on")
+    trace = _turn(llm, message=PRIVATE_TOKEN + " x" * 100, thinking_mode="auto")
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
@@ -108,7 +110,7 @@ def test_all_repair_calls_use_low_effort_but_primary_follows_global_mode():
         replies=["", llm_json("respuesta")],
         metas=[LLMMeta(finish_reason="stop"), LLMMeta(finish_reason="stop")],
     )
-    trace = _turn(llm, message="hola" + "x" * 100, thinking_mode="on")
+    trace = _turn(llm, message="hola" + "x" * 100, thinking_mode="auto")
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
@@ -126,13 +128,13 @@ def test_question_close_is_repaired_deterministically_without_extra_call():
     trace = _turn(
         llm,
         message="hola",
-        thinking_mode="on",
+        thinking_mode="auto",
         history=[{"role": "assistant", "content": "¿Qué tal?"}],
     )
 
     assert [call["purpose"] for call in trace.llm_calls] == ["primary"]
     assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None]
-    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [256]
 
 
 def test_repair_override_survives_json_schema_fallback():
@@ -150,7 +152,7 @@ def test_repair_override_survives_json_schema_fallback():
             return llm_json("reparada"), LLMMeta(finish_reason="stop")
 
     llm = StrictRepairFallbackLLM()
-    trace = _turn(llm, message=PRIVATE_TOKEN + " x" * 100, thinking_mode="on")
+    trace = _turn(llm, message=PRIVATE_TOKEN + " x" * 100, thinking_mode="auto")
 
     assert [call["purpose"] for call in trace.llm_calls] == [
         "primary",
@@ -166,10 +168,10 @@ def test_repair_override_survives_json_schema_fallback():
 def test_primary_budget_policy_is_not_changed_by_repair_override():
     """Un turno rápido conserva el marcador y las reparaciones solicitan low."""
     llm = FakeLLM(replies=[llm_json("hola")])
-    trace = _turn(llm, message="hola", thinking_mode="on")  # corto ⇒ turno rápido
+    trace = _turn(llm, message="hola", thinking_mode="auto")  # corto ⇒ turno rápido
 
     assert llm.calls[0]["quick_turn"] is True
-    assert trace.llm_calls[0]["reasoning_budget_tokens"] is None
+    assert trace.llm_calls[0]["reasoning_budget_tokens"] == 256
 
 
 def test_auto_mode_quick_turn_records_low_budget():
@@ -189,7 +191,7 @@ def test_every_repair_purpose_uses_low_budget_override():
     async def run_repair_calls():
         state, _ = make_state()
         llm = FakeLLM(default_reply=llm_json("repair"))
-        llm.thinking_mode = "on"
+        llm.thinking_mode = "auto"
         service = ConversationService(llm=llm, state=state)
         for purpose in purposes:
             await service._chat(
@@ -212,3 +214,73 @@ def test_call_metadata_never_contains_private_text():
     serialized = json.dumps(trace.llm_calls, ensure_ascii=False)
     assert PRIVATE_TOKEN not in serialized
     assert "Respuesta también privada" not in serialized
+
+
+def test_payload_capture_metadata_is_correlated_per_llm_call():
+    class CaptureAwareLLM(FakeLLM):
+        def __init__(self):
+            super().__init__(replies=["", llm_json("reparada")])
+            self.payload_capture = object()
+            self.contexts = []
+
+        async def chat_with_meta(self, messages, **kwargs):
+            context = kwargs.get("call_context")
+            assert isinstance(context, LLMCallContext)
+            context.payload_capture = PayloadCaptureResult(
+                "captured",
+                artifact_ref=f"{context.correlation_id}/call-{context.call_index}.json",
+                sha256=f"hash-{context.call_index}",
+            )
+            self.contexts.append(context)
+            return await super().chat_with_meta(messages, **{
+                key: value for key, value in kwargs.items() if key != "call_context"
+            })
+
+    llm = CaptureAwareLLM()
+    trace = _turn(llm)
+
+    assert [context.purpose for context in llm.contexts] == ["primary", "parse_repair"]
+    assert [context.call_index for context in llm.contexts] == [1, 2]
+    assert all(context.correlation_id == trace.correlation_id for context in llm.contexts)
+    assert [call["payload_capture"]["sha256"] for call in trace.llm_calls] == [
+        "hash-1", "hash-2",
+    ]
+
+
+def test_capture_reference_survives_http_failure_after_request_capture():
+    class FailingCaptureLLM(FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.payload_capture = object()
+
+        async def chat_with_meta(self, messages, **kwargs):
+            context = kwargs["call_context"]
+            context.payload_capture = PayloadCaptureResult(
+                "captured", "cid/call.json", "sha256"
+            )
+            raise aiohttp.ClientConnectionError("backend unavailable")
+
+    async def invoke():
+        state, _ = make_state()
+        service = ConversationService(llm=FailingCaptureLLM(), state=state)
+        calls = []
+        try:
+            await service._chat(
+                calls,
+                "primary",
+                [{"role": "user", "content": "private"}],
+                schema=None,
+                max_tokens=20,
+            )
+        except aiohttp.ClientConnectionError:
+            pass
+        return calls
+
+    calls = asyncio.run(invoke())
+
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["payload_capture"] == {
+        "status": "captured",
+        "artifact_ref": "cid/call.json",
+        "sha256": "sha256",
+    }

@@ -161,14 +161,39 @@ def _mount_event(ev: TurnEvent):
 
 async def _run_event(ev: TurnEvent) -> ReplayResult:
     """Núcleo del replay a partir de un evento ya cargado."""
-    if ev.raw_llm is None:
+    raw_llm = ev.raw_llm
+    if raw_llm is None:
+        call = next((c for c in ev.llm_calls if isinstance(c, dict)
+                     and isinstance(c.get("response_capture"), dict)
+                     and c["response_capture"].get("status") == "captured"), None)
+        capture = call.get("response_capture") if call else None
+        root = next((os.environ.get(k, "").strip() for k in (
+            "AIRI_TRACE_LLM_ARTIFACTS_DIR", "TRACE_LLM_ARTIFACTS_DIR",
+            "AIRI_TRACE_LLM_PAYLOAD_DIR", "TRACE_LLM_PAYLOAD_DIR",
+        ) if os.environ.get(k, "").strip()), "")
+        if capture and root:
+            try:
+                artifact_ref = Path(capture["artifact_ref"])
+                if artifact_ref.is_absolute() or ".." in artifact_ref.parts:
+                    raise ValueError("referencia de artefacto inválida")
+                from airi.observability.llm_payload_capture import load_llm_response
+                response = load_llm_response(
+                    Path(root) / artifact_ref,
+                    correlation_id=ev.correlation_id,
+                    call_index=int(call.get("call_index", 1)),
+                    sha256=capture["sha256"],
+                )
+                raw_llm = response["content"]
+            except (ValueError, KeyError, TypeError):
+                raw_llm = None
+    if raw_llm is None:
         return ReplayResult(
             reproducible=False,
             matches_original=False,
             checks={"raw_llm": "ausente (traza guardada sin respuesta cruda)"},
         )
     state, uid, user, messages = _mount_event(ev)
-    llm = ReplayLLM(ev.raw_llm, meta={
+    llm = ReplayLLM(raw_llm, meta={
         "finish_reason": ev.llm_finish_reason,
         "usage": ev.llm_usage,
     })
@@ -226,7 +251,7 @@ async def _run_event(ev: TurnEvent) -> ReplayResult:
     if ev.date_event is not None:
         checks["date_event"] = date_event == ev.date_event
     not_evaluated = ["search_decision", "captured_search_result", "task_context"]
-    if ev.raw_llm is None:
+    if raw_llm is None:
         not_evaluated.append("grounding")
     return ReplayResult(
         final_reply=result.reply,

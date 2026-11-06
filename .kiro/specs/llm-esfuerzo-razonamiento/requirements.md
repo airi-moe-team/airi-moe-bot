@@ -11,11 +11,11 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 
 #### Criterios de aceptación
 1. WHEN `LLM_THINKING_MODE` no está definido o está vacío THEN la configuración SHALL seleccionar `auto`.
-2. WHEN `LLM_THINKING_MODE` es `auto`, `on`, `low`, `medium` o `high` THEN la configuración SHALL normalizar y conservar el modo seleccionado.
-3. WHEN `LLM_THINKING_MODE` es `off` o cualquier valor inválido THEN la configuración SHALL advertir y recurrir a `auto`.
+2. WHEN `LLM_THINKING_MODE` es `auto`, `low`, `medium` o `high` THEN la configuración SHALL normalizar y conservar el modo seleccionado.
+3. WHEN `LLM_THINKING_MODE` es `on`, `off` o cualquier valor inválido THEN la configuración SHALL advertir y recurrir a `auto`.
 4. WHEN el proveedor es `llama` y se realiza cualquier llamada THEN el cliente SHALL mantener reasoning activo y SHALL NOT enviar `enable_thinking=false`.
 5. WHEN el modo es `auto` y el turno es rápido THEN el cliente SHALL mantener reasoning activo y SHALL aplicar el presupuesto reducido definido para el perfil rápido.
-6. WHEN el modo es `on` THEN el cliente SHALL mantener reasoning activo y SHALL dejar el presupuesto sin límite por petición para que se aplique el default del servidor/template.
+6. THE presets `low`, `medium` y `high` SHALL mantener presupuestos fijos de 256, 1024 y 4096 tokens respectivamente, sin overrides por variables de entorno.
 7. WHEN el operador consulta la documentación THEN esta SHALL indicar que los presupuestos son topes, no garantías, y que se aplican solo al proveedor `llama`.
 
 ### Requisito 2: Presupuestos por nivel
@@ -53,7 +53,7 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 **Objetivo:** Como evaluador, quiero comparar modos y presupuestos observando tokens y calidad, sin confundir el límite solicitado con el uso real.
 
 #### Criterios de aceptación
-1. WHEN el benchmark se ejecuta con `auto`, `on`, `low`, `medium` o `high` coincidente con el cliente THEN SHALL aceptar la configuración.
+1. WHEN el benchmark se ejecuta con `auto`, `low`, `medium` o `high` coincidente con el cliente THEN SHALL aceptar la configuración.
 2. WHEN el modo es inválido o distinto del cliente THEN el benchmark SHALL rechazar la ejecución con un error informativo.
 3. WHEN presenta resultados THEN el benchmark SHALL conservar modo y presupuesto solicitado por llamada, separados de los tokens de razonamiento observados.
 4. WHEN se valida el campo de presupuesto contra el backend real THEN la prueba SHALL ser no destructiva y SHALL NOT reiniciar ni reconfigurar el servidor.
@@ -65,5 +65,5 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 #### Criterios de aceptación
 1. WHEN se ejecutan pruebas unitarias e integración THEN SHALL verificar que `auto` rápido, llamadas primarias, reparaciones e introspecciones estructuradas no desactivan reasoning.
 2. WHEN una reparación o reintento se realiza THEN SHALL usar presupuesto `low` y no una bandera de apagado.
-3. WHEN se ejecuta una llamada normal en modo `auto` u `on` THEN SHALL mantener el razonamiento activo y usar el default del servidor si no se especifica presupuesto.
+3. WHEN se ejecuta una llamada normal en modo `auto` THEN SHALL mantener el razonamiento activo y usar el default del servidor si no se especifica presupuesto.
 4. WHEN el operador consulta `.env.example` o README THEN SHALL ver la política de razonamiento siempre activo, el mapeo de niveles y la advertencia de compatibilidad del backend.

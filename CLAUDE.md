@@ -1,6 +1,6 @@
 # Especificaciones activas (SDD)
 
-- `llm-esfuerzo-razonamiento` — Mantener reasoning siempre activo y limitarlo por presupuestos low/medium/high, con metadatos por llamada.
+- `llm-esfuerzo-razonamiento` — Mantener reasoning siempre activo con presets cerrados `auto`, `low`, `medium` y `high`, y metadatos por llamada.
   - Spec: `.kiro/specs/llm-esfuerzo-razonamiento/`
 - `airi-temperatura-proveedor` — Dejar que cada proveedor LLM aplique su temperatura predeterminada, sin controlar temperatura desde Airi.
   - Spec: `.kiro/specs/airi-temperatura-proveedor/`
@@ -29,6 +29,8 @@
   - Spec: `.kiro/specs/airi-busqueda-web-conversacional/`
 - `airi-replay-conductual` — Añadir replay conductual con resultados capturados opt-in y replay live explícito, preservando aislamiento y privacidad por defecto.
   - Spec: `.kiro/specs/airi-replay-conductual/`
+- `airi-payload-llm` — Capturar opt-in el payload LLM efectivo como artefacto local lateral, vinculado a la traza y protegido por privacidad.
+  - Spec: `.kiro/specs/airi-payload-llm/`
 
 ## Flujo de trabajo
 

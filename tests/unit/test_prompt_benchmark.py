@@ -39,7 +39,7 @@ def make_trace(path, *, kind="normal"):
 
 
 def make_llm(
-    *, calls=10, usage=None, finish_reason="stop", thinking_mode="on", include_timings=True
+    *, calls=10, usage=None, finish_reason="stop", thinking_mode="auto", include_timings=True
 ):
     meta_usage = usage if usage is not None else {
         "prompt_tokens": 100,
@@ -78,13 +78,13 @@ def test_benchmark_rejects_less_than_five_pairs_before_inference(tmp_path):
     assert llm.calls == []
 
 
-def test_benchmark_requires_effective_thinking_on(tmp_path):
+def test_benchmark_rejects_removed_on_mode(tmp_path):
     trace = tmp_path / "trace.json"
     make_trace(trace)
     llm = make_llm(thinking_mode="auto")
 
-    with pytest.raises(ValueError, match="thinking.*on"):
-        run(run_prompt_benchmark(trace, llm))
+    with pytest.raises(ValueError, match="auto.*low.*medium.*high"):
+        run(run_prompt_benchmark(trace, llm, thinking_mode="on"))
 
     assert llm.calls == []
 
@@ -292,7 +292,7 @@ def test_failed_sample_is_sanitized_and_does_not_count_as_complete_pair(tmp_path
     class FailOnceLLM(FakeLLM):
         def __init__(self):
             super().__init__(replies=[llm_json("Respuesta privada") for _ in range(10)])
-            self.thinking_mode = "on"
+            self.thinking_mode = "auto"
             self.failed = False
 
         async def chat_with_meta(self, *args, **kwargs):
@@ -322,7 +322,7 @@ def test_report_attributes_call_count_and_repair_purpose(tmp_path):
         metas=[LLMMeta(finish_reason="length")]
         + [LLMMeta(finish_reason="stop")] * 10,
     )
-    llm.thinking_mode = "on"
+    llm.thinking_mode = "auto"
 
     samples = run(run_prompt_benchmark(trace, llm))
     report = build_benchmark_report(samples)

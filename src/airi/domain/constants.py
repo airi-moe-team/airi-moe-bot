@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import warnings
+from types import MappingProxyType
 
 
 def env_int(name, default):
@@ -310,12 +311,12 @@ AIRI_SPECTATOR_PENDING_MAX_AGE_SECONDS = env_int("AIRI_SPECTATOR_PENDING_MAX_AGE
 QUICK_REPLY_MAX_CHARS = env_int("QUICK_REPLY_MAX_CHARS", 60)
 QUICK_HISTORY_MESSAGES = env_int("QUICK_HISTORY_MESSAGES", 6)
 LLM_SHORT_MAX_TOKENS = env_int("LLM_SHORT_MAX_TOKENS", 400)
-# Presupuestos propuestos de razonamiento por nivel. Son topes por petición,
-# no objetivos de consumo ni garantías de calidad.
-LLM_REASONING_BUDGET_LOW_TOKENS = env_int("LLM_REASONING_BUDGET_LOW_TOKENS", 256)
-LLM_REASONING_BUDGET_MEDIUM_TOKENS = env_int("LLM_REASONING_BUDGET_MEDIUM_TOKENS", 1024)
-LLM_REASONING_BUDGET_HIGH_TOKENS = env_int("LLM_REASONING_BUDGET_HIGH_TOKENS", 4096)
-LLM_REASONING_OUTPUT_RESERVE_TOKENS = env_int("LLM_REASONING_OUTPUT_RESERVE_TOKENS", 512)
+# Presets cerrados de razonamiento. Son topes por petición, no objetivos de
+# consumo ni garantías de calidad; sus valores no se modifican desde el env.
+LLM_REASONING_PRESETS = MappingProxyType(
+    {"low": 256, "medium": 1024, "high": 4096}
+)
+LLM_REASONING_OUTPUT_RESERVE_TOKENS = 512
 
 # ============================================================
 # IDENTIDAD DE AIRI (self model)

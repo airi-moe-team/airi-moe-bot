@@ -2,7 +2,7 @@
 
 - [x] 1. Establecer el contrato de modos y presupuestos
 - [x] 1.1 Definir y probar los modos globales admitidos
-  - Añadir `auto`, `on`, `low`, `medium` y `high` al conjunto admitido.
+  - Admitir `auto`, `low`, `medium` y `high`; los valores no admitidos recaen en `auto`.
   - Verificar normalización sin distinguir mayúsculas/minúsculas.
   - Verificar que `off` y otros valores desconocidos generan warning y fallback a `auto`.
   - Verificar que la configuración por defecto continúa siendo `auto`.
@@ -18,7 +18,7 @@
 - [x] 1.3 Resolver y emitir el presupuesto por modo y proveedor
   - Probar la precedencia del override local frente al modo y propósito global.
   - Mapear `low=256`, `medium=1024`, `high=4096`; mantener reasoning activo en cada modo.
-  - En `auto`, usar low en turno rápido y el presupuesto predeterminado en turno normal; `on` usa el presupuesto predeterminado.
+  - En `auto`, usar low en turno rápido y el presupuesto predeterminado en turno normal.
   - Para llama, enviar `chat_template_kwargs.enable_thinking=true` y el campo `thinking_budget_tokens` cuando aplique.
   - Verificar que los proveedores OpenAI y OpenAI-compatible no reciben extensiones propietarias.
   - Verificar que ninguna ruta envía `enable_thinking=false` ni cambia el modo global entre llamadas.
@@ -55,8 +55,8 @@
   - _Requirements: 4.3_
 
 - [x] 4. Adaptar benchmark y documentación a presupuestos
-- [x] 4.1 Aceptar y validar los cinco modos en el benchmark
-  - Aceptar `auto`, `on`, `low`, `medium` y `high` cuando coincidan con el modo del cliente.
+- [x] 4.1 Aceptar y validar los modos en el benchmark
+  - Aceptar `auto`, `low`, `medium` y `high` cuando coincidan con el modo del cliente.
   - Rechazar valores inválidos o discrepancias con un error informativo.
   - Conservar el modo y presupuesto solicitado separados del uso observado.
   - _Requirements: 5.1, 5.2, 5.3_
@@ -68,3 +68,11 @@
   - Verificar que el default de `auto` mantiene reasoning en turnos rápidos y normales.
   - Evaluar calidad de presupuestos propuestos en cinco turnos reales antes de promoverlos como defaults.
   - _Requirements: 1.4, 1.5, 1.7, 2.1, 2.5, 2.6, 3.4, 5.4, 5.5, 6.1, 6.3, 6.4_
+
+- [x] 5. Consolidar presets de razonamiento
+- [x] 5.1 Retirar `on` y los overrides de entorno de los presets
+  - Aceptar únicamente `auto`, `low`, `medium` y `high`; `on` debe advertir y caer a `auto`.
+  - Agrupar los presupuestos fijos 256/1024/4096, fijar la reserva de 512 y asegurar que variables legacy no cambien los presets.
+  - Actualizar pruebas, benchmark, `.env.example`, `.env` local y README.
+  - Pruebas unitarias y de integración relacionadas ejecutadas correctamente.
+  - _Requirements: 1.2, 1.3, 2.1, 2.2, 2.3, 5.1, 5.2_

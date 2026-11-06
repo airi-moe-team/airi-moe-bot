@@ -950,8 +950,9 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         DATE_SCENE_MAX_TOKENS,
         DATE_SCENES,
         DIARY_REFLECTION_MIN_INTERVAL,
-        LLM_REASONING_BUDGET_LOW_TOKENS,
+        LLM_REASONING_PRESETS,
     )
+    from airi.domain.date_invitation import parse_date_invitation_decision
     from airi.domain.dates import (
         date_expired,
         date_seconds_left,
@@ -959,7 +960,6 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         question_option,
         roll_question,
     )
-    from airi.domain.date_invitation import parse_date_invitation_decision
     from airi.domain.diary import add_diary_entry, new_diary_entry
     from airi.domain.llm_output import extract_json_object, parse_scene_list
     from airi.domain.prompts import (
@@ -992,7 +992,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
             messages,
             schema=schema,
             max_tokens=max_tokens,
-            reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
+            reasoning_budget_tokens=LLM_REASONING_PRESETS["low"],
             strict_schema=True,
         )
         return text

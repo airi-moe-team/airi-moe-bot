@@ -35,6 +35,10 @@ ENV_KEYS = (
     "LLM_RESPONSE_FORMAT",
     "LLM_HEALTH_CHECK",
     "LLM_THINKING_MODE",
+    "LLM_REASONING_BUDGET_LOW_TOKENS",
+    "LLM_REASONING_BUDGET_MEDIUM_TOKENS",
+    "LLM_REASONING_BUDGET_HIGH_TOKENS",
+    "LLM_REASONING_OUTPUT_RESERVE_TOKENS",
     "LLM_TIMEOUT",
     "LLM_MAX_TOKENS",
 )
@@ -99,10 +103,10 @@ def test_config_invalid_thinking_mode_falls_back(monkeypatch):
     assert cfg.thinking_mode == "auto"
 
 
-def test_build_llm_propagates_thinking_mode(monkeypatch):
+def test_build_llm_rejects_on_and_falls_back_to_auto(monkeypatch):
     monkeypatch.setenv("LLM_THINKING_MODE", "on")
     client = build_llm(_make_session())
-    assert client.thinking_mode == "on"
+    assert client.thinking_mode == "auto"
 
 
 def test_config_openai_compatible_profile_default_field(monkeypatch):

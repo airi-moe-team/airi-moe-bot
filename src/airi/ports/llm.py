@@ -24,9 +24,42 @@ class LLMMeta:
     #: un conteo exacto: solo `usage` (si el servidor lo entrega) lo es.
     reasoning_deltas: int | None = None
     content_deltas: int | None = None
+    payload_capture: "PayloadCaptureResult | None" = None
+    response_capture: "PayloadCaptureResult | None" = None
     #: Tool calls normalizadas: ``{"id", "name", "arguments"}``. ``arguments``
     #: es un dict ya parseado; si el JSON era inválido, queda ``{}``.
     tool_calls: list[dict] | None = None
+
+
+@dataclass
+class LLMCallContext:
+    """Metadatos locales de una llamada, nunca incluidos en el request HTTP."""
+
+    correlation_id: str
+    purpose: str
+    call_index: int
+    model: str | None = None
+    provider: str | None = None
+    payload_capture: "PayloadCaptureResult | None" = None
+    response_capture: "PayloadCaptureResult | None" = None
+
+
+@dataclass(frozen=True)
+class PayloadCaptureResult:
+    status: str
+    artifact_ref: str | None = None
+    sha256: str | None = None
+    error: str | None = None
+
+
+class LlmPayloadCapture(Protocol):
+    async def capture(
+        self, context: LLMCallContext, payload: dict
+    ) -> PayloadCaptureResult: ...
+
+    async def capture_response(
+        self, context: LLMCallContext, output: dict
+    ) -> PayloadCaptureResult: ...
 
 
 class LLMClient(Protocol):
@@ -43,6 +76,7 @@ class LLMClient(Protocol):
         strict_schema: bool = False,
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
+        call_context: LLMCallContext | None = None,
     ) -> str:
         """Devuelve el texto de la respuesta del modelo.
 
@@ -64,6 +98,7 @@ class LLMClient(Protocol):
         stream: bool = False,
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
+        call_context: LLMCallContext | None = None,
     ) -> tuple[str, LLMMeta]:
         """Igual que `chat` pero además devuelve los metadatos del turno."""
         ...

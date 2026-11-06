@@ -1,0 +1,25 @@
+{
+  "feature": "airi-payload-llm",
+  "generated_at": "2026-11-05T21:48:59Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "No exigir advertencia ni permisos restrictivos para el sidecar local",
+      "severity": "minor",
+      "impact": "La captura se acordó como artefacto únicamente local; no se requiere una advertencia adicional ni convertir permisos POSIX restrictivos en requisito funcional.",
+      "recommendation": "Eliminar la advertencia y el requisito de permisos restrictivos. Mantener opt-in, sidecar local y exclusión de credenciales/cabeceras.",
+      "targets": ["requirements"],
+      "updates": {
+        "requirements": [
+          "WHEN la captura está habilitada THEN el sistema SHALL guardar íntegro el cuerpo JSON efectivo enviado al backend como artefacto lateral local.",
+          "El sistema SHALL excluir credenciales y cabeceras de autenticación; no requiere advertencias adicionales ni permisos POSIX restrictivos."
+        ],
+        "design": [],
+        "tasks": []
+      }
+    }
+  ],
+  "approvals_to_reset": [],
+  "missing_documents": ["design.md", "tasks.md"],
+  "owner": "Agente implementador; revisión de requisitos por el usuario"
+}

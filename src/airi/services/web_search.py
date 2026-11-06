@@ -15,7 +15,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from airi.domain.constants import (
-    LLM_REASONING_BUDGET_LOW_TOKENS,
+    LLM_REASONING_PRESETS,
     SEARCH_QUERY_MAX_TOKENS,
 )
 from airi.domain.notices import web_search_notice
@@ -203,7 +203,7 @@ class WebSearchService:
             tools=[WEB_SEARCH_TOOL],
             tool_choice="auto",
             max_tokens=SEARCH_QUERY_MAX_TOKENS,
-            reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
+            reasoning_budget_tokens=LLM_REASONING_PRESETS["low"],
             quick_turn=True,
         )
         request = parse_search_request(getattr(meta, "tool_calls", None))

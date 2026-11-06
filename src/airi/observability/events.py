@@ -259,9 +259,19 @@ class TurnEvent:
         data["messages_in"] = _clip(data["messages_in"], 4_000)
         if data.get("web_context"):
             data["web_context"] = _clip(data["web_context"], MAX_WEB_CONTEXT_CHARS)
-        if not keep_raw:
-            data["raw_llm"] = None
-            data["reproducible"] = False
+        has_response_artifact = any(
+            isinstance(call.get("response_capture"), dict)
+            and call["response_capture"].get("status") == "captured"
+            and call["response_capture"].get("artifact_ref")
+            and call["response_capture"].get("sha256")
+            for call in self.llm_calls if isinstance(call, dict)
+        )
+        if not keep_raw or has_response_artifact:
+            if has_response_artifact and keep_raw:
+                data.pop("raw_llm", None)
+            else:
+                data["raw_llm"] = None
+            data["reproducible"] = bool(has_response_artifact)
         else:
             data["raw_llm"] = _clip(data["raw_llm"], MAX_RAW_LLM_CHARS)
             data["reproducible"] = data["raw_llm"] is not None

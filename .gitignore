@@ -29,6 +29,8 @@ venv/
 # Transient stuff
 .traces/
 traces/
+private-llm-artifacts/
+private-llm-payloads/
 
 # Airi operational state (personal data and recovery artifacts)
 data/state.json

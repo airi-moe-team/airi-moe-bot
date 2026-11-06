@@ -16,6 +16,8 @@ from airi.services.date_service import DateService
 from airi.testing import FakeLLM, FakeNotifier, FakeSearch, FakeUser, llm_json, make_state
 from airi.observability.replay_capture import write_web_capture
 from airi.observability.trace import TurnEvent
+from airi.observability.llm_payload_capture import LocalLlmPayloadCapture
+from airi.ports.llm import LLMCallContext
 
 NOW = 1_000_000.0
 DAVID = FakeUser(42, "David")
@@ -36,6 +38,37 @@ def test_affinity_delta_without_reason_fixture_replays():
     assert result.affinity_delta_applied == 0
     assert result.coverage == "partial"
     assert "search_decision" in result.not_evaluated
+
+
+def test_replay_hydrates_response_sidecar_without_inline_raw(tmp_path, monkeypatch):
+    raw = llm_json("respuesta desde artefacto")
+    capture = LocalLlmPayloadCapture(tmp_path / "artifacts")
+    context = LLMCallContext("sidecar-cid", "primary", 1)
+    stored = run(capture.capture_response(context, {
+        "content": raw, "reasoning_content": "ignored during replay",
+    }))
+    event = TurnEvent(
+        correlation_id="sidecar-cid", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "hola"}],
+        history_in=[{"role": "user", "content": "hola"}],
+        raw_llm=raw,
+        final_reply="respuesta desde artefacto",
+    )
+    event.llm_calls = [{"call_index": 1, "response_capture": {
+        "status": "captured", "artifact_ref": stored.artifact_ref,
+        "sha256": stored.sha256,
+    }}]
+    path = save_turn_trace(event, str(tmp_path / "traces"))
+    monkeypatch.setenv("TRACE_LLM_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+
+    # Simulate a newly serialized trace: summary has no inline LLM response.
+    data = __import__("json").loads(open(path, encoding="utf-8").read())
+    data.pop("raw_llm", None)
+    open(path, "w", encoding="utf-8").write(__import__("json").dumps(data))
+    replayed = run(replay_trace(path))
+
+    assert replayed.reproducible
+    assert replayed.checks["reply"]
 
 
 def test_replay_active_turn_preserves_session_schema_and_stay_active(tmp_path):

@@ -20,14 +20,12 @@ from dataclasses import dataclass
 import aiohttp
 
 from airi.domain.constants import (
-    LLM_REASONING_BUDGET_HIGH_TOKENS,
-    LLM_REASONING_BUDGET_LOW_TOKENS,
-    LLM_REASONING_BUDGET_MEDIUM_TOKENS,
     LLM_REASONING_OUTPUT_RESERVE_TOKENS,
+    LLM_REASONING_PRESETS,
     env_flag,
     env_int,
 )
-from airi.ports.llm import LLMMeta
+from airi.ports.llm import LLMCallContext, LLMMeta, LlmPayloadCapture
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +37,8 @@ DEFAULT_MODEL = "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
 #: Perfiles de compatibilidad soportados.
 LLM_PROVIDERS = ("llama", "openai", "openai-compatible")
 #: Modos de razonamiento de `LLM_THINKING_MODE`.
-LLM_THINKING_MODES = ("auto", "on", "low", "medium", "high")
-LLM_REASONING_BUDGETS = {
-    "low": LLM_REASONING_BUDGET_LOW_TOKENS,
-    "medium": LLM_REASONING_BUDGET_MEDIUM_TOKENS,
-    "high": LLM_REASONING_BUDGET_HIGH_TOKENS,
-}
+LLM_THINKING_MODES = ("auto", "low", "medium", "high")
+LLM_REASONING_BUDGETS = LLM_REASONING_PRESETS
 
 _ERROR_DETAIL_LIMIT = 300
 
@@ -266,6 +260,15 @@ def build_llm(
     pisan los del entorno.
     """
     cfg = LlmConfig.from_env()
+    payload_capture = None
+    capture_dir = next((os.environ.get(key, "").strip() for key in (
+        "AIRI_TRACE_LLM_ARTIFACTS_DIR", "TRACE_LLM_ARTIFACTS_DIR",
+        "AIRI_TRACE_LLM_PAYLOAD_DIR", "TRACE_LLM_PAYLOAD_DIR",
+    ) if os.environ.get(key, "").strip()), "")
+    if capture_dir:
+        from airi.observability.llm_payload_capture import LocalLlmPayloadCapture
+
+        payload_capture = LocalLlmPayloadCapture(capture_dir)
     return HttpLlmClient(
         base_url or cfg.base_url,
         session,
@@ -276,6 +279,7 @@ def build_llm(
         max_tokens_field=cfg.max_tokens_field,
         response_format=cfg.response_format,
         thinking_mode=cfg.thinking_mode,
+        payload_capture=payload_capture,
     )
 
 
@@ -374,9 +378,11 @@ class HttpLlmClient:
         max_tokens_field: str | None = None,
         response_format: bool | None = None,
         thinking_mode: str | None = None,
+        payload_capture: LlmPayloadCapture | None = None,
     ):
         self.base_url = normalize_base_url(base_url)
         self.session = session
+        self.payload_capture = payload_capture
         self.model = model or os.environ.get(
             "LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
         )
@@ -417,7 +423,9 @@ class HttpLlmClient:
             else os.environ.get("LLM_THINKING_MODE")
         )
 
-    async def post(self, payload: dict) -> dict:
+    async def post(
+        self, payload: dict, *, call_context: LLMCallContext | None = None
+    ) -> dict:
         """POST a la ruta de chat normalizada (devuelve la respuesta completa).
 
         El servidor es multi-modelo y exige `model`; se inyecta sin mutar el
@@ -429,6 +437,7 @@ class HttpLlmClient:
         payload = {"model": self.model, **payload}
         # La temperatura se delega al proveedor, incluso para payloads directos.
         payload.pop("temperature", None)
+        await self._capture_payload(payload, call_context)
         kwargs: dict = {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
         if self.api_key:
             kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
@@ -450,20 +459,24 @@ class HttpLlmClient:
                    reasoning_budget_tokens: int | None = None,
                    quick_turn: bool = False,
                    strict_schema: bool = False,
-                   tools=None, tool_choice=None):
+                   tools=None, tool_choice=None,
+                   call_context: LLMCallContext | None = None):
         content, _meta = await self.chat_with_meta(
+            messages, schema=schema, max_tokens=max_tokens,
             reasoning_budget_tokens=reasoning_budget_tokens,
             quick_turn=quick_turn,
             strict_schema=strict_schema,
             tools=tools,
             tool_choice=tool_choice,
+            call_context=call_context,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
                              reasoning_budget_tokens: int | None = None,
                              quick_turn: bool = False, strict_schema: bool = False,
-                             stream: bool = False, tools=None, tool_choice=None):
+                             stream: bool = False, tools=None, tool_choice=None,
+                             call_context: LLMCallContext | None = None):
         if tools and schema is not None:
             raise ValueError(
                 "tools y response_format no son compatibles en este backend; "
@@ -529,12 +542,15 @@ class HttpLlmClient:
                     effective_reasoning_budget + LLM_REASONING_OUTPUT_RESERVE_TOKENS,
                 )
         if stream:
-            return await self._chat_with_meta_stream(payload)
-        data = await self.post(payload)
+            return await self._chat_with_meta_stream(payload, call_context)
+        data = await self.post(payload, call_context=call_context)
         choices = data.get("choices") or []
         if not choices:
             log.error("El servidor no devolvió choices")
-            return "", LLMMeta(reasoning_budget_tokens=effective_reasoning_budget)
+            return "", LLMMeta(
+                reasoning_budget_tokens=effective_reasoning_budget,
+                payload_capture=(call_context.payload_capture if call_context else None),
+            )
         choice = choices[0]
         message = choice.get("message") or {}
         content = message.get("content")
@@ -551,12 +567,27 @@ class HttpLlmClient:
             reasoning_tokens=_reasoning_token_count(data.get("usage")),
             reasoning_budget_tokens=effective_reasoning_budget,
             tool_calls=_normalize_tool_calls(message),
+            payload_capture=(call_context.payload_capture if call_context else None),
         )
+        output = {
+            "content": text,
+            "finish_reason": meta.finish_reason,
+            "usage": meta.usage,
+            "tool_calls": meta.tool_calls,
+        }
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str):
+            output["reasoning_content"] = reasoning
+        await self._capture_response(output, call_context)
+        meta.response_capture = call_context.response_capture if call_context else None
         return text, meta
 
-    async def _chat_with_meta_stream(self, payload):
-        """Lee SSE; ensambla content para el parser y nunca retiene reasoning."""
+    async def _chat_with_meta_stream(
+        self, payload, call_context: LLMCallContext | None = None
+    ):
+        """Lee SSE y ensambla content y reasoning por separado."""
         url = chat_completions_url(self.base_url)
+        await self._capture_payload(payload, call_context)
         kwargs: dict = {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
         if self.api_key:
             kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
@@ -564,6 +595,7 @@ class HttpLlmClient:
         async with self.session.post(url, json=payload, **kwargs) as response:
             response.raise_for_status()
             content_parts = []
+            reasoning_parts = []
             usage = None
             finish_reason = None
             server_timings = None
@@ -604,6 +636,7 @@ class HttpLlmClient:
                 if has_reasoning:
                     reasoning_present = True
                     reasoning_deltas += 1
+                    reasoning_parts.append(reasoning)
                 content = delta.get("content")
                 has_content = isinstance(content, str) and bool(content)
                 if has_content:
@@ -621,7 +654,8 @@ class HttpLlmClient:
                     content_parts.append(content)
             if not done:
                 raise ValueError("Stream SSE terminó sin el marcador [DONE]")
-        return "".join(content_parts), LLMMeta(
+        text = "".join(content_parts)
+        meta = LLMMeta(
             finish_reason=finish_reason,
             usage=usage or {},
             ttft_ms=ttft_ms,
@@ -632,4 +666,41 @@ class HttpLlmClient:
             reasoning_deltas=reasoning_deltas,
             content_deltas=content_deltas,
             reasoning_budget_tokens=payload.get("thinking_budget_tokens"),
+            payload_capture=(call_context.payload_capture if call_context else None),
         )
+        output = {"content": text, "finish_reason": meta.finish_reason,
+                  "usage": meta.usage}
+        if reasoning_parts:
+            output["reasoning_content"] = "".join(reasoning_parts)
+        await self._capture_response(output, call_context)
+        meta.response_capture = call_context.response_capture if call_context else None
+        return text, meta
+
+    async def _capture_response(self, output, call_context):
+        if self.payload_capture is None or call_context is None:
+            return
+        capture = getattr(self.payload_capture, "capture_response", None)
+        if capture is None:
+            return
+        try:
+            call_context.response_capture = await capture(call_context, output)
+        except Exception as exc:
+            from airi.ports.llm import PayloadCaptureResult
+            call_context.response_capture = PayloadCaptureResult(status="failed", error=type(exc).__name__)
+
+    async def _capture_payload(
+        self, payload: dict, call_context: LLMCallContext | None
+    ) -> None:
+        """Guarda el request efectivo sin bloquear el POST si falla el sidecar."""
+        if self.payload_capture is None or call_context is None:
+            return
+        try:
+            call_context.payload_capture = await self.payload_capture.capture(
+                call_context, payload
+            )
+        except Exception as exc:  # noqa: BLE001 - captura best-effort
+            from airi.ports.llm import PayloadCaptureResult
+
+            call_context.payload_capture = PayloadCaptureResult(
+                status="failed", error=type(exc).__name__
+            )

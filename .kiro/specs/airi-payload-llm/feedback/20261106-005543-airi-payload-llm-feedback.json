@@ -1,0 +1,30 @@
+{
+  "feature": "airi-payload-llm",
+  "generated_at": "2026-11-06T00:55:43Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Conservar el texto de razonamiento en el response artifact para depuración",
+      "severity": "major",
+      "impact": "El sidecar de response conserva el content visible pero descarta reasoning_content, lo cual impide auditar y depurar respuestas con razonamiento, tanto en streaming como en respuestas completas.",
+      "recommendation": "Añadir un campo opcional reasoning_content al response artifact, concatenado en orden desde los deltas SSE o capturado desde la respuesta no-streaming. Mantenerlo solo en el sidecar opt-in, enlazado mediante el mismo hash/referencia; no copiarlo a la traza, final_reply ni usarlo durante replay.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "WHEN el proveedor incluye texto de razonamiento en la respuesta THEN el response artifact SHALL preservar íntegramente ese texto como un campo separado, para depuración, tanto en streaming como no-streaming.",
+          "WHEN se serializa la traza o se ejecuta replay THEN reasoning_content SHALL permanecer fuera de la traza y no SHALL alterar la respuesta usada por replay, que continúa leyendo solo content."
+        ],
+        "design": [
+          "Ampliar airi.llm-response.v1 con output.reasoning_content opcional; en streaming concatenar reasoning_content de los deltas en orden, mientras content y reasoning permanecen campos distintos.",
+          "No incluir reasoning en trace, final_reply ni entrada de ReplayLLM; replay usa solo output.content. Captura sujeta al opt-in existente y al mismo hash del response artifact."
+        ],
+        "tasks": [
+          "Añadir pruebas primero para captura no-streaming y streaming de reasoning_content, íntegro, ordenado y separado de content.",
+          "Mantener trazas libres de reasoning y verificar que replay desde sidecar solo hidrata content y mantiene resultados deterministas."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"],
+  "owner": "Agente implementador; aprobación de documentos a cargo del usuario"
+}

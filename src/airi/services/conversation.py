@@ -28,9 +28,7 @@ from airi.domain.constants import (
     AFFINITY_VIEW_SCOPE,
     DATE_HISTORY_MAX,
     DIARY_REFLECTION_MIN_INTERVAL,
-    LLM_REASONING_BUDGET_HIGH_TOKENS,
-    LLM_REASONING_BUDGET_LOW_TOKENS,
-    LLM_REASONING_BUDGET_MEDIUM_TOKENS,
+    LLM_REASONING_PRESETS,
     LLM_SHORT_MAX_TOKENS,
     MAX_HISTORY_MESSAGES,
     MOOD_ENABLED,
@@ -42,8 +40,6 @@ from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.grounding import reply_seems_grounded
 from airi.domain.history_tags import AffinityInfo, build_inference_history, normalize_name
 from airi.domain.llm_output import (
-    RESPONSE_SCHEMA,
-    SESSION_RESPONSE_SCHEMA,
     ModelOutput,
     assistant_history_content,
     assistant_reply_text,
@@ -52,6 +48,7 @@ from airi.domain.llm_output import (
     parse_session_output,
     response_schema,
 )
+from airi.domain.mood import apply_mood
 from airi.domain.narrative_claims import (
     disconnect_claim_problem,
     strip_leaving_claims,
@@ -64,7 +61,6 @@ from airi.domain.notices import (
     relationship_proposed_notice,
     self_changed_notice,
 )
-from airi.domain.mood import apply_mood
 from airi.domain.reactions import is_negative_reaction
 from airi.domain.relationship_claims import (
     relationship_claim_problem,
@@ -92,6 +88,7 @@ from airi.domain.turn_quality import (
 from airi.domain.web import detect_search_intent, recent_topic_terms
 from airi.domain.web_tool import note_years
 from airi.logging_setup import (
+    get_correlation_id,
     get_logger,
     reset_correlation_id,
     set_correlation_id,
@@ -100,7 +97,7 @@ from airi.observability import jsonl_events as jl
 from airi.observability.interaction_tracker import current_tracker
 from airi.observability.trace import TurnEvent
 from airi.observability.trace_store import TraceStore
-from airi.ports.llm import LLMMeta
+from airi.ports.llm import LLMCallContext, LLMMeta
 from airi.services.relationships import RelationshipService
 from airi.services.state import AppState
 from airi.services.web_search import WebSearchOutcome, WebSearchService
@@ -161,6 +158,19 @@ def _redact_task_context_from_raw(raw_llm):
     import json
 
     return json.dumps(parsed, ensure_ascii=False)
+
+
+def _payload_capture_metadata(result):
+    if result is None:
+        return None
+    metadata = {"status": result.status}
+    if result.artifact_ref:
+        metadata["artifact_ref"] = result.artifact_ref
+    if result.sha256:
+        metadata["sha256"] = result.sha256
+    if result.error:
+        metadata["error_type"] = result.error
+    return metadata
 
 
 def _last_assistant_text(history):
@@ -1607,11 +1617,20 @@ class ConversationService:
         # override queda acotado a esta petición y no cambia el modo global.
         is_repair = purpose != "primary"
         requested_reasoning_budget = (
-            LLM_REASONING_BUDGET_LOW_TOKENS
+            LLM_REASONING_PRESETS["low"]
             if is_repair
             else reasoning_budget_tokens
         )
         requested_quick_turn = bool(quick_turn and not is_repair)
+        call_context = None
+        if getattr(self.llm, "payload_capture", None) is not None:
+            call_context = LLMCallContext(
+                correlation_id=get_correlation_id(),
+                purpose=purpose,
+                call_index=len(calls or []) + 1,
+                model=getattr(self.llm, "model", None),
+                provider=getattr(self.llm, "provider", None),
+            )
         if not hasattr(self.llm, "chat_with_meta"):
             if stream_llm:
                 raise RuntimeError(
@@ -1632,6 +1651,7 @@ class ConversationService:
                     requested_reasoning_budget, requested_quick_turn,
                     status="failed", error_type=type(exc).__name__,
                     repair_reason=repair_reason,
+                    call_context=call_context,
                 )
                 raise
             meta = LLMMeta()
@@ -1639,6 +1659,7 @@ class ConversationService:
                 calls, purpose, meta, started, max_tokens,
                 requested_reasoning_budget, requested_quick_turn,
                 repair_reason=repair_reason,
+                call_context=call_context,
             )
             return raw, meta
         started = time.perf_counter()
@@ -1653,6 +1674,7 @@ class ConversationService:
                 reasoning_budget_tokens=requested_reasoning_budget,
                 quick_turn=requested_quick_turn,
                 **stream_kwargs,
+                **({"call_context": call_context} if call_context else {}),
             )
         except Exception as exc:
             self._record_call(
@@ -1660,6 +1682,7 @@ class ConversationService:
                 requested_reasoning_budget, requested_quick_turn,
                 status="failed", error_type=type(exc).__name__,
                 repair_reason=repair_reason,
+                call_context=call_context,
             )
             if not self._can_retry_without_strict(exc):
                 raise
@@ -1669,6 +1692,16 @@ class ConversationService:
                 exc_info=True,
             )
             started = time.perf_counter()
+            retry_context = None
+            if getattr(self.llm, "payload_capture", None) is not None:
+                retry_purpose = f"{purpose}:json_object_retry"
+                retry_context = LLMCallContext(
+                    correlation_id=get_correlation_id(),
+                    purpose=retry_purpose,
+                    call_index=len(calls or []) + 1,
+                    model=getattr(self.llm, "model", None),
+                    provider=getattr(self.llm, "provider", None),
+                )
             raw, meta = await self.llm.chat_with_meta(
                 messages,
                 schema=schema,
@@ -1676,23 +1709,27 @@ class ConversationService:
                 reasoning_budget_tokens=requested_reasoning_budget,
                 quick_turn=requested_quick_turn,
                 **stream_kwargs,
+                **({"call_context": retry_context} if retry_context else {}),
             )
             self._record_call(
                 calls, f"{purpose}:json_object_retry", meta, started,
                 max_tokens, requested_reasoning_budget, requested_quick_turn,
                 repair_reason=repair_reason,
+                call_context=retry_context,
             )
             return raw, meta
         self._record_call(
             calls, purpose, meta, started, max_tokens,
             requested_reasoning_budget, requested_quick_turn,
             repair_reason=repair_reason,
+            call_context=call_context,
         )
         return raw, meta
 
     def _record_call(
         self, calls, purpose, meta, started, max_tokens, reasoning_budget_tokens,
         quick_turn=False, *, status="ok", error_type=None, repair_reason=None,
+        call_context=None,
     ):
         """Añade a `calls` solo metadatos: nunca prompt, content ni reasoning."""
         if calls is None:
@@ -1700,36 +1737,59 @@ class ConversationService:
         effective_max = max_tokens
         if effective_max is None:
             effective_max = getattr(self.llm, "max_output_tokens", None)
-        calls.append(
-            {
-                "purpose": purpose,
-                "repair_reason": repair_reason,
-                "status": status,
-                "duration_ms": int(
-                    round((time.perf_counter() - started) * 1000)
-                ),
-                "finish_reason": getattr(meta, "finish_reason", None),
-                "usage": (
-                    meta.usage
-                    if meta is not None and isinstance(meta.usage, dict)
-                    else None
-                ),
-                "ttft_ms": getattr(meta, "ttft_ms", None),
-                "first_content_ms": getattr(meta, "first_content_ms", None),
-                "server_timings": getattr(meta, "server_timings", None),
-                "reasoning_present": getattr(meta, "reasoning_present", None),
-                "reasoning_tokens": getattr(meta, "reasoning_tokens", None),
-                "reasoning_budget_tokens": self._reasoning_budget_effective(
-                    reasoning_budget_tokens, quick_turn
-                ),
-                "reasoning_deltas": getattr(meta, "reasoning_deltas", None),
-                "content_deltas": getattr(meta, "content_deltas", None),
-                "max_tokens": (
-                    effective_max if isinstance(effective_max, int) else None
-                ),
-                "error_type": error_type,
-            }
+        call_record = {
+            "purpose": purpose,
+            "repair_reason": repair_reason,
+            "status": status,
+            "duration_ms": int(
+                round((time.perf_counter() - started) * 1000)
+            ),
+            "finish_reason": getattr(meta, "finish_reason", None),
+            "usage": (
+                meta.usage
+                if meta is not None and isinstance(meta.usage, dict)
+                else None
+            ),
+            "ttft_ms": getattr(meta, "ttft_ms", None),
+            "first_content_ms": getattr(meta, "first_content_ms", None),
+            "server_timings": getattr(meta, "server_timings", None),
+            "reasoning_present": getattr(meta, "reasoning_present", None),
+            "reasoning_tokens": getattr(meta, "reasoning_tokens", None),
+            "reasoning_budget_tokens": self._reasoning_budget_effective(
+                reasoning_budget_tokens, quick_turn
+            ),
+            "reasoning_deltas": getattr(meta, "reasoning_deltas", None),
+            "content_deltas": getattr(meta, "content_deltas", None),
+            "max_tokens": (
+                effective_max if isinstance(effective_max, int) else None
+            ),
+            "error_type": error_type,
+        }
+        capture_metadata = _payload_capture_metadata(
+            call_context.payload_capture if call_context else
+            getattr(meta, "payload_capture", None)
         )
+        if capture_metadata is not None:
+            call_record["payload_capture"] = capture_metadata
+            if call_context is not None:
+                call_record["call_index"] = call_context.call_index
+                call_record["correlation_id"] = call_context.correlation_id
+            response_capture = _payload_capture_metadata(
+                call_context.response_capture if call_context else
+                getattr(meta, "response_capture", None)
+            )
+            if response_capture is None and status != "ok":
+                response_capture = {"status": "not_produced"}
+            if response_capture is not None:
+                call_record["response_capture"] = response_capture
+            call_record["model"] = (
+                call_context.model if call_context else getattr(self.llm, "model", None)
+            )
+            call_record["provider"] = (
+                call_context.provider
+                if call_context else getattr(self.llm, "provider", None)
+            )
+        calls.append(call_record)
 
     def _reasoning_budget_effective(self, reasoning_budget_tokens, quick_turn=False):
         """Presupuesto que el cliente resolverá/enviará, no cumplimiento del backend."""
@@ -1740,13 +1800,13 @@ class ConversationService:
         if reasoning_budget_tokens is not None:
             return reasoning_budget_tokens
         if mode == "low":
-            return LLM_REASONING_BUDGET_LOW_TOKENS
+            return LLM_REASONING_PRESETS["low"]
         if mode == "medium":
-            return LLM_REASONING_BUDGET_MEDIUM_TOKENS
+            return LLM_REASONING_PRESETS["medium"]
         if mode == "high":
-            return LLM_REASONING_BUDGET_HIGH_TOKENS
+            return LLM_REASONING_PRESETS["high"]
         if mode == "auto" and quick_turn:
-            return LLM_REASONING_BUDGET_LOW_TOKENS
+            return LLM_REASONING_PRESETS["low"]
         return None
 
     async def _generate(

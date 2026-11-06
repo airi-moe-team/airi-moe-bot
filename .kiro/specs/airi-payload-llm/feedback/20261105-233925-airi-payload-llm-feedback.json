@@ -1,0 +1,33 @@
+{
+  "feature": "airi-payload-llm",
+  "generated_at": "2026-11-05T23:39:25Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Guardar request y response como artefactos enlazados y reducir la traza a índice",
+      "severity": "major",
+      "impact": "La respuesta completa permanece actualmente en raw_llm dentro de la traza, mientras el artefacto lateral solo contiene el request. Esto duplica la respuesta visible y no ofrece una pareja request-response íntegra, enlazada y verificable para auditoría.",
+      "recommendation": "Guardar request y response como sidecars locales separados por llamada bajo private-llm-artifacts; enlazarlos desde llm_calls por correlation_id, call_index y purpose con checksum SHA-256. La traza conserva el resultado visible del turno y metadatos/referencias, pero no el raw_llm completo. Usar un nombre de configuración que abarque ambos artefactos.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "WHEN una llamada LLM termina THEN el sistema SHALL guardar la respuesta cruda completa en un artefacto local separado, enlazado con su request por correlation ID, índice, propósito y checksum.",
+          "WHEN la traza se serializa THEN SHALL NOT incluir raw_llm completo; SHALL conservar resultado final, metadatos y referencias verificables de request y response.",
+          "La configuración SHALL identificar el directorio de artefactos locales de llamadas LLM, incluyendo request y response."
+        ],
+        "design": [
+          "Capturar request y response como artefactos separados bajo private-llm-artifacts, con checksum e identidad compartida de llamada.",
+          "La traza permanece como índice/resumen y no persiste el contenido completo de raw_llm; preserva final_reply y metadatos/referencias."
+        ],
+        "tasks": [
+          "Implementar sidecar de response íntegro, checksum, asociación con el request y validación de ambos artefactos.",
+          "Dejar de serializar raw_llm completo en trazas nuevas y verificar compatibilidad con replay y trazas históricas.",
+          "Renombrar configuración y ruta para cubrir request/response; probar apagado por defecto y alias legacy según se acuerde."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"],
+  "missing_documents": [],
+  "owner": "Agente implementador; aprobaciones de documentos a cargo del usuario"
+}

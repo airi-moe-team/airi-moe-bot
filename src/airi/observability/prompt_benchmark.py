@@ -81,7 +81,7 @@ class BenchmarkSample:
     variant: PromptVariant
     pair_index: int
     order: str
-    thinking_mode: str = "on"
+    thinking_mode: str = "auto"
     max_output_tokens: int | None = None
     status: str = "ok"
     prompt_sha256: str | None = None
@@ -276,7 +276,7 @@ async def run_prompt_benchmark(
     quality_reviewer: Callable[[str, str, PromptVariant], Mapping[str, bool | None]]
     | None = None,
     metrics_reader: Callable[[], Awaitable[Mapping]] | None = None,
-    thinking_mode: str = "on",
+    thinking_mode: str = "auto",
     max_output_tokens: int | None = None,
 ) -> list[BenchmarkSample]:
     """Ejecuta pares limpios; exige un perfil global de thinking verificable."""
@@ -284,7 +284,7 @@ async def run_prompt_benchmark(
         raise ValueError(f"El benchmark requiere al menos cinco pares (recibido: {pair_count})")
     if thinking_mode not in LLM_THINKING_MODES:
         raise ValueError(
-            "thinking_mode debe ser 'auto', 'on', 'low', 'medium' o 'high'"
+            "thinking_mode debe ser 'auto', 'low', 'medium' o 'high'"
         )
     if getattr(llm, "thinking_mode", None) != thinking_mode:
         raise ValueError(
@@ -600,7 +600,7 @@ def main(argv=None) -> int:
     parser.add_argument("trace", help="Ruta a la traza de referencia")
     parser.add_argument("--pairs", type=int, default=MIN_PAIRS)
     parser.add_argument(
-        "--thinking-mode", choices=LLM_THINKING_MODES, default="on",
+        "--thinking-mode", choices=LLM_THINKING_MODES, default="auto",
         help="Perfil global fijado para esta corrida (por defecto on)",
     )
     parser.add_argument(

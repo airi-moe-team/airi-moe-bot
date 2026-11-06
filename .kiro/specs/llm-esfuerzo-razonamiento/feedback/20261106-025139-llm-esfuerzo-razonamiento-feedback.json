@@ -1,0 +1,20 @@
+{
+  "feature": "llm-esfuerzo-razonamiento",
+  "generated_at": "2026-11-06T02:51:39Z",
+  "items": [
+    {
+      "id": "FB-LLM-PRESET-001",
+      "title": "Consolidar modos de razonamiento en presets cerrados",
+      "severity": "major",
+      "impact": "El modo on era redundante y los presupuestos low/medium/high podían modificarse independientemente, haciendo que un preset no tuviera significado estable.",
+      "recommendation": "Admitir solo auto, low, medium y high; fijar y agrupar low=256, medium=1024 y high=4096, ignorando variables legacy de presupuesto. Auto usa low en turnos rápidos y el default del servidor en turnos normales.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": ["Eliminar on del conjunto admitido y tratarlo como inválido con fallback a auto.", "Definir presupuestos fijos, no configurables mediante variables de entorno."],
+        "design": ["Agrupar los valores de presupuestos en LLM_REASONING_PRESETS; conservar auto como política especial por turno."],
+        "tasks": ["Actualizar adaptador, benchmark, pruebas, .env, .env.example y README; comprobar que variables legacy no cambian los presets."]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

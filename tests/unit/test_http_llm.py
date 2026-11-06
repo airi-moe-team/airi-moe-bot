@@ -10,6 +10,7 @@ import pytest
 
 from airi.adapters import http_llm
 from airi.adapters.http_llm import DEFAULT_MAX_OUTPUT_TOKENS, HttpLlmClient
+from airi.ports.llm import LLMCallContext, PayloadCaptureResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,6 +32,12 @@ def _clear_llm_env(monkeypatch):
         "LLM_RESPONSE_FORMAT",
         "LLM_HEALTH_CHECK",
         "LLM_THINKING_MODE",
+        "LLM_REASONING_BUDGET_LOW_TOKENS",
+        "LLM_REASONING_BUDGET_MEDIUM_TOKENS",
+        "LLM_REASONING_BUDGET_HIGH_TOKENS",
+        "LLM_REASONING_OUTPUT_RESERVE_TOKENS",
+        "AIRI_TRACE_LLM_PAYLOAD_DIR",
+        "TRACE_LLM_PAYLOAD_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -320,7 +327,10 @@ def test_native_tools_reject_schema_and_streaming():
         run(client.chat_with_meta(messages, tools=[{}], stream=True))
 
 
-def test_non_stream_response_preserves_reasoning_presence_and_server_timings():
+def test_non_stream_response_preserves_reasoning_presence_and_server_timings(tmp_path):
+    from airi.observability.llm_payload_capture import LocalLlmPayloadCapture, load_llm_response
+    from airi.ports.llm import LLMCallContext
+
     session = _make_async_session({
         "choices": [{"message": {
             "content": '{"reply":"hola"}',
@@ -332,16 +342,46 @@ def test_non_stream_response_preserves_reasoning_presence_and_server_timings():
         },
         "timings": {"prompt_ms": 12.5, "predicted_ms": 30, "ignored": "x"},
     })
-    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+    capture = LocalLlmPayloadCapture(tmp_path)
+    context = LLMCallContext("reasoning-nonstream", "primary", 1)
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session,
+                           payload_capture=capture)
 
-    content, meta = run(client.chat_with_meta([{"role": "user", "content": "hola"}]))
+    content, meta = run(client.chat_with_meta([{"role": "user", "content": "hola"}],
+                                              call_context=context))
 
     assert content == '{"reply":"hola"}'
     assert meta.reasoning_present is True
     assert meta.reasoning_tokens == 4
     assert meta.reasoning_budget_tokens is None
     assert meta.server_timings == {"prompt_ms": 12.5, "predicted_ms": 30}
+    output = load_llm_response(
+        capture.base_dir / context.response_capture.artifact_ref,
+        correlation_id=context.correlation_id, call_index=1,
+        sha256=context.response_capture.sha256,
+    )
+    assert output["content"] == content
+    assert output["reasoning_content"] == "no persistir reasoning"
     assert meta.ttft_ms is None
+
+
+def test_non_stream_response_without_reasoning_omits_optional_artifact_field(tmp_path):
+    from airi.observability.llm_payload_capture import LocalLlmPayloadCapture, load_llm_response
+    from airi.ports.llm import LLMCallContext
+
+    session = _make_async_session({"choices": [{"message": {"content": "visible"}}]})
+    capture = LocalLlmPayloadCapture(tmp_path)
+    context = LLMCallContext("without-reasoning", "primary", 1)
+    client = HttpLlmClient("http://localhost:7000", session, payload_capture=capture)
+
+    run(client.chat_with_meta([], call_context=context))
+    output = load_llm_response(
+        tmp_path / context.response_capture.artifact_ref,
+        correlation_id=context.correlation_id, call_index=1,
+        sha256=context.response_capture.sha256,
+    )
+
+    assert "reasoning_content" not in output
 
 
 def test_streaming_chat_collects_content_ttft_and_optional_metadata(monkeypatch):
@@ -374,6 +414,37 @@ def test_streaming_chat_collects_content_ttft_and_optional_metadata(monkeypatch)
     assert meta.reasoning_tokens == 4
     assert meta.server_timings["prompt_ms"] == 11.5
     assert meta.usage["prompt_tokens"] == 12
+
+
+def test_streaming_captures_assembled_response_not_sse():
+    from airi.ports.llm import LLMCallContext, PayloadCaptureResult
+
+    class Capture:
+        async def capture(self, context, payload):
+            return PayloadCaptureResult("captured", "request", "a" * 64)
+
+        async def capture_response(self, context, output):
+            self.output = output
+            return PayloadCaptureResult("captured", "response", "b" * 64)
+
+    capture = Capture()
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"reasoning_content":"think-1"}}]}\n\n',
+        b'data: {"choices":[{"delta":{"reasoning_content":"think-2"}}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"first"}}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"second"},"finish_reason":"stop"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ])
+    context = LLMCallContext("cid", "primary", 1)
+    client = HttpLlmClient("http://localhost:7000", session, payload_capture=capture)
+
+    content, _ = run(client.chat_with_meta([{"role": "user", "content": "x"}],
+                                           stream=True, call_context=context))
+
+    assert content == "firstsecond"
+    assert capture.output["content"] == content
+    assert capture.output["reasoning_content"] == "think-1think-2"
+    assert context.response_capture.artifact_ref == "response"
 
 
 def test_streaming_sse_parser_accepts_fragmented_network_chunks():
@@ -558,6 +629,8 @@ def test_global_budget_is_recorded_in_response_metadata(monkeypatch, mode, budge
     [("low", 256), ("medium", 1024), ("high", 4096)],
 )
 def test_output_cap_reserves_tokens_after_reasoning_budget(monkeypatch, mode, budget):
+    monkeypatch.setenv("LLM_REASONING_OUTPUT_RESERVE_TOKENS", "1")
+    monkeypatch.setenv(f"LLM_REASONING_BUDGET_{mode.upper()}_TOKENS", "999")
     session = _make_async_session()
     client = HttpLlmClient(
         base_url="http://localhost:8080",
@@ -569,6 +642,7 @@ def test_output_cap_reserves_tokens_after_reasoning_budget(monkeypatch, mode, bu
     _chat(client)
 
     assert session._captured["thinking_budget_tokens"] == budget
+    assert session._captured["max_tokens"] == budget + 512
     assert session._captured["max_tokens"] >= budget + 512
 
 
@@ -592,7 +666,7 @@ def test_profile_openai_compatible_omits_chat_template_kwargs(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Modo de razonamiento: LLM_THINKING_MODE (auto|on|low|medium|high)
+# Modo de razonamiento: LLM_THINKING_MODE (auto|low|medium|high)
 # ---------------------------------------------------------------------------
 
 
@@ -606,7 +680,7 @@ def test_thinking_mode_default_is_auto(monkeypatch, mode):
     assert client.thinking_mode == "auto"
 
 
-@pytest.mark.parametrize("mode", ["on", "low", "medium", "high", "AUTO", " On "])
+@pytest.mark.parametrize("mode", ["auto", "low", "medium", "high", "AUTO", " LOW "])
 def test_reads_llm_thinking_mode_from_env(monkeypatch, mode):
     monkeypatch.setenv("LLM_THINKING_MODE", mode)
     client = HttpLlmClient(base_url="http://localhost:8080", session=_make_session())
@@ -614,7 +688,7 @@ def test_reads_llm_thinking_mode_from_env(monkeypatch, mode):
     assert client.thinking_mode == expected
 
 
-@pytest.mark.parametrize("value", ["abc", "2", "off"])
+@pytest.mark.parametrize("value", ["abc", "2", "off", "on"])
 def test_invalid_thinking_mode_fallback(monkeypatch, value, caplog):
     monkeypatch.setenv("LLM_THINKING_MODE", value)
     with caplog.at_level(logging.WARNING):
@@ -633,7 +707,7 @@ def test_empty_thinking_mode_is_auto_silently(monkeypatch, value):
     assert client.thinking_mode == "auto"
 
 
-@pytest.mark.parametrize("mode", ["on", "low", "medium", "high"])
+@pytest.mark.parametrize("mode", ["low", "medium", "high"])
 def test_budget_modes_keep_reasoning_on_quick_turns(monkeypatch, mode):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     monkeypatch.setenv("LLM_THINKING_MODE", mode)
@@ -648,7 +722,7 @@ def test_budget_modes_keep_reasoning_on_quick_turns(monkeypatch, mode):
         assert session._captured["thinking_budget_tokens"] == expected
 
 
-@pytest.mark.parametrize("mode", ["on", "auto", "low", "medium", "high"])
+@pytest.mark.parametrize("mode", ["auto", "low", "medium", "high"])
 @pytest.mark.parametrize("stream", [False, True])
 def test_explicit_repair_budget_overrides_global_per_call(
     monkeypatch, mode, stream
@@ -674,11 +748,11 @@ def test_explicit_repair_budget_overrides_global_per_call(
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
 
 
-def test_on_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
-    monkeypatch.setenv("LLM_THINKING_MODE", "on")
+def test_auto_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
+    monkeypatch.setenv("LLM_THINKING_MODE", "auto")
     session = _make_async_session()
     client = HttpLlmClient(
-        base_url="http://localhost:7000", session=session, thinking_mode="on"
+        base_url="http://localhost:7000", session=session, thinking_mode="auto"
     )
 
     run(client.chat_with_meta(
@@ -687,7 +761,7 @@ def test_on_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
     ))
 
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
-    assert "thinking_budget_tokens" not in session._captured
+    assert session._captured["thinking_budget_tokens"] == 256
 
 
 def test_reasoning_budget_is_not_sent_to_non_llama_profile():
@@ -696,7 +770,7 @@ def test_reasoning_budget_is_not_sent_to_non_llama_profile():
         base_url="http://localhost:7000",
         session=session,
         provider="openai-compatible",
-        thinking_mode="on",
+        thinking_mode="auto",
     )
 
     run(client.chat_with_meta(
@@ -725,6 +799,21 @@ def test_thinking_mode_auto_normal_turn_uses_server_budget(monkeypatch):
     _chat(client, quick_turn=False)
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
     assert "thinking_budget_tokens" not in session._captured
+
+
+@pytest.mark.parametrize("mode,expected", [("low", 256), ("medium", 1024), ("high", 4096)])
+def test_reasoning_presets_ignore_legacy_budget_environment(monkeypatch, mode, expected):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", mode)
+    monkeypatch.setenv("LLM_REASONING_BUDGET_LOW_TOKENS", "999")
+    monkeypatch.setenv("LLM_REASONING_BUDGET_MEDIUM_TOKENS", "999")
+    monkeypatch.setenv("LLM_REASONING_BUDGET_HIGH_TOKENS", "999")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:8080", session=session)
+
+    _chat(client)
+
+    assert session._captured["thinking_budget_tokens"] == expected
 
 
 @pytest.mark.parametrize("budget", [0, -1, True, 1.5])
@@ -821,7 +910,6 @@ def test_response_format_strict_json_schema(monkeypatch):
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
     _chat(
         client,
-        temperature=0.5,
         schema={"type": "object", "properties": {}},
         strict_schema=True,
     )
@@ -985,3 +1073,93 @@ def test_non_streaming_response_has_no_delta_counts():
 
     assert meta.reasoning_deltas is None
     assert meta.content_deltas is None
+
+
+def test_payload_capture_matches_effective_non_streaming_post_body():
+    class Capture:
+        def __init__(self):
+            self.payload = None
+
+        async def capture(self, context, payload):
+            self.payload = json.loads(json.dumps(payload))
+            return PayloadCaptureResult(
+                status="captured", artifact_ref="cid/call.json", sha256="abc"
+            )
+
+    session = _make_async_session()
+    capture = Capture()
+    client = HttpLlmClient(
+        base_url="http://localhost:7000",
+        session=session,
+        api_key="top-secret-header-only",
+        payload_capture=capture,
+    )
+    context = LLMCallContext("cid", "primary", 1)
+
+    _content, meta = run(client.chat_with_meta(
+        [{"role": "user", "content": "exact prompt"}],
+        strict_schema=True,
+        schema={"type": "object"},
+        call_context=context,
+    ))
+
+    assert capture.payload == session._captured
+    assert capture.payload["model"] == client.model
+    assert capture.payload["response_format"]["json_schema"]["strict"] is True
+    assert "top-secret-header-only" not in json.dumps(capture.payload)
+    assert meta.payload_capture.artifact_ref == "cid/call.json"
+    assert context.payload_capture.status == "captured"
+
+
+def test_streaming_capture_failure_does_not_block_post():
+    class BrokenCapture:
+        async def capture(self, context, payload):
+            raise OSError("secret content must not escape")
+
+    session = _make_streaming_session([b"data: [DONE]\n\n"])
+    context = LLMCallContext("cid", "primary", 1)
+    client = HttpLlmClient(
+        base_url="http://localhost:7000", session=session,
+        payload_capture=BrokenCapture(),
+    )
+
+    _content, meta = run(client.chat_with_meta(
+        [{"role": "user", "content": "prompt"}],
+        stream=True,
+        call_context=context,
+    ))
+
+    assert session._captured["stream"] is True
+    assert context.payload_capture.status == "failed"
+    assert context.payload_capture.error == "OSError"
+    assert meta.payload_capture.status == "failed"
+
+
+def test_build_llm_payload_capture_is_opt_in(monkeypatch, tmp_path):
+    monkeypatch.delenv("AIRI_TRACE_LLM_ARTIFACTS_DIR", raising=False)
+    monkeypatch.delenv("TRACE_LLM_ARTIFACTS_DIR", raising=False)
+    monkeypatch.delenv("AIRI_TRACE_LLM_PAYLOAD_DIR", raising=False)
+    monkeypatch.delenv("TRACE_LLM_PAYLOAD_DIR", raising=False)
+    without_capture = http_llm.build_llm(_make_session())
+    assert without_capture.payload_capture is None
+
+    monkeypatch.setenv("TRACE_LLM_PAYLOAD_DIR", str(tmp_path))
+    with_capture = http_llm.build_llm(_make_session())
+    assert with_capture.payload_capture is not None
+    assert with_capture.payload_capture.base_dir == tmp_path
+
+    preferred_dir = tmp_path / "preferred"
+    monkeypatch.setenv("AIRI_TRACE_LLM_PAYLOAD_DIR", str(preferred_dir))
+    preferred = http_llm.build_llm(_make_session())
+    assert preferred.payload_capture.base_dir == preferred_dir
+
+    new_dir = tmp_path / "new-name"
+    monkeypatch.setenv("TRACE_LLM_ARTIFACTS_DIR", str(new_dir))
+    monkeypatch.delenv("AIRI_TRACE_LLM_PAYLOAD_DIR", raising=False)
+    new_name = http_llm.build_llm(_make_session())
+    assert new_name.payload_capture.base_dir == new_dir
+
+    canonical_dir = tmp_path / "canonical"
+    monkeypatch.setenv("AIRI_TRACE_LLM_ARTIFACTS_DIR", str(canonical_dir))
+    canonical = http_llm.build_llm(_make_session())
+    assert canonical.payload_capture.base_dir == canonical_dir

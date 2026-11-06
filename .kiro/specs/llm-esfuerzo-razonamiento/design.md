@@ -2,7 +2,7 @@
 
 ## Resumen
 
-La feature reemplaza el apagado de razonamiento por los modos `auto`, `on`, `low`, `medium` y `high`. Los tres niveles graduados son topes de tokens por petición: propuesta inicial `low=256`, `medium=1024`, `high=4096`. `auto` mantiene reasoning en todos los turnos, usando el presupuesto low en turnos rápidos y el default del servidor en turnos normales; `on` mantiene reasoning con el default del servidor. Reparaciones e introspecciones estructuradas solicitan low.
+La feature reemplaza el apagado de razonamiento por los presets `auto`, `low`, `medium` y `high`. Los tres niveles graduados son topes fijos de tokens por petición: `low=256`, `medium=1024`, `high=4096`; no se pueden alterar mediante variables de entorno independientes. `auto` mantiene reasoning en todos los turnos, usando el preset low en turnos rápidos y el default del servidor en turnos normales. Reparaciones e introspecciones estructuradas solicitan low.
 
 El presupuesto registrado es el límite resuelto y enviado por el cliente, no una afirmación de que el servidor lo obedeció. La evidencia observada continúa registrándose por separado mediante `reasoning_present`, `reasoning_tokens` y usage. El cliente nunca envía `enable_thinking=false` ni cambia la configuración del servidor.
 
@@ -56,7 +56,7 @@ sequenceDiagram
 
 1. **Decisión — representar límites por presupuesto y prohibir el apagado.** El puerto recibe `reasoning_budget_tokens: int | None` como override local y `quick_turn: bool` como clasificación. Se retira `disable_thinking`/`force_disable_thinking`; el adaptador fija `enable_thinking=true` para `llama` en todas las llamadas. El presupuesto local es por petición y no altera el modo global.
 
-2. **Decisión — resolver presupuesto por modo y propósito.** En `llama`, override local prevalece para esa petición. `low/medium/high` resuelven a 256/1024/4096 tokens; `auto` rápido resuelve a 256 y `auto` normal/`on` dejan presupuesto sin especificar para usar el default del servidor. Reparaciones y `self_service` fuerzan 256 tokens localmente. En todos los casos reasoning sigue activo. Otros proveedores no reciben campos propietarios y metadatos de presupuesto son nulos.
+2. **Decisión — resolver presupuesto por preset y propósito.** En `llama`, override local prevalece solo para esa petición. `low/medium/high` resuelven a los valores fijos agrupados 256/1024/4096; `auto` rápido resuelve al preset low y `auto` normal deja presupuesto sin especificar para usar el default del servidor. Reparaciones y `self_service` fuerzan el preset low localmente. En todos los casos reasoning sigue activo. Otros proveedores no reciben campos propietarios y metadatos de presupuesto son nulos.
 
 3. **Decisión — registrar límite enviado, no inferir cumplimiento.** `LLMMeta` y el registro de llamada exponen `reasoning_budget_tokens` como presupuesto resuelto/enviado por el cliente. `reasoning_present` y `reasoning_tokens` son evidencia independiente. Se añade un campo nullable a `llm_calls`, sin guardar texto sensible.
 
@@ -74,9 +74,8 @@ El diseño usa Python, el `Protocol` existente, el adaptador `aiohttp`, configur
 
 ### Configuración y adaptador (`src/airi/adapters/http_llm.py`)
 
-- `LLM_THINKING_MODES` será `("auto", "on", "low", "medium", "high")`; `off` se considera inválido y recae en `auto` con warning, como cualquier valor desconocido.
-- `low/medium/high` seleccionan topes de 256/1024/4096 tokens y mantienen reasoning activo.
-- `on` mantiene reasoning activo y deja el presupuesto al default del servidor.
+- `LLM_THINKING_MODES` será `("auto", "low", "medium", "high")`; `on`, `off` y cualquier valor inválido recaen en `auto` con warning.
+- Un mapa inmutable y agrupado define `low/medium/high` como topes fijos de 256/1024/4096 tokens; las variables de entorno de presupuestos y de reserva dejan de configurar esos valores. La reserva de salida es fija en 512 tokens.
 - `auto` mantiene reasoning activo: turnos rápidos usan 256 tokens y turnos normales usan el default del servidor.
 - En `llama`, enviar `chat_template_kwargs.enable_thinking=true` y, cuando haya límite, `thinking_budget_tokens` por petición. No enviar `reasoning_effort`.
 - Resolver precedencia: override local, presupuesto del modo, luego default del servidor. Rechazar overrides negativos antes del POST.
@@ -95,7 +94,7 @@ El diseño usa Python, el `Protocol` existente, el adaptador `aiohttp`, configur
 
 ### Benchmark y configuración
 
-- `run_prompt_benchmark` valida `auto`, `on`, `low`, `medium`, `high` y que coincida con `llm.thinking_mode`.
+- `run_prompt_benchmark` valida `auto`, `low`, `medium`, `high` y que coincida con `llm.thinking_mode`.
 - Las muestras/resúmenes del benchmark conservan el modo global seleccionado y metadatos por llamada sin añadir contenido sensible.
 - Actualizar `.env.example` y README; `.env` local no se modifica automáticamente para evitar reemplazar configuración personal.
 
