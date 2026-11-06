@@ -1614,11 +1614,11 @@ class ConversationService:
         traza refleje cuántas peticiones se hicieron de verdad y por qué.
         """
         stream_kwargs = {"stream": True} if stream_llm else {}
-        # Cada reparación solicita presupuesto bajo, sin apagar reasoning. El
+        # Cada reparación solicita presupuesto medium, sin apagar reasoning. El
         # override queda acotado a esta petición y no cambia el modo global.
         is_repair = purpose != "primary"
         requested_reasoning_budget = (
-            LLM_REASONING_PRESETS["low"]
+            LLM_REASONING_PRESETS["medium"]
             if is_repair
             else reasoning_budget_tokens
         )
@@ -1807,7 +1807,7 @@ class ConversationService:
         if mode == "high":
             return LLM_REASONING_PRESETS["high"]
         if mode == "auto" and quick_turn:
-            return LLM_REASONING_PRESETS["low"]
+            return LLM_REASONING_PRESETS["medium"]
         return None
 
     async def _generate(

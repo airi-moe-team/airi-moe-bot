@@ -53,7 +53,7 @@ def test_review_usa_prompt_de_juez_sin_personalidad_y_contexto_etiquetado():
     assert "Me gusta el ramen" in user_content
     assert "BORRADOR" in user_content
     assert calls[0]["purpose"] == "conversation_review"
-    assert llm.calls[0]["reasoning_budget_tokens"] == 256
+    assert llm.calls[0]["reasoning_budget_tokens"] == 1024
 
 
 def test_review_falla_abierto_si_el_llm_lanza():

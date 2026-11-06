@@ -760,7 +760,7 @@ def test_explicit_repair_budget_overrides_global_per_call(
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
 
 
-def test_auto_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
+def test_auto_mode_uses_medium_reasoning_budget_on_quick_turns(monkeypatch):
     monkeypatch.setenv("LLM_THINKING_MODE", "auto")
     session = _make_async_session()
     client = HttpLlmClient(
@@ -773,7 +773,7 @@ def test_auto_mode_keeps_reasoning_active_even_for_quick_turns(monkeypatch):
     ))
 
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
-    assert session._captured["thinking_budget_tokens"] == 256
+    assert session._captured["thinking_budget_tokens"] == 1024
 
 
 def test_reasoning_budget_is_not_sent_to_non_llama_profile():
@@ -793,14 +793,14 @@ def test_reasoning_budget_is_not_sent_to_non_llama_profile():
     assert "chat_template_kwargs" not in session._captured
 
 
-def test_thinking_mode_auto_keeps_reasoning_on_quick_turns_with_low_budget(monkeypatch):
+def test_thinking_mode_auto_uses_medium_on_quick_turns(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     monkeypatch.setenv("LLM_THINKING_MODE", "auto")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
     _chat(client, quick_turn=True)
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
-    assert session._captured["thinking_budget_tokens"] == 256
+    assert session._captured["thinking_budget_tokens"] == 1024
 
 
 def test_thinking_mode_auto_normal_turn_uses_server_budget(monkeypatch):

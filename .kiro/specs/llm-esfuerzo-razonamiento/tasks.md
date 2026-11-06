@@ -18,7 +18,7 @@
 - [x] 1.3 Resolver y emitir el presupuesto por modo y proveedor
   - Probar la precedencia del override local frente al modo y propósito global.
   - Mapear `low=256`, `medium=1024`, `high=4096`; mantener reasoning activo en cada modo.
-  - En `auto`, usar low en turno rápido y el presupuesto predeterminado en turno normal.
+  - En `auto`, usar medium en turno rápido y el presupuesto predeterminado en turno normal.
   - Para llama, enviar `chat_template_kwargs.enable_thinking=true` y el campo `thinking_budget_tokens` cuando aplique.
   - Verificar que los proveedores OpenAI y OpenAI-compatible no reciben extensiones propietarias.
   - Verificar que ninguna ruta envía `enable_thinking=false` ni cambia el modo global entre llamadas.
@@ -29,7 +29,7 @@
 - [x] 2. Mantener reasoning activo en reparaciones e introspección
 - [x] 2.1 Aplicar la resolución a llamadas de conversación
   - Mantener la señal `quick_turn` en la llamada primaria sin convertirla en un apagado global.
-  - Asignar presupuesto low a reparaciones de truncamiento, formato, cierre, respuesta vacía/repetida e incoherencia.
+  - Asignar presupuesto medium a reparaciones de truncamiento, formato, cierre, respuesta vacía/repetida e incoherencia.
   - Comprobar que los overrides de reparación son locales y que la siguiente petición vuelve al modo global.
   - Actualizar regresiones de conversación y payloads de reparaciones, incluyendo date glue.
   - _Requirements: 1.4, 2.6, 3.2, 3.4, 6.1, 6.2_
@@ -85,3 +85,10 @@
   - Actualizar pruebas, `.env`, `.env.example`, README y benchmark/configuración.
   - Ejecutar pruebas unitarias e integración relacionadas y Ruff.
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
+
+- [x] 7. Elevar a medium el presupuesto de `auto` rápido y reparaciones
+- [x] 7.1 Mantener intactos los modos explícitos y `self_service`
+  - `auto` rápido y reparaciones/review usan 1024 tokens; `auto` normal mantiene el default del servidor.
+  - Los modos explícitos low/medium/high conservan 256/1024/4096; `self_service` sigue usando low.
+  - Actualizar pruebas, README, `.env.example` y validar la suite.
+  - _Requirements: 1.5, 2.4, 2.6, 6.2_

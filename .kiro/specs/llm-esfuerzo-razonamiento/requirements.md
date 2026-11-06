@@ -14,7 +14,7 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 2. WHEN `LLM_THINKING_MODE` es `auto`, `low`, `medium` o `high` THEN la configuración SHALL normalizar y conservar el modo seleccionado.
 3. WHEN `LLM_THINKING_MODE` es `on`, `off` o cualquier valor inválido THEN la configuración SHALL advertir y recurrir a `auto`.
 4. WHEN el proveedor es `llama` y se realiza cualquier llamada THEN el cliente SHALL mantener reasoning activo y SHALL NOT enviar `enable_thinking=false`.
-5. WHEN el modo es `auto` y el turno es rápido THEN el cliente SHALL mantener reasoning activo y SHALL aplicar el presupuesto reducido definido para el perfil rápido.
+5. WHEN el modo es `auto` y el turno es rápido THEN el cliente SHALL mantener reasoning activo y SHALL solicitar `medium` (1024 tokens).
 6. THE presets `low`, `medium` y `high` SHALL mantener presupuestos fijos de 256, 1024 y 4096 tokens respectivamente, sin overrides por variables de entorno.
 7. WHEN el operador consulta la documentación THEN esta SHALL indicar que los presupuestos son topes, no garantías, y que se aplican solo al proveedor `llama`.
 
@@ -25,9 +25,10 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 1. WHEN el modo global o el override por llamada es `low` THEN el cliente SHALL solicitar un presupuesto de 256 tokens de razonamiento.
 2. WHEN el modo global o el override por llamada es `medium` THEN el cliente SHALL solicitar un presupuesto de 1024 tokens de razonamiento.
 3. WHEN el modo global o el override por llamada es `high` THEN el cliente SHALL solicitar un presupuesto de 4096 tokens de razonamiento.
-4. WHEN una llamada rápida en modo `auto` necesita presupuesto THEN el cliente SHALL solicitar el presupuesto `low` de 256 tokens y SHALL mantener reasoning activo.
+4. WHEN una llamada rápida en modo `auto` necesita presupuesto THEN el cliente SHALL solicitar el presupuesto `medium` de 1024 tokens y SHALL mantener reasoning activo.
 5. WHEN una llamada normal en modo `auto` no especifica presupuesto THEN el cliente SHALL usar el presupuesto predeterminado del servidor/template.
-6. WHEN la conversación ejecuta reparaciones o `self_service` realiza reflexión estructurada THEN la llamada SHALL solicitar `low` como override local y SHALL mantener reasoning activo.
+6. WHEN la conversación ejecuta una reparación o revisión de conversación THEN la llamada SHALL solicitar `medium` (1024 tokens) como override local y SHALL mantener reasoning activo.
+7. WHEN `self_service` realiza reflexión estructurada THEN la llamada SHALL solicitar `low` (256 tokens) como override local y SHALL mantener reasoning activo.
 7. WHEN el backend es llama.cpp THEN el adaptador SHALL enviar el campo de presupuesto por petición que soporte la versión instalada (propuesto: `thinking_budget_tokens`) y SHALL verificar que el presupuesto CLI no anule el override.
 8. WHEN el proveedor no es `llama` THEN el adaptador SHALL omitir extensiones propietarias y SHALL conservar el comportamiento compatible con dicho proveedor.
 
@@ -64,7 +65,7 @@ Airi debe conservar el razonamiento en todas sus llamadas al proveedor `llama`, 
 
 #### Criterios de aceptación
 1. WHEN se ejecutan pruebas unitarias e integración THEN SHALL verificar que `auto` rápido, llamadas primarias, reparaciones e introspecciones estructuradas no desactivan reasoning.
-2. WHEN una reparación o reintento se realiza THEN SHALL usar presupuesto `low` y no una bandera de apagado.
+2. WHEN una reparación o reintento se realiza THEN SHALL usar presupuesto `medium` y no una bandera de apagado.
 3. WHEN se ejecuta una llamada normal en modo `auto` THEN SHALL mantener el razonamiento activo y usar el default del servidor si no se especifica presupuesto.
 4. WHEN el operador consulta `.env.example` o README THEN SHALL ver la política de razonamiento siempre activo, el mapeo de niveles y la advertencia de compatibilidad del backend.
 

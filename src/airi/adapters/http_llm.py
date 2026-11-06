@@ -552,7 +552,7 @@ class HttpLlmClient:
             elif self.thinking_mode in LLM_REASONING_BUDGETS:
                 effective_reasoning_budget = LLM_REASONING_BUDGETS[self.thinking_mode]
             elif self.thinking_mode == "auto" and quick_turn:
-                effective_reasoning_budget = LLM_REASONING_BUDGETS["low"]
+                effective_reasoning_budget = LLM_REASONING_BUDGETS["medium"]
             payload["chat_template_kwargs"] = {"enable_thinking": True}
             if effective_reasoning_budget is not None:
                 payload["thinking_budget_tokens"] = effective_reasoning_budget

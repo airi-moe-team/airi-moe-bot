@@ -138,7 +138,7 @@ def test_short_turn_uses_compact_contract_and_output_cap():
     assert "FORMATO DE SALIDA OBLIGATORIO" not in prompt
     assert llm.calls[-1]["max_tokens"] == LLM_SHORT_MAX_TOKENS
     assert llm.calls[-1]["strict_schema"] is True
-    # El servicio marca el turno rápido; `auto` asigna low sin apagar reasoning.
+    # El servicio marca el turno rápido; `auto` asigna medium sin apagar reasoning.
     assert llm.calls[-1]["quick_turn"] is True
     assert llm.calls[-1]["reasoning_budget_tokens"] is None
     # El historial compartido conserva etiquetas, con su explicación breve.
@@ -797,7 +797,7 @@ def test_system_prompt_includes_affinity_and_user():
 # ---------------------------------------------------------------------------
 
 
-def test_truncated_generation_retries_with_low_effort():
+def test_truncated_generation_retries_with_medium_effort():
     state, _ = make_state()
     llm = FakeLLM(
         replies=["", llm_json("Me quedé pensando, pero aquí estoy.")],
@@ -813,7 +813,7 @@ def test_truncated_generation_retries_with_low_effort():
     assert result.skipped is False
     assert result.reply == "Me quedé pensando, pero aquí estoy."
     assert len(llm.calls) == 2
-    assert llm.calls[1]["reasoning_budget_tokens"] == 256
+    assert llm.calls[1]["reasoning_budget_tokens"] == 1024
     assert "sin razonar" not in llm.calls[1]["messages"][-1]["content"]
 
 
@@ -852,7 +852,7 @@ def test_truncated_session_turn_retries_and_keeps_stay_active():
     assert result.reply == "Sigo aquí."
     assert result.stay_active is False
     assert len(llm.calls) == 2
-    assert llm.calls[1]["reasoning_budget_tokens"] == 256
+    assert llm.calls[1]["reasoning_budget_tokens"] == 1024
     assert "stay_active" in llm.calls[1]["messages"][-1]["content"]
 
 
