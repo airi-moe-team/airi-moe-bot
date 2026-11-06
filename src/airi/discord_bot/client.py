@@ -986,13 +986,12 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
     busy_notice_at = {}  # uid -> timestamp del último aviso (anti-spam).
     relationships = RelationshipService(state)
 
-    async def request_llama(session, messages, *, schema, max_tokens=None, temperature):
+    async def request_llama(session, messages, *, schema, max_tokens=None):
         llm = build_llm(session, timeout=request_timeout, base_url=llm_base_url)
         text, _meta = await llm.chat_with_meta(
             messages,
             schema=schema,
             max_tokens=max_tokens,
-            temperature=temperature,
             reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
             strict_schema=True,
         )
@@ -1016,7 +1015,6 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
                 messages,
                 schema=SCENE_PROPOSAL_SCHEMA,
                 max_tokens=DATE_SCENE_MAX_TOKENS,
-                temperature=0.9,
             )
             parsed = extract_json_object(raw) if isinstance(raw, str) else None
             scenes = (
@@ -1081,7 +1079,6 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
                 messages,
                 schema=DATE_INVITATION_DECISION_SCHEMA,
                 max_tokens=max(256, DATE_SCENE_MAX_TOKENS),
-                temperature=0.7,
             )
             parsed = extract_json_object(raw) if isinstance(raw, str) else None
             decision = parse_date_invitation_decision(parsed)
@@ -1144,7 +1141,6 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
                 session,
                 messages,
                 schema=GIFT_JUDGE_SCHEMA,
-                temperature=0.7,
             )
         except Exception:
             log.exception("No se pudo consultar a Airi sobre el regalo")

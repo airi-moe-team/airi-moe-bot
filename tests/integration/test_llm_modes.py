@@ -23,7 +23,6 @@ ENV_KEYS = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "LLM_MAX_TOKENS_FIELD",
-    "LLM_SKIP_TEMPERATURE",
     "LLM_RESPONSE_FORMAT",
     "LLM_HEALTH_CHECK",
     "LLM_THINKING_MODE",
@@ -108,7 +107,7 @@ def test_llama_mode_payload_unchanged():
     assert session.captured_headers is None
     assert payload["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert "max_completion_tokens" not in payload
-    assert payload["temperature"] == 0.7
+    assert "temperature" not in payload
     assert payload["thinking_budget_tokens"] == 256
     assert payload["chat_template_kwargs"] == {"enable_thinking": True}
     assert payload["response_format"]["type"] == "json_schema"
@@ -139,7 +138,7 @@ def test_openai_mode_payload(monkeypatch):
     assert payload["max_completion_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert "max_tokens" not in payload
     assert "chat_template_kwargs" not in payload
-    assert payload["temperature"] == 0.7
+    assert "temperature" not in payload
     assert payload["response_format"]["type"] == "json_schema"
     assert reply == "¡gracias!"
     assert delta == 2

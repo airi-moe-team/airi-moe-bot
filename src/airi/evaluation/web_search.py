@@ -458,7 +458,6 @@ async def judge_web_search_records(llm, records: list[dict]) -> list[dict]:
             ],
             schema=SEMANTIC_JUDGE_SCHEMA,
             max_tokens=500,
-            temperature=0,
             quick_turn=True,
             strict_schema=True,
         )

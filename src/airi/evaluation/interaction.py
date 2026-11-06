@@ -598,11 +598,9 @@ def _llm_metadata(llm, base_url: str | None, model: str | None) -> dict:
         or getattr(llm, "base_url", None)
         or os.environ.get("LLM_BASE_URL", "http://127.0.0.1:7000")
     )
-    temperature = getattr(llm, "temperature", None)
     return {
         "model": resolved_model,
         "base_url": resolved_base,
-        "temperature": temperature,
     }
 
 

@@ -176,7 +176,7 @@ def test_prompt_variant_changes_only_system_message_not_quick_contract():
     current_call, candidate_call = (llm.calls[-1] for llm in llms)
     assert current_call["messages"][0]["content"] != candidate_call["messages"][0]["content"]
     assert current_call["messages"][1:] == candidate_call["messages"][1:]
-    for key in ("schema", "max_tokens", "temperature", "reasoning_budget_tokens", "quick_turn", "strict_schema"):
+    for key in ("schema", "max_tokens", "reasoning_budget_tokens", "quick_turn", "strict_schema"):
         assert current_call[key] == candidate_call[key]
     assert current_call["quick_turn"] is False
     assert current_call["max_tokens"] is None

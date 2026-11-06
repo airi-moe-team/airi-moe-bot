@@ -230,7 +230,6 @@ class LlmConfig:
     api_key: str = ""
     model: str = DEFAULT_MODEL
     max_tokens_field: str = "max_tokens"
-    skip_temperature: bool = False
     response_format: bool = True
     health_check: bool = True
     thinking_mode: str = "auto"
@@ -248,7 +247,6 @@ class LlmConfig:
             model=_env_str("LLM_MODEL", default=DEFAULT_MODEL),
             max_tokens_field=_env_str("LLM_MAX_TOKENS_FIELD")
             or default_max_tokens_field(provider),
-            skip_temperature=_env_flag("LLM_SKIP_TEMPERATURE", False),
             response_format=_env_flag("LLM_RESPONSE_FORMAT", True),
             health_check=_env_flag("LLM_HEALTH_CHECK", True),
             thinking_mode=resolve_thinking_mode(
@@ -276,7 +274,6 @@ def build_llm(
         provider=cfg.provider,
         api_key=cfg.api_key,
         max_tokens_field=cfg.max_tokens_field,
-        skip_temperature=cfg.skip_temperature,
         response_format=cfg.response_format,
         thinking_mode=cfg.thinking_mode,
     )
@@ -372,11 +369,9 @@ class HttpLlmClient:
         model: str | None = None,
         timeout: int | None = None,
         max_output_tokens: int | None = None,
-        temperature: float | None = None,
         provider: str | None = None,
         api_key: str | None = None,
         max_tokens_field: str | None = None,
-        skip_temperature: bool | None = None,
         response_format: bool | None = None,
         thinking_mode: str | None = None,
     ):
@@ -397,14 +392,6 @@ class HttpLlmClient:
             self.max_output_tokens = max_output_tokens
         else:
             self.max_output_tokens = env_int("LLM_MAX_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
-        if temperature is not None:
-            self.temperature = temperature
-        else:
-            try:
-                self.temperature = float(os.environ.get("LLM_TEMPERATURE", "0.6"))
-            except (ValueError, TypeError):
-                log.warning("LLM_TEMPERATURE tiene valor inválido, usando 0.6")
-                self.temperature = 0.6
         # Perfil de compatibilidad y diferencias de payload (ver LlmConfig).
         self.provider = resolve_provider(
             provider if provider is not None else os.environ.get("LLM_PROVIDER")
@@ -418,11 +405,6 @@ class HttpLlmClient:
             max_tokens_field
             or _env_str("LLM_MAX_TOKENS_FIELD")
             or default_max_tokens_field(self.provider)
-        )
-        self.skip_temperature = (
-            skip_temperature
-            if skip_temperature is not None
-            else _env_flag("LLM_SKIP_TEMPERATURE", False)
         )
         self.response_format = (
             response_format
@@ -445,6 +427,8 @@ class HttpLlmClient:
         """
         url = chat_completions_url(self.base_url)
         payload = {"model": self.model, **payload}
+        # La temperatura se delega al proveedor, incluso para payloads directos.
+        payload.pop("temperature", None)
         kwargs: dict = {"timeout": aiohttp.ClientTimeout(total=self.timeout)}
         if self.api_key:
             kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
@@ -462,13 +446,12 @@ class HttpLlmClient:
             response.raise_for_status()
             return await response.json()
 
-    async def chat(self, messages, *, schema=None, max_tokens=None, temperature=None,
+    async def chat(self, messages, *, schema=None, max_tokens=None,
                    reasoning_budget_tokens: int | None = None,
                    quick_turn: bool = False,
                    strict_schema: bool = False,
                    tools=None, tool_choice=None):
         content, _meta = await self.chat_with_meta(
-            messages, schema=schema, max_tokens=max_tokens, temperature=temperature,
             reasoning_budget_tokens=reasoning_budget_tokens,
             quick_turn=quick_turn,
             strict_schema=strict_schema,
@@ -478,7 +461,6 @@ class HttpLlmClient:
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
-                             temperature=None,
                              reasoning_budget_tokens: int | None = None,
                              quick_turn: bool = False, strict_schema: bool = False,
                              stream: bool = False, tools=None, tool_choice=None):
@@ -506,10 +488,6 @@ class HttpLlmClient:
             self.max_tokens_field: effective_max_tokens,
             "stream": bool(stream),
         }
-        if not self.skip_temperature:
-            payload["temperature"] = (
-                self.temperature if temperature is None else temperature
-            )
         if stream and self.provider in ("llama", "openai"):
             # Sin esto el servidor no manda `usage` en SSE y el conteo de
             # tokens de una corrida en streaming queda desconocido.

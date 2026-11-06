@@ -203,7 +203,6 @@ class WebSearchService:
             tools=[WEB_SEARCH_TOOL],
             tool_choice="auto",
             max_tokens=SEARCH_QUERY_MAX_TOKENS,
-            temperature=0.2,
             reasoning_budget_tokens=LLM_REASONING_BUDGET_LOW_TOKENS,
             quick_turn=True,
         )

@@ -46,16 +46,16 @@ class FakeLLM:
         # Respuestas crudas opcionales para la decisión (para simular que el
         # modelo contesta en texto en vez de llamar a la herramienta).
         self.decision_replies = list(decision_replies or [])
-        self.calls = []  # dicts con messages/schema/max_tokens/temperature/...
+        self.calls = []  # dicts con messages/schema/max_tokens/...
         self.decision_calls = []  # llamadas de tool-decision separadas
 
     async def chat(self, messages, *, schema=None, max_tokens=None,
-                   temperature=None, reasoning_budget_tokens=None, quick_turn=False,
+                   reasoning_budget_tokens=None, quick_turn=False,
                    strict_schema=False, stream=False, tools=None,
                    tool_choice=None):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens,
-            temperature=temperature, reasoning_budget_tokens=reasoning_budget_tokens,
+            reasoning_budget_tokens=reasoning_budget_tokens,
             quick_turn=quick_turn,
             strict_schema=strict_schema, stream=stream,
             tools=tools, tool_choice=tool_choice,
@@ -63,14 +63,13 @@ class FakeLLM:
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
-                             temperature=None, reasoning_budget_tokens=None,
+                             reasoning_budget_tokens=None,
                              quick_turn=False, strict_schema=False, stream=False,
                              tools=None, tool_choice=None):
         call = {
             "messages": messages,
             "schema": schema,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "reasoning_budget_tokens": reasoning_budget_tokens,
             "quick_turn": quick_turn,
             "strict_schema": strict_schema,

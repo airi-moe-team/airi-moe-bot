@@ -22,14 +22,12 @@ def _clear_llm_env(monkeypatch):
     for key in (
         "LLM_MODEL",
         "LLM_TIMEOUT",
-        "LLM_TEMPERATURE",
         "LLM_MAX_TOKENS",
         "LLM_PROVIDER",
         "LLM_BASE_URL",
         "LLM_API_KEY",
         "OPENAI_API_KEY",
         "LLM_MAX_TOKENS_FIELD",
-        "LLM_SKIP_TEMPERATURE",
         "LLM_RESPONSE_FORMAT",
         "LLM_HEALTH_CHECK",
         "LLM_THINKING_MODE",
@@ -58,7 +56,6 @@ def test_defaults_no_env():
     )
     assert client.model == "Qwen3.6-35B-A3B-MTP-UD-IQ3_S"
     assert client.timeout == 300
-    assert client.temperature == 0.6
     assert client.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS
 
 
@@ -85,15 +82,6 @@ def test_reads_llm_timeout_from_env(monkeypatch):
     assert client.timeout == 600
 
 
-def test_reads_llm_temperature_from_env(monkeypatch):
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.85")
-    client = HttpLlmClient(
-        base_url="http://localhost:8080",
-        session=_make_session(),
-    )
-    assert client.temperature == 0.85
-
-
 def test_reads_llm_max_tokens_from_env(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
     client = HttpLlmClient(
@@ -116,16 +104,6 @@ def test_invalid_timeout_fallback(monkeypatch, value):
         session=_make_session(),
     )
     assert client.timeout == 300
-
-
-@pytest.mark.parametrize("value", ["abc", "", "   ", "xyz"])
-def test_invalid_temperature_fallback(monkeypatch, value):
-    monkeypatch.setenv("LLM_TEMPERATURE", value)
-    client = HttpLlmClient(
-        base_url="http://localhost:8080",
-        session=_make_session(),
-    )
-    assert client.temperature == 0.6
 
 
 @pytest.mark.parametrize("value", ["abc", "", "   ", "1.2.3"])
@@ -163,16 +141,6 @@ def test_explicit_timeout_overrides_env(monkeypatch):
     assert client.timeout == 120
 
 
-def test_explicit_temperature_overrides_env(monkeypatch):
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.1")
-    client = HttpLlmClient(
-        base_url="http://localhost:8080",
-        session=_make_session(),
-        temperature=0.95,
-    )
-    assert client.temperature == 0.95
-
-
 def test_explicit_max_tokens_overrides_env(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS", "9999")
     client = HttpLlmClient(
@@ -192,16 +160,6 @@ def test_none_explicit_uses_env(monkeypatch):
         timeout=None,
     )
     assert client.timeout == 420
-
-
-def test_none_explicit_uses_env_temperature(monkeypatch):
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.42")
-    client = HttpLlmClient(
-        base_url="http://localhost:8080",
-        session=_make_session(),
-        temperature=None,
-    )
-    assert client.temperature == 0.42
 
 
 def test_none_explicit_uses_env_max_tokens(monkeypatch):
@@ -297,7 +255,6 @@ def test_payload_uses_max_output_tokens():
     run(
         client.chat_with_meta(
             [{"role": "user", "content": "hi"}],
-            temperature=0.5,
         )
     )
     payload = session._captured
@@ -460,7 +417,6 @@ def test_payload_explicit_max_tokens_overrides_adapter():
         client.chat_with_meta(
             [{"role": "user", "content": "hi"}],
             max_tokens=42,
-            temperature=0.5,
         )
     )
     payload = session._captured
@@ -479,7 +435,6 @@ def test_payload_max_tokens_zero_uses_adapter():
         client.chat_with_meta(
             [{"role": "user", "content": "hi"}],
             max_tokens=0,
-            temperature=0.5,
         )
     )
     payload = session._captured
@@ -497,7 +452,6 @@ def test_payload_llm_max_tokens_minus_one_is_unlimited(monkeypatch):
     run(
         client.chat_with_meta(
             [{"role": "user", "content": "hi"}],
-            temperature=0.5,
         )
     )
     payload = session._captured
@@ -519,7 +473,6 @@ def test_payload_llm_max_tokens_zero_is_no_output(monkeypatch):
     run(
         client.chat_with_meta(
             [{"role": "user", "content": "hi"}],
-            temperature=0.5,
         )
     )
     payload = session._captured
@@ -538,14 +491,14 @@ def test_post_sends_bearer_header_when_api_key():
         session=session,
         api_key="sk-test-123",
     )
-    run(client.chat_with_meta([{"role": "user", "content": "hi"}], temperature=0.5))
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
     assert session._captured_headers == {"Authorization": "Bearer sk-test-123"}
 
 
 def test_post_omits_headers_without_api_key():
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    run(client.chat_with_meta([{"role": "user", "content": "hi"}], temperature=0.5))
+    run(client.chat_with_meta([{"role": "user", "content": "hi"}]))
     assert session._captured_headers is None
 
 
@@ -579,7 +532,7 @@ def test_profile_llama_sends_reasoning_budget_and_never_disables(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, temperature=0.5, reasoning_budget_tokens=256)
+    _chat(client, reasoning_budget_tokens=256)
     assert session._captured["thinking_budget_tokens"] == 256
     assert session._captured["chat_template_kwargs"] == {"enable_thinking": True}
     assert "reasoning_effort" not in session._captured
@@ -624,7 +577,7 @@ def test_profile_openai_omits_chat_template_kwargs(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
-    _chat(client, temperature=0.5, reasoning_budget_tokens=256)
+    _chat(client, reasoning_budget_tokens=256)
     assert "chat_template_kwargs" not in session._captured
     assert "thinking_budget_tokens" not in session._captured
 
@@ -798,7 +751,7 @@ def test_profile_llama_uses_max_tokens_field(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "llama")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, temperature=0.5)
+    _chat(client)
     assert session._captured["max_tokens"] == client.max_output_tokens
     assert "max_completion_tokens" not in session._captured
 
@@ -808,7 +761,7 @@ def test_profile_openai_uses_max_completion_tokens(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
-    _chat(client, temperature=0.5)
+    _chat(client)
     assert session._captured["max_completion_tokens"] == client.max_output_tokens
     assert "max_tokens" not in session._captured
 
@@ -817,7 +770,7 @@ def test_profile_openai_compatible_uses_max_tokens(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://openrouter.ai/api/v1", session=session)
-    _chat(client, temperature=0.5)
+    _chat(client)
     assert session._captured["max_tokens"] == client.max_output_tokens
     assert "max_completion_tokens" not in session._captured
 
@@ -827,33 +780,37 @@ def test_max_tokens_field_env_overrides_profile_default(monkeypatch):
     monkeypatch.setenv("LLM_MAX_TOKENS_FIELD", "max_tokens")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
-    _chat(client, temperature=0.5)
+    _chat(client)
     assert session._captured["max_tokens"] == client.max_output_tokens
     assert "max_completion_tokens" not in session._captured
 
 
-def test_skip_temperature_omits_field_entirely(monkeypatch):
-    """LLM_SKIP_TEMPERATURE=1 → ni el default ni el explícito se envían."""
-    monkeypatch.setenv("LLM_SKIP_TEMPERATURE", "1")
+def test_temperature_is_always_delegated_to_provider(monkeypatch):
+    """Variables heredadas no controlan temperatura ni alteran el payload."""
+    monkeypatch.setenv("LLM_SKIP_TEMPERATURE", "0")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.15")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
-    _chat(client, temperature=0.9)
+    _chat(client)
     assert "temperature" not in session._captured
+    assert not hasattr(client, "temperature")
+    assert not hasattr(client, "skip_temperature")
 
 
-def test_temperature_sent_by_default(monkeypatch):
-    monkeypatch.setenv("LLM_SKIP_TEMPERATURE", "0")
+def test_post_strips_temperature_from_caller_payload():
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, temperature=0.9)
-    assert session._captured["temperature"] == 0.9
+
+    run(client.post({"messages": [], "temperature": 0.1}))
+
+    assert "temperature" not in session._captured
 
 
 def test_response_format_disabled_by_env(monkeypatch):
     monkeypatch.setenv("LLM_RESPONSE_FORMAT", "0")
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
-    _chat(client, temperature=0.5, schema={"type": "object"}, strict_schema=True)
+    _chat(client, schema={"type": "object"}, strict_schema=True)
     assert "response_format" not in session._captured
 
 
