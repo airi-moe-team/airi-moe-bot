@@ -36,6 +36,9 @@ def test_render_search_block_has_notes_but_no_urls_or_fixed_reply_examples():
     )
     assert "me picó la curiosidad" in block
     assert "90 euros" in block
+    assert "dato concreto y pertinente" in block
+    assert "al menos uno" in block
+    assert "no fuerces datos" in block
     assert "https://" not in block
     assert "Fuente 1" not in block
     assert "según las fuentes" in block

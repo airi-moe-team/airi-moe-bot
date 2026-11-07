@@ -176,6 +176,7 @@ WEB_SEARCH_SCENARIOS: tuple[WebSearchScenario, ...] = (
 SEMANTIC_FIELDS = (
     "query_resolved",
     "motivation_integrated",
+    "result_integrated",
     "personal_reaction",
     "report_style",
     "uncertainty_calibrated",
@@ -203,6 +204,9 @@ SEMANTIC_JUDGE_PROMPT = (
     "Devuelve solo JSON con estas claves exactas y valores yes/no/not_applicable:\n"
     "query_resolved (tema/query resuelve el contexto; not_applicable sin búsqueda);\n"
     "motivation_integrated (motivo queda integrado; not_applicable sin búsqueda);\n"
+    "result_integrated (yes si usa naturalmente al menos un dato concreto "
+    "de las notas cuando son pertinentes; no si omite notas pertinentes; "
+    "not_applicable si no hubo búsqueda o ninguna nota era útil/pertinente);\n"
     "personal_reaction (reacción subjetiva propia, no solo datos);\n"
     "report_style (yes si suena a informe/lista/fuentes);\n"
     "uncertainty_calibrated (duda adecuada si uncertainty_expected=true, "
@@ -260,6 +264,7 @@ def evaluate_web_search_records(records: Iterable[dict]) -> dict:
     positive_fields = (
         "query_resolved",
         "motivation_integrated",
+        "result_integrated",
         "personal_reaction",
         "uncertainty_calibrated",
     )

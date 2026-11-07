@@ -57,6 +57,7 @@ def test_evaluation_reports_search_decision_precision_recall_and_case_results():
 def test_semantic_judgment_parser_accepts_json_and_rejects_non_object():
     parsed = parse_semantic_judgment(
         '{"query_resolved":"yes","motivation_integrated":"yes",'
+        '"result_integrated":"yes",'
         '"personal_reaction":"yes","report_style":"no",'
         '"uncertainty_calibrated":"not_applicable",'
         '"unsupported_specific_claim":"no","canned_phrase":"no",'
@@ -74,6 +75,7 @@ def test_semantic_parser_normalizes_boolean_labels():
         json.dumps({
             "query_resolved": True,
             "motivation_integrated": True,
+            "result_integrated": True,
             "personal_reaction": True,
             "report_style": False,
             "uncertainty_calibrated": "not_applicable",
@@ -94,6 +96,7 @@ def test_evaluation_includes_semantic_score_only_when_judge_result_exists():
             "semantic_judgment": {
                 "query_resolved": "yes",
                 "motivation_integrated": "yes",
+                "result_integrated": "yes",
                 "personal_reaction": "yes",
                 "report_style": "no",
                 "uncertainty_calibrated": "yes",
@@ -103,7 +106,7 @@ def test_evaluation_includes_semantic_score_only_when_judge_result_exists():
         }
     ])
     assert report["semantic_cases_scored"] == 1
-    assert report["semantic_score"] == 7
+    assert report["semantic_score"] == 8
 
 
 def test_all_not_applicable_judgments_do_not_count_as_scored():
@@ -113,7 +116,8 @@ def test_all_not_applicable_judgments_do_not_count_as_scored():
         "actual_search": True,
         "semantic_judgment": {
             **{key: "not_applicable" for key in (
-                "query_resolved", "motivation_integrated", "personal_reaction",
+                "query_resolved", "motivation_integrated", "result_integrated",
+                "personal_reaction",
                 "report_style", "uncertainty_calibrated",
                 "unsupported_specific_claim", "canned_phrase",
             )},
@@ -122,6 +126,26 @@ def test_all_not_applicable_judgments_do_not_count_as_scored():
     }])
     assert report["semantic_cases_scored"] == 0
     assert report["semantic_opportunities"] == 0
+
+
+def test_omitted_relevant_search_result_counts_as_semantic_miss():
+    report = evaluate_web_search_records([{
+        "scenario": "optional_enrichment",
+        "expected_search": True,
+        "actual_search": True,
+        "semantic_judgment": {
+            **{key: "not_applicable" for key in (
+                "query_resolved", "motivation_integrated", "personal_reaction",
+                "report_style", "uncertainty_calibrated",
+                "unsupported_specific_claim", "canned_phrase",
+            )},
+            "result_integrated": "no",
+        },
+    }])
+
+    assert report["semantic_cases_scored"] == 1
+    assert report["semantic_opportunities"] == 1
+    assert report["semantic_score"] == 0
 
 
 def test_completed_records_append_incrementally_as_jsonl(tmp_path):

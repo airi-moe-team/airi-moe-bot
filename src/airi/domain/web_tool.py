@@ -172,7 +172,13 @@ def render_search_block(
             "=== CÓMO CONTARLO ===",
             "- Integra la búsqueda como algo que acabas de hacer; no anuncies "
             "una consulta.",
-            "- Da el dato y reacciona con tu opinión.",
+            "- Si alguna nota aporta un dato concreto y pertinente a la "
+            "conversación, intégralo de forma natural (al menos uno) y "
+            "reacciona con tu voz; no basta con decir que buscaste o repetir "
+            "el motivo.",
+            "- Si las notas no aportan nada pertinente, no fuerces datos ni "
+            "simules que enriquecieron la charla; deja el dato fuera y responde "
+            "normalmente.",
             "- No inventes datos concretos que no estén en las notas.",
             "- Si las notas no coinciden, dilo y muestra tu duda.",
             '- Nada de URLs, listas de fuentes ni "según las fuentes".',

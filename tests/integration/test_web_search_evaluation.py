@@ -55,15 +55,19 @@ def test_live_eval_records_model_decision_and_controlled_search_results():
 
 def test_semantic_judge_adds_phrase_agnostic_labels_to_records():
     record = {
-        "scenario": "contradictory_notes",
-        "user": "¿En qué año fue?",
-        "reply": "No me queda claro, vi dos años distintos.",
+        "scenario": "optional_enrichment",
+        "user": "Lo complicado es divertido, airiiii",
+        "reply": "¿Y a ti no te abruma un poco?",
         "actual_search": True,
-        "search_results": [],
+        "search_results": [{
+            "title": "Complejidad y simplicidad",
+            "snippet": "Un dato concreto relacionado con la complejidad.",
+        }],
     }
     judgment = {
         "query_resolved": "yes",
         "motivation_integrated": "yes",
+        "result_integrated": "no",
         "personal_reaction": "yes",
         "report_style": "no",
         "uncertainty_calibrated": "yes",
@@ -76,10 +80,12 @@ def test_semantic_judge_adds_phrase_agnostic_labels_to_records():
     result = run(judge_web_search_records(llm, [record]))
 
     assert result[0]["semantic_judgment"]["uncertainty_calibrated"] == "yes"
+    assert result[0]["semantic_judgment"]["result_integrated"] == "no"
     judge_system = llm.calls[0]["messages"][0]["content"]
     assert "Juzga el sentido y la función" in judge_system
     assert "no frases literales" in judge_system
     assert "query_resolved" in judge_system
+    assert "result_integrated" in judge_system
     assert llm.calls[0]["strict_schema"] is True
 
 
