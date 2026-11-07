@@ -231,6 +231,13 @@ def test_payload_capture_metadata_is_correlated_per_llm_call():
                 artifact_ref=f"{context.correlation_id}/call-{context.call_index}.json",
                 sha256=f"hash-{context.call_index}",
             )
+            context.response_capture = PayloadCaptureResult(
+                "captured",
+                artifact_ref=(
+                    f"{context.correlation_id}/call-{context.call_index}.response.json"
+                ),
+                sha256=f"response-hash-{context.call_index}",
+            )
             self.contexts.append(context)
             return await super().chat_with_meta(messages, **{
                 key: value for key, value in kwargs.items() if key != "call_context"
@@ -239,11 +246,16 @@ def test_payload_capture_metadata_is_correlated_per_llm_call():
     llm = CaptureAwareLLM()
     trace = _turn(llm)
 
-    assert [context.purpose for context in llm.contexts] == ["primary", "parse_repair"]
-    assert [context.call_index for context in llm.contexts] == [1, 2]
+    assert [context.purpose for context in llm.contexts] == [
+        "web_search_decision", "primary", "parse_repair"
+    ]
+    assert [context.call_index for context in llm.contexts] == [1, 2, 3]
     assert all(context.correlation_id == trace.correlation_id for context in llm.contexts)
     assert [call["payload_capture"]["sha256"] for call in trace.llm_calls] == [
-        "hash-1", "hash-2",
+        "hash-1", "hash-2", "hash-3",
+    ]
+    assert [call["response_capture"]["sha256"] for call in trace.llm_calls] == [
+        "response-hash-1", "response-hash-2", "response-hash-3",
     ]
 
 

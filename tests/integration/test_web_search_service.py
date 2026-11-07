@@ -1,6 +1,7 @@
 import asyncio
 
 from airi.domain.web_tool import WEB_SEARCH_TOOL
+from airi.ports.llm import LLMCallContext
 from airi.services.web_search import WebSearchService, _is_acknowledgment_only
 from airi.testing import FakeLLM, FakeNotifier, FakeSearch
 
@@ -56,6 +57,18 @@ def test_model_tool_call_triggers_one_search_and_produces_prompt_notes():
     assert llm.decision_calls[0]["tools"] == [WEB_SEARCH_TOOL]
     assert llm.decision_calls[0]["tool_choice"] == "auto"
     assert llm.decision_calls[0]["schema"] is None
+
+
+def test_decision_call_receives_capture_context():
+    llm = FakeLLM(tool_calls=[_tool_call()])
+    service = WebSearchService(llm=llm)
+    call_context = LLMCallContext(
+        correlation_id="turn-123", purpose="web_search_decision", call_index=1
+    )
+
+    run(service.run(current_text="¿A cuánto está Bitcoin?", call_context=call_context))
+
+    assert llm.decision_calls[0]["call_context"] is call_context
 
 
 def test_no_tool_call_means_no_search_and_no_notice():

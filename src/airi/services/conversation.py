@@ -34,6 +34,7 @@ from airi.domain.constants import (
     MOOD_ENABLED,
     QUICK_HISTORY_MESSAGES,
     QUICK_REPLY_MAX_CHARS,
+    SEARCH_QUERY_MAX_TOKENS,
 )
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.gifs import ALLOWED_GIF_TYPES
@@ -838,15 +839,54 @@ class ConversationService:
                 )
 
             web_outcome = WebSearchOutcome()
+            web_llm_calls: list[dict] = []
             if web_allowed and self.web_search_enabled:
                 t0 = _time.perf_counter()
                 self._log_module("web_search", "activated")
+                web_call_context = None
+                if getattr(self.llm, "payload_capture", None) is not None:
+                    web_call_context = LLMCallContext(
+                        correlation_id=get_correlation_id(),
+                        purpose="web_search_decision",
+                        call_index=1,
+                        model=getattr(self.llm, "model", None),
+                        provider=getattr(self.llm, "provider", None),
+                    )
                 web_outcome = await self.web_search.run(
                     current_text=merged_text,
                     context=_search_query_context(
                         prior_history, ctx.spectator_snapshot, ctx.task_context
                     ),
+                    call_context=web_call_context,
                 )
+                if (
+                    web_outcome.call_context is not None
+                    and (
+                        web_outcome.decision_meta is not None
+                        or web_outcome.error is not None
+                    )
+                ):
+                    self._record_call(
+                        web_llm_calls,
+                        "web_search_decision",
+                        web_outcome.decision_meta,
+                        _time.perf_counter() - (
+                            web_outcome.decision_ms + web_outcome.search_ms
+                        ) / 1000,
+                        SEARCH_QUERY_MAX_TOKENS,
+                        LLM_REASONING_PRESETS["low"],
+                        quick_turn=True,
+                        status=(
+                            "failed" if web_outcome.decision_meta is None else "ok"
+                        ),
+                        error_type=(
+                            web_outcome.error.split(":", 1)[0]
+                            if web_outcome.decision_meta is None
+                            and web_outcome.error
+                            else None
+                        ),
+                        call_context=web_outcome.call_context,
+                    )
                 timings["search_ms"] = int((_time.perf_counter() - t0) * 1000)
                 if web_outcome.error:
                     self._log_module(
@@ -940,6 +980,7 @@ class ConversationService:
                     turn_kind=getattr(ctx, "kind", "message"),
                     temporal=temporal,
                     task_context=ctx.task_context,
+                    prior_llm_calls=web_llm_calls,
                 )
             except Exception as exc:
                 self._log_module(
@@ -1834,6 +1875,7 @@ class ConversationService:
         turn_kind="message",
         temporal=None,
         task_context=None,
+        prior_llm_calls=None,
     ):
         now = self.clock() if now is None else now
         session_mode = conversation_mode in ("spectator", "active", "proactive")
@@ -1983,7 +2025,7 @@ class ConversationService:
             if isinstance(max_tokens_override, int) and max_tokens_override > 0
             else LLM_SHORT_MAX_TOKENS if quick else None
         )
-        calls: list[dict] = []
+        calls: list[dict] = list(prior_llm_calls or [])
         repair_telemetry = {
             "review_on_topic": None,
             "review_issues": [],

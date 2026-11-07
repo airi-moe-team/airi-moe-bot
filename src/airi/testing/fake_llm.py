@@ -52,20 +52,20 @@ class FakeLLM:
     async def chat(self, messages, *, schema=None, max_tokens=None,
                    reasoning_budget_tokens=None, quick_turn=False,
                    strict_schema=False, stream=False, tools=None,
-                   tool_choice=None):
+                   tool_choice=None, call_context=None):
         content, _meta = await self.chat_with_meta(
             messages, schema=schema, max_tokens=max_tokens,
             reasoning_budget_tokens=reasoning_budget_tokens,
             quick_turn=quick_turn,
             strict_schema=strict_schema, stream=stream,
-            tools=tools, tool_choice=tool_choice,
+            tools=tools, tool_choice=tool_choice, call_context=call_context,
         )
         return content
 
     async def chat_with_meta(self, messages, *, schema=None, max_tokens=None,
                              reasoning_budget_tokens=None,
                              quick_turn=False, strict_schema=False, stream=False,
-                             tools=None, tool_choice=None):
+                             tools=None, tool_choice=None, call_context=None):
         call = {
             "messages": messages,
             "schema": schema,
@@ -75,6 +75,7 @@ class FakeLLM:
             "strict_schema": strict_schema,
             "tools": tools,
             "tool_choice": tool_choice,
+            "call_context": call_context,
         }
         if stream:
             call["stream"] = True

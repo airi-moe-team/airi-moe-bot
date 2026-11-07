@@ -26,6 +26,7 @@ from airi.domain.web_tool import (
     parse_search_request,
     render_search_block,
 )
+from airi.ports.llm import LLMCallContext, LLMMeta
 from airi.ports.web_search import WebSearchNotes
 
 log = logging.getLogger(__name__)
@@ -110,6 +111,8 @@ class WebSearchOutcome:
     notice_sent: bool = False
     finish_reason: str | None = None
     error: str | None = None
+    decision_meta: LLMMeta | None = None
+    call_context: LLMCallContext | None = None
 
 
 class WebSearchService:
@@ -121,12 +124,14 @@ class WebSearchService:
         self.notifier = notifier
 
     async def run(
-        self, *, current_text: str, context: str = ""
+        self, *, current_text: str, context: str = "",
+        call_context: LLMCallContext | None = None,
     ) -> WebSearchOutcome:
         decision_started = time.perf_counter()
         try:
-            request, finish_reason = await self.decide(
-                current_text=current_text, context=context
+            request, finish_reason, meta = await self.decide(
+                current_text=current_text, context=context,
+                call_context=call_context,
             )
         except Exception as exc:  # noqa: BLE001 - el turno no debe caerse
             log.exception("Falló la decisión de búsqueda web")
@@ -135,11 +140,13 @@ class WebSearchService:
                     (time.perf_counter() - decision_started) * 1000
                 ),
                 error=f"{type(exc).__name__}: {exc}",
+                call_context=call_context,
             )
         decision_ms = int((time.perf_counter() - decision_started) * 1000)
         if request is None:
             return WebSearchOutcome(
-                decision_ms=decision_ms, finish_reason=finish_reason
+                decision_ms=decision_ms, finish_reason=finish_reason,
+                decision_meta=meta, call_context=call_context,
             )
 
         notice_sent = False
@@ -176,16 +183,19 @@ class WebSearchService:
             notice_sent=notice_sent,
             finish_reason=finish_reason,
             error=error,
+            decision_meta=meta,
+            call_context=call_context,
         )
 
     async def decide(
-        self, *, current_text: str, context: str = ""
-    ) -> tuple[SearchRequest | None, str | None]:
+        self, *, current_text: str, context: str = "",
+        call_context: LLMCallContext | None = None,
+    ) -> tuple[SearchRequest | None, str | None, LLMMeta | None]:
         """Pregunta al modelo si necesita buscar. Sin respuesta = no busca."""
         if not current_text.strip():
-            return None, None
+            return None, None, None
         if _is_acknowledgment_only(current_text):
-            return None, "acknowledgment_suppressed"
+            return None, "acknowledgment_suppressed", None
         user_content = current_text
         if context:
             user_content = (
@@ -198,6 +208,7 @@ class WebSearchService:
             {"role": "system", "content": WEB_SEARCH_DECISION_PROMPT},
             {"role": "user", "content": user_content},
         ]
+        call_context_kwargs = {"call_context": call_context} if call_context else {}
         _content, meta = await self.llm.chat_with_meta(
             messages,
             tools=[WEB_SEARCH_TOOL],
@@ -205,6 +216,7 @@ class WebSearchService:
             max_tokens=SEARCH_QUERY_MAX_TOKENS,
             reasoning_budget_tokens=LLM_REASONING_PRESETS["low"],
             quick_turn=True,
+            **call_context_kwargs,
         )
         request = parse_search_request(getattr(meta, "tool_calls", None))
-        return request, getattr(meta, "finish_reason", None)
+        return request, getattr(meta, "finish_reason", None), meta
