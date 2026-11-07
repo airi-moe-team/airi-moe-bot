@@ -734,8 +734,10 @@ def render_mood_section(
             )
         )
     lines.append(
-        "Muéstralo con tono, ritmo y gestos; no anuncies tu ánimo ni lo "
-        "expliques. El gif debe ser coherente con este ánimo. Si el ánimo "
+        "Expresa tu ánimo de manera natural a través del tono y la actitud "
+        "conversacional. No necesitas anunciarlo ni explicarlo. El GIF "
+        "representa una reacción observable coherente con la respuesta y no "
+        "tiene que coincidir con la etiqueta emocional. Si el ánimo "
         "choca con la afinidad, la afinidad manda en el trato hacia esta "
         "persona."
     )

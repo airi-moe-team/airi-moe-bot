@@ -48,6 +48,16 @@ def test_parse_model_output_reads_mood():
     assert output.mood["cause"] == "broma compartida"
 
 
+def test_parse_model_output_normalizes_gif_aliases_to_canonical_types():
+    assert parse_model_output(_raw(gif="smile")).gif == "happy"
+    assert parse_model_output(_raw(gif="neutral")).gif == "nod"
+    assert parse_model_output(_raw(gif="shy")).gif == "shy"
+
+
+def test_parse_model_output_still_rejects_unknown_gif_types():
+    assert parse_model_output(_raw(gif="totally_unknown")).gif == "none"
+
+
 def test_parse_model_output_reads_categories():
     output = parse_model_output(
         _raw(

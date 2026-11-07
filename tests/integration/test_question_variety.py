@@ -45,7 +45,7 @@ def test_nudge_extracts_reply_from_raw_json_history():
     ]
     section = question_variety_nudge_section(history)
     assert "VARIEDAD Y NATURALIDAD" in section
-    assert "PROHIBIDO cerrar con pregunta" in section
+    assert "el turno anterior terminó con una pregunta" in section
 
 
 def _run_turn(state, llm, message):
@@ -79,5 +79,5 @@ def test_turn_after_statement_closing_has_no_nudge():
 
     prompt = llm.last_system_prompt
     assert prompt.count("VARIEDAD Y NATURALIDAD") == 1
-    assert "PROHIBIDO cerrar con pregunta" in prompt
+    assert "no conviertas cada respuesta en una pregunta" in prompt
     assert "ÚLTIMA DESCONEXIÓN" not in prompt

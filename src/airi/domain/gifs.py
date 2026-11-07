@@ -11,6 +11,13 @@ ALLOWED_GIF_TYPES = {
     "tableflip", "tickle", "wag", "yeet",
 }
 
+# Variantes libres que el modelo puede usar para referirse a una categoría
+# canónica. Se normalizan antes de validar/enrutar el GIF.
+GIF_TYPE_ALIASES = {
+    "smile": "happy",
+    "neutral": "nod",
+}
+
 GIF_CATEGORIES = {
     "happy": ["happy", "smile"],
     "shy": ["blush", "pout"],

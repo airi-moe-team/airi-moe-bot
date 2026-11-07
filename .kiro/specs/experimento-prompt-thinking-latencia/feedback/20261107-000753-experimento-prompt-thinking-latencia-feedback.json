@@ -1,0 +1,37 @@
+{
+  "feature": "experimento-prompt-thinking-latencia",
+  "generated_at": "2026-11-07T00:07:53Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Centralizar semántica observable de GIF y desacoplarla del ánimo",
+      "severity": "major",
+      "impact": "Las instrucciones de GIF están duplicadas entre el contrato de salida y el prompt dinámico de ánimo; el modelo puede interpretar shy como simple timidez y comparar wave/shy sin criterio observable.",
+      "recommendation": "Añadir una sección única REACCIONES VISUALES Y SELECCIÓN DE GIF con todos los GIFs canónicos y sus significados observables; sustituir la instrucción dinámica de ánimo; reducir la descripción JSON de gif a un puntero a esa sección; retirar Guía de GIFs y actualizar también variantes rollback para que no reintroduzcan contradicciones. Preservar esquema, IDs, API, personalidad y parámetros.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "El constructor del system prompt SHALL incluir una única sección semántica REACCIONES VISUALES Y SELECCIÓN DE GIF, que distinga intención conversacional, ánimo interno y reacción visible, enumere todos los GIFs canónicos con significado observable, y establezca selección contextual no determinista.",
+          "El prompt de ánimo dinámico SHALL describir ánimo por tono y actitud, declarar que el GIF representa una reacción observable coherente con reply y que no tiene que coincidir con mood.label, sin dirigir a un GIF concreto.",
+          "La descripción JSON del campo gif SHALL conservar la lista completa de valores permitidos y referenciar la sección semántica única, sin definiciones duplicadas de wave/shy ni reglas de comparación.",
+          "La implementación SHALL preservar el contrato JSON, los IDs y compatibilidad API, personalidad, afinidad, romance, memoria y parámetros de llama.cpp; no añadirá razonamiento paso a paso, reglas fijas por palabra, retries ni detección de bucles.",
+          "La validación SHALL comprobar el prompt capturado en una petición real, unicidad/no contradicción, cobertura de IDs, independencia ánimo/GIF, JSON/finish_reason/content y los seis escenarios en ejecuciones repetidas; reportará comparación pre/post solo si dispone de condiciones equivalentes."
+        ],
+        "design": [
+          "Centralizar definiciones en una constante renderizada por las variantes full/compact; que el contrato de gif solo enumere los IDs permitidos y apunte a la sección semántica.",
+          "Modificar render de ánimo dinámico para quitar selección/correlación entre mood y GIF; preservar cualquier texto de afinidad y cercanía social.",
+          "Eliminar la antigua Guía de GIFs y mantener coherencia en variantes experimentales/rollback.",
+          "Agregar pruebas unitarias de unicidad, significados, enum exacto, ausencia de instrucciones legacy y neutralidad del fragmento dinámico; después realizar replays live repetidos con mismo modelo/settings y capturar prompt/request/response."
+        ],
+        "tasks": [
+          "Actualizar requisitos/diseño/tareas con centralización semántica y criterios de aceptación; revisar aprobación humana antes de avanzar fase.",
+          "Escribir primero tests para sección semántica única, catálogo canónico, fragmento de ánimo independiente, contrato gif simplificado y variantes prompt.",
+          "Refactorizar constructor full/compact y render dinámico de ánimo sin tocar JSON schema, personalidad, parámetros, parser o retries.",
+          "Ejecutar tests relevantes, suite completa, Ruff y diff check.",
+          "Ejecutar seis escenarios repetidos con el mismo modelo y configuración, capturar el prompt real y analizar JSON válido, finish_reason/content, latencia/tokens y coherencia; comparar baseline solo en igualdad de condiciones."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"]
+}

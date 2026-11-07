@@ -55,3 +55,51 @@
   - Exigir identificación explícita de traza y generar salida agregada local, sin texto del turno.
   - Verificar con una prueba de integración que la ejecución normal del bot conserva la variante actual.
   - _Requirements: 1.4, 3.1, 5.1, 5.2_
+
+- [ ] 5. Evaluar una candidata focalizada para decisiones conversacionales sencillas
+- [x] 5.1 Construir `decision_light_candidate` sin modificar `current`
+  - Simplificar la orientación del GIF por acción/emoción observable sin cambiar el enum ni acoplarlo a `mood.label`.
+  - Aclarar que los gestos narrativos de `reply` son opcionales y usar una instrucción positiva de respuesta directa.
+  - Añadir pruebas de contrato para igualdad byte por byte de `current` y diferencias acotadas de la candidata.
+  - _Requirements: 6.1, 6.2, 6.3_
+
+- [ ] 5.2 Comparar la candidata y `current` con replay controlado
+  - Añadir prueba de integración para la selección opt-in de la candidata.
+  - Ejecutar repeticiones sobre la misma traza, con el mismo modelo y parámetros, registrando métricas de `primary` y separando reparación/revisión.
+  - Informar parseo, truncamiento y reparaciones junto con tokens y latencia, sin atribuir a `primary` el tiempo de llamadas posteriores.
+  - _Requirements: 3.1, 3.3, 4.1, 6.3, 6.4_
+
+- [ ] 6. Promover las guías aprobadas al prompt de producción
+- [x] 6.1 Actualizar el prompt predeterminado y conservar rollback
+  - Tras aprobación humana, aplicar a `current` la guía de GIF observable, la respuesta directa y los gestos opcionales.
+  - Mantener los enums y el schema sin cambios y conservar temporalmente la variante anterior para comparación/rollback.
+  - _Requirements: 7.1, 7.2, 7.4, 7.5_
+
+- [x] 6.2 Verificar aliases, parseo y comportamiento de producción
+  - Comprobar `smile→happy`, `neutral→nod`, `shy→shy` y fallback de valores desconocidos.
+  - Probar que JSON inválido o truncado sigue usando la política actual de reparación, independiente de los GIF.
+  - Ejecutar suite completa y replay controlado; documentar quality/latencia y mantener opción de rollback.
+  - _Requirements: 7.3, 7.4, 7.5_
+
+- [ ] 7. Centralizar las definiciones visuales de GIF
+- [x] 7.1 Añadir cobertura TDD para la semántica centralizada
+  - Probar que el prompt full y compacto contiene una única sección `REACCIONES VISUALES Y SELECCIÓN DE GIF` y ningún encabezado antiguo `Guía de GIFs`.
+  - Comparar los identificadores definidos en el catálogo con todos los valores canónicos permitidos salvo el sentinel `none`; verificar significados de `shy` y `wave`.
+  - Probar que `gif` conserva la lista de valores permitidos pero su descripción solo remite a la sección semántica; cubrir variantes experimentales y rollback.
+  - Probar que el prompt dinámico de ánimo no prescribe GIF ni acopla `mood.label`, y que las instrucciones de afinidad/cercanía social siguen presentes.
+  - _Requirements: 8.1–8.7_
+
+- [x] 7.2 Refactorizar constructor y prompt dinámico
+  - Consolidar catálogo e instrucciones semánticas en una constante/sección única usada por full y compact.
+  - Sustituir la frase de ánimo que acopla GIF y estado emocional, preservando afinidad/cercanía.
+  - Eliminar definiciones duplicadas y revisar todas las variantes para que el rollback no reintroduzca contradicciones.
+  - No alterar schema, enums, alias parser, personalidad, relaciones, memoria, parámetros ni flujo de retries.
+  - _Requirements: 8.1–8.7, 8.10_
+
+- [ ] 7.3 Ejecutar validación del prompt real y pruebas semánticas repetidas
+  - Ejecutar suite completa, Ruff y `git diff --check`.
+  - Capturar y verificar el system prompt incluido en una petición real al LLM.
+  - Ejecutar repetidamente los seis escenarios de saludo tímido, pudor afectivo, acuerdo, logro, duda y despedida, con el mismo modelo/settings y sin publicar a Discord.
+  - Registrar JSON válido, `finish_reason`, presencia de `content`, tokens/latencia, coherencia reply/GIF, calidad, reconsideración observable y bucles; no exponer razonamiento privado en el reporte.
+  - Comparar con baseline únicamente si el prompt anterior puede ejecutarse bajo condiciones equivalentes; de lo contrario, etiquetar resultados como descriptivos.
+  - _Requirements: 8.8–8.10_

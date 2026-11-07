@@ -30,7 +30,9 @@
 - `airi-replay-conductual` — Añadir replay conductual con resultados capturados opt-in y replay live explícito, preservando aislamiento y privacidad por defecto.
   - Spec: `.kiro/specs/airi-replay-conductual/`
 - `airi-payload-llm` — Capturar opt-in el payload LLM efectivo como artefacto local lateral, vinculado a la traza y protegido por privacidad.
-  - Spec: `.kiro/specs/airi-payload-llm/`
+   - Spec: `.kiro/specs/airi-payload-llm/`
+- `llm-sin-response-format` — Eliminar `response_format` de las peticiones LLM y retirar su variable de configuración, manteniendo las normalizaciones deterministas.
+  - Spec: `.kiro/specs/llm-sin-response-format/`
 
 ## Flujo de trabajo
 

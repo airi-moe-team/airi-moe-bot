@@ -164,8 +164,13 @@ def test_render_mood_section_shows_mood_without_announcing_it():
     assert "=== ÁNIMO DE ESTE TURNO ===" in text
     assert "timida" in text
     assert "Con Ana" in text
-    assert "no anuncies tu ánimo" in text
-    assert "gif" in text.lower()
+    lowered = text.lower()
+    assert "expresa tu ánimo de manera natural a través del tono y la actitud conversacional" in lowered
+    assert "no necesitas anunciarlo ni explicarlo" in lowered
+    assert "el gif representa una reacción observable coherente con la respuesta" in lowered
+    assert "no tiene que coincidir con la etiqueta emocional" in lowered
+    assert "la afinidad manda en el trato hacia esta persona" in text
+    assert "elige" not in text.lower()
 
 
 def test_render_mood_section_uses_baseline_when_missing():

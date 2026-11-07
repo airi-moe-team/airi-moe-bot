@@ -624,6 +624,24 @@ def test_active_turn_respects_global_web_search_toggle():
     assert not search.queries
 
 
+def test_active_turn_preserves_valid_reply_when_stay_active_is_missing():
+    state, _ = make_state()
+    answer = "No, solo un poco. Es tarde y ya empieza a notarse."
+    llm = FakeLLM(replies=[llm_json(answer)])
+    svc = make_service(llm, state, notifier=FakeNotifier())
+
+    result = run(svc.run_turn(
+        DAVID,
+        [(DAVID, "¿Estás cansada ya?")],
+        TurnContext(kind="active", conversation_mode="active"),
+    ))
+
+    assert result.reply == answer
+    assert result.stay_active is True
+    assert [call["purpose"] for call in result.trace.llm_calls] == ["primary"]
+    assert result.trace.repair_exhausted is False
+
+
 def test_proactive_turn_does_not_offer_web():
     state, _ = make_state()
     llm = FakeLLM(replies=[llm_json("Te cuento algo sin buscar.", stay_active=False)])

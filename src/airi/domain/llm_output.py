@@ -9,7 +9,6 @@ import re
 from typing import NamedTuple
 
 from airi.domain.affinity import clamp_delta
-from airi.domain.conversation_task import normalize_task_context_update
 from airi.domain.constants import (
     AFFINITY_DELTA_MAX,
     DATE_ACTION_LABEL_MAX,
@@ -18,7 +17,8 @@ from airi.domain.constants import (
     DATE_SCENE_MAX,
     LAST_CHANCE_RESULTS,
 )
-from airi.domain.gifs import ALLOWED_GIF_TYPES
+from airi.domain.conversation_task import normalize_task_context_update
+from airi.domain.gifs import ALLOWED_GIF_TYPES, GIF_TYPE_ALIASES
 from airi.domain.mood import MOOD_SCHEMA, normalize_mood
 from airi.domain.narrative_claims import disconnect_claim_problem
 from airi.domain.relationships import (
@@ -422,6 +422,7 @@ def parse_model_output(
     if not isinstance(gif_type, str):
         gif_type = "none"
     gif_type = gif_type.strip().lower()
+    gif_type = GIF_TYPE_ALIASES.get(gif_type, gif_type)
     if gif_type not in ALLOWED_GIF_TYPES:
         log.warning("Tipo de GIF no permitido: %r", gif_type)
         gif_type = "none"
@@ -508,8 +509,10 @@ def parse_session_output(raw_output, delta_max=None):
 
     Devuelve `(output, stay_active, valid)`:
       - `output`: `ModelOutput` normalizado (reply puede ser "" si silencio).
-      - `stay_active`: decisión del modelo (True por defecto solo si válido).
-      - `valid`: False si falta `stay_active`, tipos inválidos o JSON no parseable.
+      - `stay_active`: decisión del modelo; si falta, True para no cerrar
+        accidentalmente una sesión por una omisión estructural.
+      - `valid`: False si el reply no es válido, el tipo explícito de
+        `stay_active` es inválido o el JSON no es parseable.
 
     El silencio deliberado (reply == "") es válido y NO se trata como fallo.
     """
@@ -520,9 +523,7 @@ def parse_session_output(raw_output, delta_max=None):
     if not isinstance(parsed, dict):
         return _model_output(), False, False
 
-    if "stay_active" not in parsed:
-        return _model_output(), False, False
-    stay_active_raw = parsed.get("stay_active")
+    stay_active_raw = parsed.get("stay_active", True)
     if not isinstance(stay_active_raw, bool):
         return _model_output(), False, False
 

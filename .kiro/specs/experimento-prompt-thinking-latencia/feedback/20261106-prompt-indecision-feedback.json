@@ -1,0 +1,36 @@
+{
+  "feature": "experimento-prompt-thinking-latencia",
+  "generated_at": "2026-11-06T22:45:00Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Evaluar guía de GIF, gestos opcionales y respuesta directa como candidata aislada",
+      "severity": "major",
+      "impact": "Las pruebas de las candidatas anteriores no redujeron consistentemente la deliberación primaria; auto mantuvo latencias altas y una ejecución llegó al límite de tokens. Se necesita aislar una reformulación más focalizada sin alterar la variante de producción.",
+      "recommendation": "Añadir una nueva variante opt-in que seleccione el GIF por la acción o emoción observable de la respuesta sin contraponer ejemplos wave/shy; aclarar que las acciones entre asteriscos son opcionales; instruir positivamente una respuesta natural y proporcionada. Mantener sin cambios los enums, schema, valores neutros y prompt current.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "Añadir una candidata experimental que simplifique la selección de gif sin acoplarla literalmente a mood.label ni cambiar los valores permitidos.",
+          "Aclarar que las acciones narrativas dentro de reply son opcionales.",
+          "Mantener current, esquema de salida y parámetros de inferencia sin cambios; evaluar la llamada primary por separado de reparación y conversation_review."
+        ],
+        "design": [
+          "Componer la candidata en el constructor de prompts detrás de un selector experimental, sin tocar el texto de current.",
+          "Reemplazar la orientación que enumera decisiones competidoras por una regla positiva de elección suficiente y respuesta directa; preservar contrato y enums."
+        ],
+        "tasks": [
+          "Añadir pruebas de contrato que comprueben la inmutabilidad byte por byte de current y las diferencias exactas de la nueva candidata.",
+          "Añadir prueba de integración que demuestre que live replay inyecta la nueva variante seleccionada.",
+          "Comparar current y candidata con la misma traza, modelo y parámetros, registrando por muestra tokens, latencia primary, parseo, truncamiento y reparaciones."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"],
+  "owners": {"FB-001": "Agente implementador; revisión/aprobación de documentos: usuario"},
+  "questions": [
+    "¿La nueva candidata debe incluir en un mismo brazo las tres modificaciones (GIF, gesto opcional y redacción directa), manteniendo las candidatas previas disponibles?"
+  ],
+  "next_checkpoint": "Revisar y aprobar el feedback antes de aplicar cambios a requirements/design/tasks."
+}

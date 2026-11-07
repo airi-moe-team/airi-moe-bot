@@ -26,13 +26,14 @@ import aiohttp
 import airi.env_boot  # noqa: F401
 from airi.adapters.http_llm import build_llm
 from airi.domain.affinity import default_entry
+from airi.domain.prompts import PROMPT_VARIANTS, PromptVariant
 from airi.domain.time_perception import TimeConfig
-from airi.observability.trace import TurnEvent, load_turn_trace
 from airi.observability.replay_capture import (
     CapturedWebSearchClient,
     load_web_capture,
     normalize_query,
 )
+from airi.observability.trace import TurnEvent, load_turn_trace
 from airi.ports.llm import LLMMeta
 from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
@@ -277,7 +278,10 @@ async def replay_trace(trace_path) -> ReplayResult:
     return await _run_event(ev)
 
 
-async def run_live_trace(trace_path, *, repeat=1, web_live=False, task_context=None):
+async def run_live_trace(
+    trace_path, *, repeat=1, web_live=False, task_context=None,
+    prompt_variant: PromptVariant = "current",
+):
     """Reconstruye el turno de la traza y lo re-infiere con el LLM real.
 
     A diferencia de `replay_trace`, aquí SÍ se consulta el backend configurado
@@ -309,9 +313,14 @@ async def run_live_trace(trace_path, *, repeat=1, web_live=False, task_context=N
                     TurnContext(
                         channel_id=0, allow_web=web_live,
                         task_context=task_context,
-                        correlation_id=f"{ev.correlation_id}-live{i + 1}",
+                        correlation_id=(
+                            f"{ev.correlation_id}-"
+                            f"{prompt_variant + '-' if prompt_variant != 'current' else ''}"
+                            f"live{i + 1}"
+                        ),
                         conversation_mode=(ev.kind if ev.kind in SESSION_KINDS else "normal"),
                         conversation_reason=ev.spectator_reason or "",
+                        system_prompt_variant=prompt_variant,
                     ),
                 )
                 results.append({"sample": i + 1, "result": result})
@@ -501,6 +510,10 @@ def main(argv=None):
                              "en vez de reutilizar la respuesta guardada")
     parser.add_argument("--repeat", type=int, default=None,
                         help="número de inferencias con --live (default 1)")
+    parser.add_argument(
+        "--prompt-variant", choices=PROMPT_VARIANTS, default="current",
+        help="variante experimental de system prompt (requiere --live)",
+    )
     parser.add_argument("--behavioral", action="store_true",
                         help="reejecuta decisión y síntesis con búsqueda capturada localmente")
     parser.add_argument("--capture", default=None,
@@ -525,6 +538,8 @@ def main(argv=None):
         parser.error("--repeat requiere --live")
     if args.repeat is not None and args.repeat < 1:
         parser.error("--repeat debe ser al menos 1")
+    if args.prompt_variant != "current" and not args.live:
+        parser.error("--prompt-variant requiere --live")
     if args.emit_test and (args.live or args.behavioral or args.web_live or args.capture):
         parser.error("--emit-test es incompatible con modos de inferencia y capturas")
 
@@ -562,7 +577,7 @@ def main(argv=None):
                 )
             results = asyncio.run(run_live_trace(
                 args.trace, repeat=args.repeat or 1, web_live=args.web_live,
-                task_context=task_context,
+                task_context=task_context, prompt_variant=args.prompt_variant,
             ))
         except Exception as exc:
             print(f"ERROR: la inferencia live falló: {exc}", file=sys.stderr)

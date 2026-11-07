@@ -60,8 +60,20 @@ def test_time_tags_are_added_only_to_timestamped_user_messages():
     ]
     view = build_inference_history(history, resolver({"42": 3}), users=USERS, now=1000.0)
     assert view[0]["content"] == "[hace 1 min] [speaker=KOKODA|affinity=3|level=L3] hola"
-    assert view[1]["content"] == '{"reply":"hola"}'
+    assert view[1]["content"] == "hola"
     assert view[2]["content"] == "[speaker=KOKODA|affinity=3|level=L3] legacy"
+
+
+def test_assistant_history_exposes_reply_without_replaying_old_output_schema():
+    history = [{
+        "role": "assistant",
+        "content": '{"reply":"Nos vemos mañana.","date_decision":"continue",'
+        '"date_question":{"text":"","options":[]},"affinity_delta":0}',
+    }]
+
+    view = build_inference_history(history, resolver({}), users=USERS)
+
+    assert view == [{"role": "assistant", "content": "Nos vemos mañana."}]
 
 
 def test_long_gaps_use_local_day_and_clock_to_disambiguate_today_from_yesterday():
@@ -198,7 +210,7 @@ def test_order_and_content_are_preserved():
     ]
     view = build_inference_history(history, resolver({"10": 2, "42": -16}), users=USERS)
     assert [m["role"] for m in view] == ["user", "assistant", "user"]
-    assert view[1]["content"] == '{"reply": "hey"}'
+    assert view[1]["content"] == "hey"
     assert view[0]["content"].endswith("hola")
     assert view[2]["content"].endswith("y tú")
 

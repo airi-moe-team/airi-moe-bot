@@ -9,15 +9,14 @@ import pytest
 
 from airi.domain.dates import new_date_session
 from airi.observability import replay as replay_module
+from airi.observability.llm_payload_capture import LocalLlmPayloadCapture
 from airi.observability.replay import replay_behavioral, replay_trace
-from airi.observability.trace import save_turn_trace
+from airi.observability.replay_capture import write_web_capture
+from airi.observability.trace import TurnEvent, save_turn_trace
+from airi.ports.llm import LLMCallContext
 from airi.services.conversation import ConversationService, TurnContext
 from airi.services.date_service import DateService
 from airi.testing import FakeLLM, FakeNotifier, FakeSearch, FakeUser, llm_json, make_state
-from airi.observability.replay_capture import write_web_capture
-from airi.observability.trace import TurnEvent
-from airi.observability.llm_payload_capture import LocalLlmPayloadCapture
-from airi.ports.llm import LLMCallContext
 
 NOW = 1_000_000.0
 DAVID = FakeUser(42, "David")
@@ -327,6 +326,46 @@ def test_live_mode_keeps_search_disabled_without_web_permission(tmp_path, monkey
 
     assert len(samples) == 1
     assert not llm.decision_calls
+
+
+def test_live_replay_applies_requested_experimental_prompt_variant(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="live-prompt-variant", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "hola Airi"}],
+        history_in=[{"role": "user", "content": "hola Airi"}], raw_llm="{}",
+    )
+    path = save_turn_trace(trace, str(tmp_path))
+    llm = FakeLLM(replies=[llm_json("Hola.")])
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+
+    samples = run(replay_module.run_live_trace(
+        path, prompt_variant="gif_priority_candidate"
+    ))
+
+    assert samples[0]["result"].reply == "Hola."
+    assert llm.last_system_prompt.count("=== REACCIONES VISUALES Y SELECCIÓN DE GIF ===") == 1
+    assert "wave` — Saludar o despedirse moviendo la mano" in llm.last_system_prompt
+    assert "Ante un saludo o presentación, elige wave" not in llm.last_system_prompt
+
+
+def test_live_replay_applies_decision_light_prompt_variant(tmp_path, monkeypatch):
+    trace = TurnEvent(
+        correlation_id="live-decision-light", user_id="42", user_name="David",
+        messages_in=[{"author": "David", "text": "hola Airi"}],
+        history_in=[{"role": "user", "content": "hola Airi"}], raw_llm="{}",
+    )
+    path = save_turn_trace(trace, str(tmp_path))
+    llm = FakeLLM(replies=[llm_json("Hola.")])
+    monkeypatch.setattr(replay_module, "build_llm", lambda _session: llm)
+
+    samples = run(replay_module.run_live_trace(
+        path, prompt_variant="decision_light_candidate"
+    ))
+
+    assert samples[0]["result"].reply == "Hola."
+    assert "El GIF no necesita coincidir con mood.label" in llm.last_system_prompt
+    assert "shy representa vergüenza o pudor visibles" in llm.last_system_prompt
+    assert "no son obligatorias" in llm.last_system_prompt
 
 
 def test_live_search_client_is_used_only_with_explicit_permission(tmp_path, monkeypatch):

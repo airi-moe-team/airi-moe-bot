@@ -51,8 +51,16 @@ def test_parse_session_stay_active_false():
     assert output.reply == "adiós"
 
 
-def test_parse_session_falta_stay_active_invalido():
+def test_parse_session_falta_stay_active_con_reply_valido_conserva_reply():
     raw = '{"reply":"hola"}'
+    output, stay, valid = parse_session_output(raw)
+    assert valid is True
+    assert stay is True
+    assert output.reply == "hola"
+
+
+def test_parse_session_falta_stay_active_con_reply_invalido_sigue_invalido():
+    raw = '{"reply":123}'
     _output, _stay, valid = parse_session_output(raw)
     assert valid is False
 

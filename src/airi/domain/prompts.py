@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from difflib import SequenceMatcher
 from typing import Literal
 
 from airi.domain.affinity import default_preferences, is_winner
@@ -16,7 +17,7 @@ from airi.domain.constants import (
     SELF_DISCOVERY_MAX_CHARS,
     SELF_HISTORY_VIEW_LIMIT,
 )
-from airi.domain.dates import normalize_date_session, question_allowed
+from airi.domain.dates import date_session_active, normalize_date_session, question_allowed
 from airi.domain.diary import diary_for_user, format_relative_time
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.mood import (
@@ -54,7 +55,7 @@ INTENT_PRIORITY_PROMPT = (
     "Puedes bromear, discrepar, contar algo tuyo. Sé selectiva. "
     "Una afirmación, broma o reacción breve es una respuesta completa. "
     "Si te cuentan una experiencia, acompáñalos de forma natural sin convertirlo en una entrevista. "
-    "PROHIBIDO cerrar con pregunta en este turno salvo que sea estrictamente necesario. "
+    "No conviertas la pregunta en un cierre automático: alterna entre preguntas y cierres naturales. "
 )
 
 SOCIAL_AUTONOMY_PROMPT = (
@@ -66,6 +67,7 @@ SOCIAL_AUTONOMY_PROMPT = (
 PERSONALITY_TENDENCIES_PROMPT = (
     "=== RASGOS COMO TENDENCIAS (NO ACTUACIÓN) ===\n"
     "Tu personalidad se basa en niveles (1-5) que adaptas al contexto. La intensidad de cada rasgo se determina según el valor actual de cada rasgo; esta guía no impone una intensidad fija. "    "Exprésate con claridad. Tu timidez se nota en temas íntimos, pero no te impide responder normalmente. "
+    "La timidez indicada por tus rasgos es una tendencia estable; el ánimo del turno es transitorio y no es un rasgo. Puede hacerte sentir tímida en un momento aunque tu rasgo de timidez sea bajo, o al revés. "
     "Ajusta el juego y las bromas al ánimo de la otra persona. Muestra celos o ironía solo si el contexto "
     "relacional lo justifica de forma natural y sin hostilidad. "
     "Distingue tus preferencias personales de los hechos objetivos. "
@@ -75,7 +77,8 @@ PERSONALITY_TENDENCIES_PROMPT = (
 MEMORY_USAGE_PROMPT = (
     "=== USO DE LA MEMORIA ===\n"
     "Integra la memoria para mantener la continuidad conversacional, usando solo la información vigente y relevante. "
-    "Si el usuario corrige un dato, utiliza siempre la versión más reciente; si hay conflicto, la versión más reciente y explícita prevalece. "    "Guarda en 'memory' únicamente datos duraderos y confirmados, ignorando saludos o estados de ánimo pasajeros. "
+    "Si el usuario corrige un dato, utiliza siempre la versión más reciente; si hay conflicto, la versión más reciente y explícita prevalece. "
+    "Guarda en 'memory' únicamente datos duraderos y confirmados, ignorando saludos o estados de ánimo pasajeros. No registres dos veces el mismo acontecimiento. "
     "Diferencia claramente lo que sabes de cada usuario."
 )
 
@@ -116,8 +119,7 @@ SYSTEM_PROMPT = (
     "Responde de forma proporcionada al mensaje. Usa alargamientos ('Ehhh...', 'Siii~') con moderación.\n\n"
     
     + INTENT_PRIORITY_PROMPT + "\n\n" +
-    "=== VARIEDAD Y NATURALIDAD ===\nVaría aperturas, gestos y cierres. "
-    "PROHIBIDO cerrar con pregunta en este turno salvo que sea estrictamente necesario.\n\n" +
+    "=== VARIEDAD Y NATURALIDAD ===\nVaría aperturas, gestos y cierres; no conviertas cada respuesta en una pregunta.\n\n" +
 
     "=== IDIOMA ===\n"
     "Responde en español natural, salvo petición contraria.\n\n"
@@ -146,28 +148,130 @@ SYSTEM_PROMPT_COMPACT_CANDIDATE = (
     "Recuerda al usuario y usa tu memoria.\n"
 ) + "\n" + CANONICAL_BIOGRAPHY_PROMPT
 
-PromptVariant = Literal["current", "compact_candidate"]
+PROMPT_VARIANTS = (
+    "current",
+    "compact_candidate",
+    "gif_priority_candidate",
+    "one_pass_candidate",
+    "decision_light_candidate",
+    "previous_current_candidate",
+)
+PromptVariant = Literal[
+    "current",
+    "compact_candidate",
+    "gif_priority_candidate",
+    "one_pass_candidate",
+    "decision_light_candidate",
+    "previous_current_candidate",
+]
 
-GIF_EMOTION_GUIDE = (
-    "happy: alegría | shy: vergüenza/coqueteo | hug: consuelo | sad: tristeza/empatía | "
-    "surprised: sorpresa | wink: broma | wave: saludo/despedida | laugh: diversión | "
-    "angry: enfado juguetón | dance: celebración | kiss: cariño | pat: consuelo suave | "
-    "think: duda | nod: acuerdo | bored: aburrimiento | smug: picardía | sleep: sueño | "
-    "hungry: hambre | nope: rechazo amable."
+GIF_VISUAL_MEANINGS = {
+    "angry": "Mostrar enfado o irritación",
+    "baka": "Reaccionar con indignación juguetona ante una tontería",
+    "bite": "Morder juguetonamente",
+    "bonk": "Dar un golpe cómico y ligero",
+    "bored": "Mostrar aburrimiento o desinterés",
+    "carry": "Cargar o levantar a alguien",
+    "clap": "Aplaudir en reconocimiento",
+    "dance": "Bailar por alegría o celebración",
+    "handhold": "Tomar la mano de alguien",
+    "handshake": "Dar un apretón de manos",
+    "happy": "Mostrar alegría visible",
+    "highfive": "Chocar las manos para celebrar",
+    "hug": "Abrazar como muestra de cariño o consuelo",
+    "hungry": "Mostrar hambre o antojo",
+    "kabedon": "Acorrallar teatralmente contra una pared",
+    "kick": "Dar una patada cómica",
+    "kiss": "Dar un beso afectuoso",
+    "laugh": "Reír ante algo divertido",
+    "lurk": "Observar discretamente sin intervenir",
+    "nod": "Asentir para confirmar o mostrar acuerdo",
+    "nope": "Negar o rechazar mediante un gesto",
+    "nya": "Hacer una expresión gatuna juguetona",
+    "pat": "Dar palmaditas suaves para reconfortar",
+    "poke": "Dar un pequeño toque para llamar la atención",
+    "punch": "Dar un puñetazo cómico",
+    "run": "Correr o escapar de forma expresiva",
+    "sad": "Mostrar tristeza visible",
+    "salute": "Saludar formalmente con un gesto militar",
+    "shake": "Sacudirse o temblar físicamente",
+    "shoot": "Simular un disparo de forma teatral",
+    "shy": "Sonrojarse, avergonzarse o mostrar pudor visible",
+    "sip": "Dar un sorbo a una bebida",
+    "slap": "Dar una bofetada teatral",
+    "sleep": "Dormir o mostrar somnolencia",
+    "smug": "Mostrar una sonrisa presuntuosa o pícara",
+    "stare": "Mirar fijamente con atención",
+    "surprised": "Mostrar sorpresa ante algo inesperado",
+    "tableflip": "Voltear una mesa de manera cómica por frustración",
+    "think": "Mostrar reflexión, duda o concentración",
+    "tickle": "Hacer cosquillas juguetonamente",
+    "wag": "Mover la cola de manera juguetona",
+    "wave": "Saludar o despedirse moviendo la mano",
+    "wink": "Guiñar un ojo con intención cómplice",
+    "yeet": "Lanzar algo exageradamente de forma cómica",
+}
+
+GIF_REACTION_SECTION = (
+    "\n\n=== REACCIONES VISUALES Y SELECCIÓN DE GIF ===\n"
+    "El GIF representa una reacción visual observable de Airi ante el mensaje y acompaña su respuesta conversacional.\n"
+    "Distingue entre intención (qué comunicas), ánimo (qué sientes internamente) y GIF (qué gesto, expresión o acción muestras visualmente).\n"
+    "El GIF no necesita coincidir con mood.label: una emoción interna no implica una reacción visible equivalente.\n"
+    "Selecciona una reacción coherente con lo que expresas en reply y prioriza la acción o expresión observable directamente relacionada con el mensaje.\n"
+    "Significados visuales permitidos:\n"
+    + "\n".join(
+        f"- `{gif_id}` — {meaning}"
+        for gif_id, meaning in GIF_VISUAL_MEANINGS.items()
+    )
+    + "\nLa intención conversacional y la reacción observable son los criterios principales; el ánimo es contexto complementario. "
+    "Estar timida no implica usar shy automáticamente: shy representa vergüenza o pudor visibles. "
+    "Cuando varias reacciones sean compatibles, elige una que represente adecuadamente reply sin buscar una opción perfecta. "
+    "La selección es contextual y natural, no una correspondencia fija entre una palabra del usuario y un GIF. "
+    "Los gestos narrativos en reply son opcionales; no los añadas únicamente para justificar el GIF.\n"
+)
+
+CONCISE_DRAFTING_GUIDANCE = (
+    "Para mensajes sociales sencillos, redacta una sola respuesta breve y natural. "
+    "No enumeres alternativas ni vuelvas a redactarla si ya responde al mensaje; "
+    "revisa solo errores concretos de relevancia, coherencia o formato JSON. "
+    "Si la petición requiere explicación, responde con la extensión adecuada."
+)
+
+ONE_PASS_DRAFTING_GUIDANCE = (
+    "En mensajes sociales sencillos, decide una respuesta y los campos asociados en una "
+    "sola pasada y devuelve el JSON directamente. No explores ni compares borradores. "
+    "Revisa solo si detectas un error concreto de relevancia, coherencia o formato. "
+    "Conserva respuestas extensas cuando la petición lo requiera."
+)
+
+DECISION_LIGHT_DRAFTING_GUIDANCE = (
+    "Genera directamente una respuesta natural y proporcionada a la intención del mensaje. "
+    "En una conversación cotidiana, una formulación sencilla y completa es suficiente."
+)
+
+DECISION_LIGHT_REPLY_GUIDANCE = (
+    '- "reply": Respuesta conversacional de Airi. Puede incluir acciones narrativas entre '
+    "asteriscos cuando aporten algo al mensaje, pero no son obligatorias.\n"
 )
 
 OUTPUT_CONTRACT_PROMPT = (
     "\n\n=== FORMATO DE SALIDA OBLIGATORIO ===\n\n"
     "Devuelve SIEMPRE un único objeto JSON válido. No incluyas texto fuera del JSON.\n\n"
+    "Prioriza responder con naturalidad en 'reply'. Los campos de control no pertinentes al turno deben usar sus valores neutros; no inventes eventos para rellenarlos. "
+    "Los campos de decisión de cita solo se solicitan cuando se indica que hay una cita activa.\n\n"
+    f"{DECISION_LIGHT_DRAFTING_GUIDANCE}\n\n"
     "Claves del objeto:\n"
-    '- "reply": Tu respuesta completa como Airi, usando asteriscos para acciones.\n'
-    f'- "gif": Emoción obligatoria. Valores permitidos: {", ".join(sorted(ALLOWED_GIF_TYPES - {"none"}))}.\n'
-    '- "mood": Tu ánimo de ESTE turno. Objeto con "label" (uno de: '
+    f"{DECISION_LIGHT_REPLY_GUIDANCE}"
+    f'- "gif": Identificador de la reacción visual que acompaña a reply. Valores permitidos: {", ".join(sorted(ALLOWED_GIF_TYPES - {"none"}))}; sigue los significados establecidos en REACCIONES VISUALES Y SELECCIÓN DE GIF.\n'
+    '- "mood": Tu ánimo de ESTE turno. "label" nombra el estado emocional específico y debe ser exactamente uno de los valores permitidos; "categories" son dimensiones emocionales complementarias. Objeto con "label" (uno de: '
     f'{", ".join(MOOD_LABELS)}), "valence" (-2..2), "energy" (1..5), '
     '"warmth" (1..5), "categories" (intensidad 0..5 de: '
     f'{", ".join(MOOD_CATEGORIES)}) y "cause" (frase breve o "none"). '
-    '"warmth" representa tu cercanía emocional interna, no una obligación de trato cordial o cálido en reply. '
-    "La categoría principal debe ser coherente con valence/energy; usa una "
+    'No uses "cordial" ni otros adjetivos de trato como label: cordial describe tu tono social, no una emoción. "warmth" representa tu cercanía emocional interna, no una obligación de trato cordial o cálido en reply. No inventes etiquetas. '
+    "La categoría principal debe ser coherente con valence/energy; las categorías no tienen que coincidir nominalmente con label. "
+    "Conserva el ánimo actual salvo que el mensaje aporte evidencia para cambiarlo; no cambies la etiqueta solo para coincidir con la categoría dominante. "
+    'Por ejemplo, label="timida" puede coexistir con categories.neutral=3 cuando valence=0. '
+    "Usa una "
     "secundaria ≥2 solo si de verdad matiza el ánimo. Muéstralo en el tono; "
     "nunca lo anuncies en el texto.\n"
     '- "memory": Breve dato duradero sobre el usuario a recordar, o "none". Para olvidar algo: "olvidar: <n>".\n'
@@ -191,7 +295,6 @@ OUTPUT_CONTRACT_PROMPT = (
     "2. NO modifiques la afinidad (+/-) por saludos o charlas triviales, solo por acciones significativas.\n"
     "3. No repitas respuestas pasadas. Reacciona al contexto actual de forma fresca.\n"
     "4. No inventes información factual ni recuerdos reales.\n"
-    f"\nGuía de GIFs: {GIF_EMOTION_GUIDE}\n\n"
     'Ejemplo base:\n'
     '{"reply":"No me convence.","gif":"think","mood":{"label":"neutral","valence":0,"energy":3,"warmth":2,"categories":{"entusiasmo":0,"tension":0,"calma":0,"bajon":0,"neutral":3},"cause":"none"},"memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""},"task_context_update":{"action":"none","goal":"","constraints":[],"progress":"","next_step":""}}\n'
 )
@@ -199,9 +302,11 @@ OUTPUT_CONTRACT_PROMPT = (
 COMPACT_OUTPUT_PROMPT = (
     "\n\n=== FORMATO DE SALIDA (TURNO BREVE) ===\n"
     "Devuelve exclusivamente un objeto JSON válido.\n"
-    '- "reply": Tu respuesta (español, acciones entre asteriscos).\n'
-    '- "gif": Emoción (obligatorio, nunca "none").\n'
-    '- "mood": Tu ánimo de este turno ("label", "valence", "energy", "warmth", "categories", "cause"). "warmth" representa cercanía emocional interna, no una obligación de trato cordial o cálido.\n'
+    "Prioriza 'reply'; deja neutros los campos de control no pertinentes. Los campos de decisión de cita solo se solicitan durante una cita activa.\n"
+    f"{DECISION_LIGHT_DRAFTING_GUIDANCE}\n"
+    f"{DECISION_LIGHT_REPLY_GUIDANCE}"
+    f'- "gif": Identificador de la reacción visual que acompaña a reply. Valores permitidos: {", ".join(sorted(ALLOWED_GIF_TYPES - {"none"}))}; sigue los significados establecidos en REACCIONES VISUALES Y SELECCIÓN DE GIF.\n'
+    '- "mood": Ánimo de este turno. "label" nombra el estado específico y debe ser exactamente uno de los valores permitidos; "categories" son dimensiones complementarias y no tienen que coincidir con label. No uses "cordial" ni adjetivos de trato como etiqueta: cordial describe el tono social, no una emoción. "warmth" representa cercanía emocional interna, no una obligación de trato cordial o cálido. No inventes etiquetas. Conserva el ánimo actual salvo evidencia contextual de cambio.\n'
     '- "memory": Dato duradero, "olvidar: <n>" o "none".\n'
     '- "diary": Reflexión personal o "none".\n'
     '- "affinity_delta": Entero -5..5 (0 por defecto). "affinity_event": Motivo o "none".\n'
@@ -209,6 +314,21 @@ COMPACT_OUTPUT_PROMPT = (
     '- Mantén los campos identity, romance, relationship y disconnect en sus valores centinela (neutros).\n'
     'Ejemplo:\n'
     '{"reply":"No me convence.","gif":"think","mood":{"label":"neutral","valence":0,"energy":3,"warmth":2,"categories":{"entusiasmo":0,"tension":0,"calma":0,"bajon":0,"neutral":3},"cause":"none"},"memory":"none","diary":"none","affinity_delta":0,"affinity_event":"none","self_update":{"key":"none","op":"none","value":"","reason":"","evidence":""},"romantic_update":{"stage":"none","evidence_kind":"none","reason":"","evidence_refs":[],"evidence_summary":""},"relationship_action":{"action":"none","reason":"","evidence_refs":[]},"disconnect":{"leave":false,"reason":""},"task_context_update":{"action":"none","goal":"","constraints":[],"progress":"","next_step":""}}\n'
+)
+
+PREVIOUS_CURRENT_REPLY_GUIDANCE = (
+    '- "reply": Tu respuesta completa como Airi, usando asteriscos para acciones.\n'
+)
+PREVIOUS_CURRENT_OUTPUT_CONTRACT_PROMPT = (
+    OUTPUT_CONTRACT_PROMPT
+    .replace(DECISION_LIGHT_DRAFTING_GUIDANCE, CONCISE_DRAFTING_GUIDANCE)
+    .replace(DECISION_LIGHT_REPLY_GUIDANCE, PREVIOUS_CURRENT_REPLY_GUIDANCE)
+    .replace("Me parece una idea genial.", "*sonríe levemente* Me parece una idea genial.")
+)
+PREVIOUS_CURRENT_COMPACT_OUTPUT_PROMPT = (
+    COMPACT_OUTPUT_PROMPT
+    .replace(DECISION_LIGHT_DRAFTING_GUIDANCE, CONCISE_DRAFTING_GUIDANCE)
+    .replace(DECISION_LIGHT_REPLY_GUIDANCE, '- "reply": Tu respuesta (español, acciones entre asteriscos).\n')
 )
 
 WEB_SEARCH_DECISION_PROMPT = (
@@ -350,7 +470,13 @@ def build_system_prompt(
     compact=False,
     variant: PromptVariant = "current",
 ):
-    if variant == "current":
+    if variant in (
+        "current",
+        "gif_priority_candidate",
+        "one_pass_candidate",
+        "decision_light_candidate",
+        "previous_current_candidate",
+    ):
         personality = SYSTEM_PROMPT
     elif variant == "compact_candidate":
         personality = SYSTEM_PROMPT_COMPACT_CANDIDATE
@@ -359,8 +485,23 @@ def build_system_prompt(
         
     base = str(web_context) + personality if web_context else personality
     base += FACTUAL_HONESTY_PROMPT
-    contract = COMPACT_OUTPUT_PROMPT if compact else OUTPUT_CONTRACT_PROMPT
-    return base + "".join(sections) + contract
+    if variant == "previous_current_candidate":
+        contract = (
+            PREVIOUS_CURRENT_COMPACT_OUTPUT_PROMPT
+            if compact
+            else PREVIOUS_CURRENT_OUTPUT_CONTRACT_PROMPT
+        )
+    elif variant in ("gif_priority_candidate", "one_pass_candidate"):
+        contract = (
+            PREVIOUS_CURRENT_COMPACT_OUTPUT_PROMPT
+            if compact
+            else PREVIOUS_CURRENT_OUTPUT_CONTRACT_PROMPT
+        )
+    else:
+        contract = COMPACT_OUTPUT_PROMPT if compact else OUTPUT_CONTRACT_PROMPT
+    if variant == "one_pass_candidate":
+        contract = contract.replace(CONCISE_DRAFTING_GUIDANCE, ONE_PASS_DRAFTING_GUIDANCE)
+    return base + "".join(sections) + GIF_REACTION_SECTION + contract
 
 def affinity_prompt_section(points, level_name, display_name):
     tone = AFFINITY_TONE_HINTS.get(level_name, AFFINITY_TONE_HINTS["Desconocida"])
@@ -493,8 +634,7 @@ def question_variety_nudge_section(history):
     if last_assistant_reply_ended_with_question(history):
         return (
             "\n\n=== VARIEDAD Y NATURALIDAD ===\n"
-            "PROHIBIDO cerrar con pregunta en este turno salvo que sea estrictamente necesario. "
-            "Cierra con una afirmación, broma o pausa natural para que el usuario retome la iniciativa."
+            "Como el turno anterior terminó con una pregunta, varía ahora el cierre con una afirmación, broma o pausa natural, salvo que preguntar sea lo más adecuado."
         )
     return ""
 
@@ -784,7 +924,7 @@ def preferences_prompt_section(world):
     )
 
 def date_context_section(session):
-    if not isinstance(session, dict): return ""
+    if not date_session_active(session): return ""
     session = normalize_date_session(session)
     if session.get("state") == "last_chance":
         reason = str(session.get("crisis_reason") or "").strip()
@@ -801,7 +941,24 @@ def date_context_section(session):
     )
 
 def memories_prompt_section(entries):
-    active = [e for e in entries or () if isinstance(e, dict) and e.get("status") != "superseded"]
+    active = []
+    normalized_texts = []
+    for entry in entries or ():
+        if not isinstance(entry, dict) or entry.get("status") == "superseded":
+            continue
+        text = " ".join(str(entry.get("text") or "").split()).strip()
+        if not text:
+            continue
+        comparable = text.casefold()
+        if any(
+            comparable == previous
+            or (min(len(comparable), len(previous)) >= 40
+                and SequenceMatcher(None, comparable, previous).ratio() >= 0.9)
+            for previous in normalized_texts
+        ):
+            continue
+        active.append({**entry, "text": text})
+        normalized_texts.append(comparable)
     memories = "\n".join(f"{i}. {e.get('text', '')}" for i, e in enumerate(active, 1)) if active else "(ninguna)"
     return f"\n\n=== RECUERDOS DEL USUARIO ===\n{memories}\nActualiza 'memory' si te da datos nuevos."
 

@@ -24,6 +24,7 @@ Principios (ver plan maestro, secciones 2 y 5):
 from __future__ import annotations
 
 import math
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -234,6 +235,18 @@ def build_inference_history(
             prefix = f"{temporal} " if temporal else ""
             view.append({"role": "user", "content": f"{prefix}{tag} {text}".rstrip()})
             continue
+
+        # Asistente (o cualquier rol no-usuario): si el contenido es un JSON
+        # de salida, solo se expone la respuesta conversacional. Los metadatos
+        # de control (incluido el esquema de citas antiguo) no son diálogo y
+        # no deben volver a enseñarse como parte del historial.
+        if role == "assistant":
+            try:
+                payload = json.loads(content)
+            except (TypeError, ValueError):
+                payload = None
+            if isinstance(payload, dict) and isinstance(payload.get("reply"), str):
+                content = payload["reply"]
 
         # Asistente (o cualquier rol no-usuario): se conserva el contenido y,
         # si consta, se anota a quién iba dirigida la respuesta.

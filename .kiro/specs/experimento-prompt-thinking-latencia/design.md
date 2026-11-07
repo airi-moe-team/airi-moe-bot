@@ -64,6 +64,19 @@ El diseño reutiliza Python, `ConversationService`, `TurnContext`, `TurnEvent`, 
 3. **Runner secuencial y salidas agregadas.** Se ejecutan cinco pares A/B con orden alternado AB/BA, reconstruyendo estado antes de cada inferencia. No se paralelizan solicitudes para evitar contención en el servidor local. Se omiten del reporte textos de entrada, historial, prompts y respuestas.
 4. **Thinking verificado por configuración efectiva.** El benchmark exige que el cliente resuelva `thinking_mode == "on"`; si no puede confirmarlo, aborta antes de generar. No basta con pasar `disable_thinking=False`, ya que hoy `quick` puede solicitar lo contrario.
 
+### Centralización semántica de reacciones visuales
+
+- El constructor del system prompt emitirá una sola sección `=== REACCIONES VISUALES Y SELECCIÓN DE GIF ===` en las variantes que incluyan el contrato de producción. Esa sección será la fuente semántica única y distinguirá intención conversacional, ánimo interno y gesto/expresión/acción visible.
+- El catálogo cubrirá cada identificador canónico de `ALLOWED_GIF_TYPES` salvo `none`, que es el sentinel de ausencia/no reacción y no una reacción visual. Los significados observables aprobados por el usuario se conservarán en su intención; no se añaden aliases al enum ni se cambia la API.
+- La descripción JSON de `gif` mantendrá todos los valores permitidos y solo indicará que acompaña `reply` y que debe seguir el catálogo central. La sección heredada `Guía de GIFs` se elimina.
+- El render de `ÁNIMO DE ESTE TURNO` describirá ánimo mediante tono/actitud e indicará independencia con respecto a `mood.label`; eliminará la selección de GIF y conservará intactas las reglas de afinidad/cercanía social.
+- Las versiones compacta, candidatas y `previous_current_candidate` se inspeccionarán para evitar que una variante todavía inyecte definiciones duplicadas o ejemplos contradictorios. Si se conserva una variante de rollback, su diferencia no podrá revivir la guía semántica obsoleta.
+- Las pruebas unitarias compararán el catálogo del prompt con los IDs canónicos, contarán una sección semántica por prompt renderizado y comprobarán que los fragmentos dinámicos no fuerzan GIFs. La validación live utilizará el mismo modelo/settings para los seis escenarios con repeticiones, capturará request/response reales y reportará JSON/finish/content, latencia/tokens, deliberación observable y coherencia. Sin un baseline equivalente, los resultados serán descriptivos, no causales.
+
+#### Límites preservados
+
+No se modifica el schema JSON, personalidad, afinidad, romance, memoria, parámetros de llama.cpp, parser, retry/repair, modo thinking ni API. No se crean reglas por keyword ni instrucciones de razonamiento paso a paso.
+
 ## Componentes e interfaces
 
 ### Dominio de prompts
@@ -157,3 +170,22 @@ El reporte agregado incluye número de muestras válidas/fallidas, mediana y ran
 - El system prompt reorganizado podría alterar calidad o número de tokens de razonamiento. El baseline permanece disponible y el candidato es opt-in.
 - El reporte local retiene métricas, hashes, IDs de muestra y calificaciones, pero nunca texto de usuario, historial, prompt completo o respuesta.
 - TTFT no está disponible por la llamada HTTP no-streaming actual; habilitar streaming sería un trabajo separado.
+
+## Adenda: candidata focalizada contra indecisión
+
+Se añade `decision_light_candidate` como variante opt-in para evaluar una interacción cotidiana sencilla. No reemplaza ni modifica `current`, `compact_candidate` u otras variantes experimentales.
+
+- La guía de GIF se formula por la acción o emoción observable de `reply`; no contrapone ejemplos concretos ni obliga a igualar el GIF con `mood.label`. Los valores permitidos y el schema permanecen idénticos.
+- La descripción de `reply` aclara que los gestos narrativos son opcionales. La instrucción de redacción es positiva y proporcionada, sin exigir enumerar alternativas ni revisar borradores.
+- El selector cambia únicamente el texto de orientación del prompt. Modelo, configuración de generación, contexto, contrato, historial y límites permanecen fijos entre brazos.
+- El análisis registra la latencia y el uso de la llamada `primary` separadamente de parse-repair y conversation-review; las llamadas posteriores no se atribuyen a la latencia de generación primaria.
+
+La comparación live debe usar la misma traza y configuración de modelo para `current` y `decision_light_candidate`, con varias repeticiones. Una salida truncada o una reparación se informa como tal y no se oculta dentro del tiempo de `primary`.
+
+## Adenda: promoción aprobada a `current`
+
+El usuario solicita promover las tres guías de `decision_light_candidate` al prompt predeterminado `current`: selección del GIF por reacción observable usando exclusivamente categorías canónicas; respuesta cotidiana directa y proporcionada; y gestos narrativos opcionales. El constructor default debe reflejar esa guía y la candidata se conserva temporalmente para rollback/comparación.
+
+La normalización del harness permanece independiente: `smile` se convierte a `happy` y `neutral` a `nod` antes de validar la salida. No se agregan aliases a `ALLOWED_GIF_TYPES` ni a `GIF_CATEGORIES`. Esta capa evita perder el GIF por un alias, pero no cambia el razonamiento del modelo ni sustituye `parse_repair` cuando el JSON o `reply` son inválidos/truncados.
+
+La promoción preserva el schema estricto, valores permitidos canónicos, claves obligatorias, parámetros de inferencia y política de reparación. Se mantienen pruebas para el prompt anterior/candidata hasta cerrar la comparación y la verificación de rollback.

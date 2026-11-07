@@ -87,6 +87,14 @@ def normalize_date_session(session):
     return session
 
 
+def date_session_active(session):
+    """True only for a live date event, including its last-chance state."""
+    return isinstance(session, dict) and session.get("state", "active") in (
+        "active",
+        "last_chance",
+    )
+
+
 def date_turns_left(session):
     """Turnos que le quedan a la cita antes de agotar el límite."""
     if not isinstance(session, dict):

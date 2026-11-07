@@ -1,0 +1,35 @@
+{
+  "feature": "experimento-prompt-thinking-latencia",
+  "generated_at": "2026-11-06T23:48:44Z",
+  "items": [
+    {
+      "id": "FB-001",
+      "title": "Promover la guía decision-light al prompt current de producción",
+      "severity": "major",
+      "impact": "El usuario decide dejar de mantener esta guía solo como variante experimental. La especificación actual exige que current permanezca intacto, por lo que los documentos deben reflejar la promoción antes de tocar el prompt de producción.",
+      "recommendation": "Actualizar current con la regla de GIF canónico según reacción observable, sin exigir coincidencia con mood.label; respuesta cotidiana directa y proporcionada; y acciones narrativas opcionales. Mantener schema y categorías canónicas, junto con la normalización del harness smile→happy y neutral→nod.",
+      "targets": ["requirements", "design", "tasks"],
+      "updates": {
+        "requirements": [
+          "Reemplazar la condición de que current permanezca inmutable por un criterio de promoción de la guía de GIF, respuesta directa y gestos opcionales.",
+          "Verificar que el prompt de producción conserva valores GIF canónicos y que el parser normaliza smile a happy y neutral a nod.",
+          "Asegurar que schema, contrato de salida y reparaciones de JSON no cambian inadvertidamente."
+        ],
+        "design": [
+          "Promover al prompt current las tres guías de decision_light_candidate; conservar la candidata previa para rollback/comparación mientras sea útil.",
+          "Documentar la normalización de aliases como comportamiento determinista del parser, separado del prompt.",
+          "Aclarar que los aliases evitan el fallback por GIF inválido, pero no reducen razonamiento ni reparan JSON truncado/inválido."
+        ],
+        "tasks": [
+          "Añadir pruebas RED/GREEN del prompt current con la nueva guía y su igualdad de schema/enums.",
+          "Actualizar constructor/default y pruebas de producción; conservar una ruta de rollback a la guía anterior.",
+          "Ejecutar suite completa y un replay live controlado; revisar GIF canónico, parse/repair y latencia."
+        ]
+      }
+    }
+  ],
+  "approvals_to_reset": ["requirements", "design", "tasks"],
+  "owners": {"FB-001": "Agente implementador; revisión/aprobación de documentos: usuario"},
+  "questions": [],
+  "next_checkpoint": "Revisar y aprobar requirements, design y tasks actualizados antes de editar el prompt current."
+}

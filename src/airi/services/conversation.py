@@ -36,6 +36,7 @@ from airi.domain.constants import (
     QUICK_REPLY_MAX_CHARS,
     SEARCH_QUERY_MAX_TOKENS,
 )
+from airi.domain.dates import date_session_active
 from airi.domain.diary import add_diary_entry, new_diary_entry
 from airi.domain.gifs import ALLOWED_GIF_TYPES
 from airi.domain.grounding import reply_seems_grounded
@@ -1881,7 +1882,7 @@ class ConversationService:
         session_mode = conversation_mode in ("spectator", "active", "proactive")
         from airi.domain.capabilities import TurnCapabilities
 
-        capabilities = TurnCapabilities(date_active=isinstance(date_session, dict))
+        capabilities = TurnCapabilities(date_active=date_session_active(date_session))
         schema = response_schema(capabilities, session_mode)
         state = self.state
         points = state.entry_points(user.id)
@@ -1992,7 +1993,7 @@ class ConversationService:
             )
         from airi.domain.capabilities import TurnCapabilities
 
-        capabilities = TurnCapabilities(date_active=isinstance(date_session, dict))
+        capabilities = TurnCapabilities(date_active=date_session_active(date_session))
         date_section = domain_prompts.date_contract_section(capabilities)
         if date_section:
             sections.append(date_section)

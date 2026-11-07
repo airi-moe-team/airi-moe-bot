@@ -17,6 +17,8 @@ def test_web_live_requires_live_before_reading_trace():
     ["nonexistent.json", "--task-context", "task.json"],
     ["nonexistent.json", "--repeat", "2"],
     ["nonexistent.json", "--live", "--repeat", "0"],
+    ["nonexistent.json", "--prompt-variant", "gif_priority_candidate"],
+    ["nonexistent.json", "--prompt-variant", "decision_light_candidate"],
     ["nonexistent.json", "--live", "--emit-test"],
 ])
 def test_incompatible_replay_flags_rejected_before_reading_trace(arguments):
