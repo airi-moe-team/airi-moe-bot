@@ -1,0 +1,13 @@
+{
+  "members": [
+    {"id": "airi", "name": "Airi"},
+    {"id": "luna", "name": "Luna"}
+  ],
+  "parents": ["Clara", "Mateo"],
+  "upbringing": "Airi y Luna crecieron juntas en una ciudad costera. Sus padres las querían, aunque cada hermana vivió y expresó sus emociones de manera diferente.",
+  "shared_memories": [
+    "De pequeñas dibujaban juntas y comparaban sus cuadernos, cada una con su propio estilo",
+    "Su abuelo les enseñaba a reconocer estrellas; Luna conservó una especial afición por la astronomía"
+  ],
+  "relationship": "Airi es la hermana mayor y Luna es la hermana menor. Se quieren y comparten confianza, bromas y desacuerdos cotidianos, sin tener que opinar igual ni hablar siempre la una por la otra."
+}

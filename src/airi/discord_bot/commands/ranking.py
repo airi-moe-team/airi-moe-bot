@@ -2,6 +2,7 @@
 
 from airi.discord_bot import embeds
 from airi.domain.affinity import ranking
+from airi.persona import character_name
 
 
 async def handle(ctx, message):
@@ -14,7 +15,7 @@ async def handle(ctx, message):
         return
     winner = state.world.get("winner_id")
     if winner:
-        status = f"💍 Airi ya es novia de **{state.display_name(winner)}**."
+        status = f"💍 {character_name()} ya es novia de **{state.display_name(winner)}**."
     else:
-        status = "💌 Airi sigue soltera: el corazón está libre."
+        status = f"💌 {character_name()} sigue soltera: el corazón está libre."
     await message.channel.send(embed=embeds.ranking_embed(rows, status))

@@ -8,6 +8,7 @@ from __future__ import annotations
 import discord
 
 from airi.domain.notices import Notice
+from airi.persona import character_name
 
 GIF_EMBED_COLOR = discord.Color(0xFFB6D9)
 
@@ -18,7 +19,7 @@ NOTICE_STYLES = {
     "discovery": ("✨ Descubrimiento", discord.Color(0xCBA6F7)),
     "memory_saved": ("📝 Memoria guardada", discord.Color(0xF9E2AF)),
     "self_changed": (
-        "🧠 Airi ha aprendido algo nuevo",
+        f"🧠 {character_name()} ha aprendido algo nuevo",
         discord.Color(0xB4BEFE),
     ),
     "level_up": ("💗 Nivel de afinidad", discord.Color(0xF5C2E7)),
@@ -40,8 +41,8 @@ def system_embed(description, *, title=None, color=None):
 def connected_embed():
     """Aviso de que Airi ha vuelto a estar disponible."""
     return system_embed(
-        "Airi está en línea.",
-        title="🟢 Airi se ha conectado",
+        f"{character_name()} está en línea.",
+        title=f"🟢 {character_name()} se ha conectado",
     )
 
 
@@ -49,11 +50,11 @@ def disconnecting_embed(reason):
     """Aviso de cierre con el motivo personal (solo canal de origen)."""
     clean = str(reason or "").strip()[:300]
     body = (
-        f"«{clean}»\n\nAiri está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
+        f"«{clean}»\n\n{character_name()} está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
         if clean
-        else "Airi está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
+        else f"{character_name()} está cerrando los ojitos y desconectándose por un ratito. Se acurruca y se queda dormida. No hagan mucho ruido... ¡que luego le cuesta levantarse!"
     )
-    return system_embed(body, title="🚪 Airi se está desconectando")
+    return system_embed(body, title=f"🚪 {character_name()} se está desconectando")
 
 
 def notice_embed(notice):
@@ -65,20 +66,20 @@ def notice_embed(notice):
     """
     if isinstance(notice, Notice):
         title, color = NOTICE_STYLES.get(
-            notice.kind, ("💗 Airi", GIF_EMBED_COLOR)
+            notice.kind, (f"💗 {character_name()}", GIF_EMBED_COLOR)
         )
         return system_embed(notice.text, title=title, color=color)
-    return system_embed(str(notice), title="💗 Airi")
+    return system_embed(str(notice), title=f"💗 {character_name()}")
 
 HELP_TEXT = (
     "**🎯 Objetivo**\n"
-    "Conocer a Airi y construir un vínculo real con ella. La **afinidad** mide "
+    f"Conocer a {character_name()} y construir un vínculo real con ella. La **afinidad** mide "
     "cercanía y confianza (máx. 100), pero no convierte a nadie en pareja: sus "
     "sentimientos avanzan solo con momentos concretos que pueda recordar y una "
     "pareja requiere una propuesta y una aceptación mutua.\n\n"
 
     "**💬 Cómo subir afinidad**\n"
-    "Habla con ella; Airi decide ella misma cuándo sube o baja, de `-5` a `+5`.\n"
+    f"Habla con ella; {character_name()} decide ella misma cuándo sube o baja, de `-5` a `+5`.\n"
     "• Sube: humor, interés sincero, recordar lo que le gusta y apoyarla en un "
     "mal momento.\n"
     "• Baja: groserías, presión, incomodidad o spam.\n"
@@ -96,16 +97,16 @@ HELP_TEXT = (
     "• `!ranking` — quién va ganando\n"
     "• `!cita` — invitarla a una cita (nivel Amiga, 1 cada 6 h). Son varios "
     "turnos (máx. ~5 min): si la cosa se tuerce tendrás una última oportunidad "
-    "para reconducirla. Mientras Airi está en una cita, nadie más puede "
+    f"para reconducirla. Mientras {character_name()} está en una cita, nadie más puede "
     "hablarle hasta que termine.\n"
     "• `!regalo <item>` — regalarle algo (1/día). Prueba: flores, chocolate, collar...\n"
     "• `!memorias` / `!olvidar <número>` — ver o borrar sus recuerdos sobre ti\n"
-    "• `!diario` — ver los recuerdos de Airi sobre ti; `!diario todos` (solo dueño, por DM)\n"
+    f"• `!diario` — ver los recuerdos de {character_name()} sobre ti; `!diario todos` (solo dueño, por DM)\n"
     "• `!usuarios` — gente del canal\n"
-    "• `!yo` — ver cómo es Airi ahora mismo\n"
+    f"• `!yo` — ver cómo es {character_name()} ahora mismo\n"
     "• `!animo` — ver su ánimo actual y la evolución de los últimos turnos\n"
-    "• `!yo historia` — cambios que Airi ha hecho en su forma de ser\n"
-    "• `!descubrir` — pedirle a Airi una reflexión sobre sí misma (solo dueño)\n"
+    f"• `!yo historia` — cambios que {character_name()} ha hecho en su forma de ser\n"
+    f"• `!descubrir` — pedirle a {character_name()} una reflexión sobre sí misma (solo dueño)\n"
     "• `!descubrimientos` — ver sus descubrimientos privados (solo dueño)\n"
     "• `!reset` — reiniciar vuestra conversación\n\n"
 
@@ -126,7 +127,7 @@ HELP_TEXT = (
 
 def build_help_embed():
     return discord.Embed(
-        title="💘 Cómo conquistar a Airi",
+        title=f"💘 Cómo conquistar a {character_name()}",
         description=HELP_TEXT,
         color=GIF_EMBED_COLOR,
     )
@@ -134,7 +135,7 @@ def build_help_embed():
 
 def affinity_embed(user, points, level_name, progress):
     embed = discord.Embed(
-        title="💛 Afinidad con Airi",
+        title=f"💛 Afinidad con {character_name()}",
         description=(
             f"{user.display_name} tiene **{points} puntos** de afinidad.\n"
             f"Nivel actual: **{level_name}**\n{progress}"
@@ -147,7 +148,7 @@ def affinity_embed(user, points, level_name, progress):
 
 def relation_embed(user, estado, points, level_name, progress):
     embed = discord.Embed(
-        title="💛 Tu relación con Airi",
+        title=f"💛 Tu relación con {character_name()}",
         description=(
             f"{estado}\n\nNivel: **{level_name}**\n"
             f"Afinidad: **{points}** pts\n{progress}"
@@ -177,7 +178,7 @@ def ranking_embed(rows, status_line):
 
 def memories_embed(listing):
     embed = discord.Embed(
-        title="🧠 Memorias de Airi",
+        title=f"🧠 Memorias de {character_name()}",
         description=listing,
         color=GIF_EMBED_COLOR,
     )
@@ -187,9 +188,9 @@ def memories_embed(listing):
     return embed
 
 
-def diary_embed(listing, *, footer="Recuerdos de Airi relacionados contigo"):
+def diary_embed(listing, *, footer=f"Recuerdos de {character_name()} relacionados contigo"):
     embed = discord.Embed(
-        title="📔 Diario de Airi",
+        title=f"📔 Diario de {character_name()}",
         description=listing,
         color=GIF_EMBED_COLOR,
     )

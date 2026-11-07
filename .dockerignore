@@ -1,0 +1,13 @@
+.git
+.kiro
+.venv
+.pytest_cache
+**/__pycache__
+.env
+.env.*
+data
+traces
+eval
+tests
+private-llm-artifacts
+private-llm-payloads

@@ -46,8 +46,8 @@ from airi.domain.mood import (
     normalize_mood,
     render_mood_meter,
 )
-from airi.domain.self_model import normalize_self, render_trait_bars
 from airi.domain.notices import discovery_notice, self_changed_notice
+from airi.domain.self_model import normalize_self, render_trait_bars
 from airi.domain.text_filters import clean_reply
 from airi.domain.texts import (
     DATE_QUESTION_MISSED_TEXT,
@@ -56,6 +56,7 @@ from airi.domain.texts import (
 )
 from airi.observability.instrumentation import turn_event
 from airi.observability.interaction_tracker import current_tracker
+from airi.persona import character_name
 from airi.services.conversation import TurnContext
 from airi.services.persistence import PersistenceError
 from airi.services.turn_coordinator import StaleTurnError, TurnCoordinator
@@ -207,7 +208,7 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0
         _gif_tracker.module_result("gif", "activated")
     try:
         embed = discord.Embed(
-            title=GIF_EMOTION_TITLES.get(gif_type, "Airi"),
+            title=GIF_EMOTION_TITLES.get(gif_type, f"{character_name()}"),
             color=mood_embed_color(ctx) or embeds.GIF_EMBED_COLOR,
         )
         # Rasgos de Airi encima de la imagen (Discord pinta los campos antes
@@ -216,12 +217,12 @@ async def send_gif_bytes(ctx, channel, user, gif_type, data, *, affinity_delta=0
             traits = traits_summary(ctx)
             if traits:
                 embed.add_field(
-                    name="Rasgos de Airi", value=traits, inline=False
+                    name=f"Rasgos de {character_name()}", value=traits, inline=False
                 )
         mood_text = mood_summary(ctx)
         if mood_text:
             embed.add_field(
-                name="Ánimo de Airi", value=mood_text, inline=False
+                name=f"Ánimo de {character_name()}", value=mood_text, inline=False
             )
         footer = affinity_footer_for_change(ctx, user, affinity_delta)
         if footer:
@@ -399,10 +400,17 @@ async def run_user_turn(
                         message_ids=[message_id],
                         context=turn_ctx,
                         publisher=publisher,
+                        before_commit=getattr(ctx, "before_commit", None),
                     )
                     published = True
                 else:
-                    result = await service.run_turn(author, merged, turn_ctx)
+                    if getattr(ctx, "before_commit", None) is not None:
+                        draft = await service.generate_turn(author, merged, turn_ctx)
+                        await ctx.before_commit()
+                        result = service.apply_turn(draft)
+                        await service.finish_trace(turn_ctx, result.trace)
+                    else:
+                        result = await service.run_turn(author, merged, turn_ctx)
 
                 if result is not None:
                     ctx.remember_trace(result.trace)
@@ -423,12 +431,12 @@ async def run_user_turn(
                 )
                 if finish == "length":
                     text = (
-                        "Tu pregunta o comentario dejó a Airi pensando tanto que "
+                        f"Tu pregunta o comentario dejó a {character_name()} pensando tanto que "
                         "se olvidó de responder. _Se quedó mirando al vacío como "
                         "si estuviera resolviendo el sentido de la vida._ "
                         "Inténtalo de nuevo, antes de que le eche humo la cabeza."
                     )
-                    title = "🧠 Airi pensó demasiado..."
+                    title = f"🧠 {character_name()} pensó demasiado..."
                 else:
                     text = (
                         "No he podido generar una respuesta válida esta vez. "
@@ -856,7 +864,7 @@ async def handle_scene_choice(ctx, interaction, scene):
     if now - last_date < DATE_COOLDOWN:
         remaining = int((DATE_COOLDOWN - (now - last_date)) // 3600)
         await interaction.followup.send(
-            f"Airi ya ha salido contigo hace poco... dale un respiro "
+            f"{character_name()} ya ha salido contigo hace poco... dale un respiro "
             f"(en ~{remaining} h).",
             ephemeral=True,
         )

@@ -41,6 +41,12 @@ def main(argv=None):
     p_run = sub.add_parser("run", help="inicia el bot de Discord")
     p_run.set_defaults(func=cmd_run)
 
+    p_coordinator = sub.add_parser("coordinate", help="coordina dos bots en un canal")
+    def coordinate(_args):
+        from airi.coordinator.server import main as coordinator_main
+        return coordinator_main()
+    p_coordinator.set_defaults(func=coordinate)
+
     p_trace = sub.add_parser("trace", help="inspecciona trazas de turnos")
     p_trace.set_defaults(func=cmd_trace)
 

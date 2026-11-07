@@ -1,0 +1,88 @@
+x-common: &common
+  image: airi-multibot:local
+  build: .
+  restart: unless-stopped
+  init: true
+  networks: [bots]
+
+x-bot-environment: &bot-environment
+  AIRI_COORDINATED: "1"
+  CHANNEL_ID: ${CHANNEL_ID:?Set CHANNEL_ID}
+  COORDINATOR_URL: http://coordinator:8090
+  COORDINATOR_BOTS: '{"airi":"${BOT_A_DISCORD_ID:?Set BOT_A_DISCORD_ID}","luna":"${BOT_B_DISCORD_ID:?Set BOT_B_DISCORD_ID}"}'
+  AIRI_DATA_DIR: /app/data
+  AIRI_TRACE_DIR: /app/traces
+  NO_PROXY: coordinator,localhost,127.0.0.1,host.docker.internal
+
+services:
+  coordinator:
+    <<: *common
+    command: [coordinate]
+    environment:
+      CHANNEL_ID: ${CHANNEL_ID:?Set CHANNEL_ID}
+      COORDINATOR_BOTS: '{"airi":"${BOT_A_DISCORD_ID:?Set BOT_A_DISCORD_ID}","luna":"${BOT_B_DISCORD_ID:?Set BOT_B_DISCORD_ID}"}'
+      COORDINATOR_TOKEN_AIRI: ${COORDINATOR_TOKEN_AIRI:?Set COORDINATOR_TOKEN_AIRI}
+      COORDINATOR_TOKEN_LUNA: ${COORDINATOR_TOKEN_LUNA:?Set COORDINATOR_TOKEN_LUNA}
+      COORDINATOR_DB: /app/data/coordinator.sqlite3
+      COORDINATOR_DEBOUNCE: ${COORDINATOR_DEBOUNCE:-3}
+      COORDINATOR_PROACTIVE_ENABLED: ${COORDINATOR_PROACTIVE_ENABLED:-1}
+      COORDINATOR_IDLE_SECONDS: ${COORDINATOR_IDLE_SECONDS:-1800}
+      COORDINATOR_PROACTIVE_COOLDOWN_SECONDS: ${COORDINATOR_PROACTIVE_COOLDOWN_SECONDS:-10800}
+      COORDINATOR_PROACTIVE_MAX_PER_DAY: ${COORDINATOR_PROACTIVE_MAX_PER_DAY:-3}
+      COORDINATOR_PROACTIVE_RECHECK_SECONDS: ${COORDINATOR_PROACTIVE_RECHECK_SECONDS:-1800}
+      COORDINATOR_MAX_BOT_INTERVENTIONS: ${COORDINATOR_MAX_BOT_INTERVENTIONS:-6}
+      COORDINATOR_BOT_TURN_DELAY_SECONDS: ${COORDINATOR_BOT_TURN_DELAY_SECONDS:-${COORDINATOR_REPLY_DELAY:-8}}
+      COORDINATOR_TIMEZONE: ${COORDINATOR_TIMEZONE:-America/Lima}
+      COORDINATOR_PROACTIVE_START_HOUR: ${COORDINATOR_PROACTIVE_START_HOUR:-9}
+      COORDINATOR_PROACTIVE_END_HOUR: ${COORDINATOR_PROACTIVE_END_HOUR:-23}
+    volumes: [coordinator-data:/app/data]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/readyz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  bot-a:
+    <<: *common
+    env_file: .env.bot-a
+    environment:
+      <<: *bot-environment
+      AIRI_BOT_ID: airi
+      AIRI_PERSONA_FILE: /app/config/airi.json
+      COORDINATOR_TOKEN: ${COORDINATOR_TOKEN_AIRI:?Set COORDINATOR_TOKEN_AIRI}
+    volumes: [bot-a-data:/app/data, bot-a-traces:/app/traces]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      coordinator: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, airi.coordinator.health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+  bot-b:
+    <<: *common
+    env_file: .env.bot-b
+    environment:
+      <<: *bot-environment
+      AIRI_BOT_ID: luna
+      AIRI_PERSONA_FILE: /app/config/luna.json
+      COORDINATOR_TOKEN: ${COORDINATOR_TOKEN_LUNA:?Set COORDINATOR_TOKEN_LUNA}
+    volumes: [bot-b-data:/app/data, bot-b-traces:/app/traces]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      coordinator: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, airi.coordinator.health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+networks:
+  bots: {}
+volumes:
+  coordinator-data: {}
+  bot-a-data: {}
+  bot-b-data: {}
+  bot-a-traces: {}
+  bot-b-traces: {}

@@ -1,5 +1,9 @@
 # Airi — Discord bot con LLM local (arquitectura hexagonal)
 
+Para ejecutar dos personajes con LLM independientes en un mismo canal, consulta
+[el despliegue de múltiples bots](docs/multi-bot.md): Docker Compose, coordinación
+de turnos, perfiles, configuración y recuperación ante fallos.
+
 ## Estructura
 
 ```text

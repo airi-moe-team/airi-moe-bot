@@ -4,6 +4,7 @@ import time
 
 from airi.discord_bot import embeds
 from airi.domain.affinity import affinity_summary, entry_points, is_winner
+from airi.persona import character_name
 
 
 def _summary(ctx, user_id):
@@ -32,11 +33,11 @@ async def handle_relacion(ctx, message):
         estado = f"💍 ¡Eres su novio! Lleváis **{days} día(s)** juntos."
     elif world.get("winner_id"):
         estado = (
-            f"💔 Airi ya es novia de **{ctx.state.display_name(world['winner_id'])}**. "
+            f"💔 {character_name()} ya es novia de **{ctx.state.display_name(world['winner_id'])}**. "
             "Solo puedes ser su amigo."
         )
     else:
-        estado = "💌 Airi está soltera. Sigue conquistándola para ganar la temporada."
+        estado = f"💌 {character_name()} está soltera. Sigue conquistándola para ganar la temporada."
     await message.channel.send(
         embed=embeds.relation_embed(message.author, estado, points, level_name, progress)
     )

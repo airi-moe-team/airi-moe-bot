@@ -6,6 +6,7 @@ import logging
 
 from airi.domain.relationships import reset_season_world
 from airi.domain.self_notes import NOTES_KEY
+from airi.persona import character_name
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ async def _perform(ctx, message):
             log.exception("La retención posterior al reinicio falló")
 
     await message.channel.send(
-        "💞 Nueva temporada: el corazón de Airi vuelve a estar libre. "
+        f"💞 Nueva temporada: el corazón de {character_name()} vuelve a estar libre. "
         "¡Que empiece la conquista!"
     )
 

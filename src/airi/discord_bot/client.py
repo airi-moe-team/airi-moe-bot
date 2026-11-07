@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import signal
 import time
@@ -28,6 +29,7 @@ from airi.observability.interaction_tracker import (
     current_tracker,
     tracked_interaction,
 )
+from airi.persona import character_name, current_persona
 from airi.services import spectator_policy as spectator_policy_module
 from airi.services.channel_queue import ChannelDispatcher
 from airi.services.conversation_task import ConversationTaskRegistry
@@ -342,6 +344,8 @@ def create_client(
     timers = {}
     pending_message_tracker = PendingMessageTracker(state=pending_state)
     shutdown = {"started": False, "phase": "running"}
+    coordinated = os.getenv("AIRI_COORDINATED", "0").lower() in ("1", "true", "yes")
+    worker = None
     client._spectator_timers = timers
     client._spectator_dispatcher = dispatcher
     client._pending_message_tracker = pending_message_tracker
@@ -375,7 +379,7 @@ def create_client(
             shutdown["phase"] = "closing"
             clean_reason = str(reason or "").strip()[:300]
             requested_at = time.time()
-            log.info("Airi decide desconectarse: %s", clean_reason)
+            log.info(f"{character_name()} decide desconectarse: %s", clean_reason)
 
             persistence = getattr(ctx, "persistence", None)
             if persistence is not None:
@@ -453,7 +457,7 @@ def create_client(
                     shutdown["phase"] = "failed"
                     shutdown["started"] = False
                     record_shutdown_status("failed")
-                    log.error("El cierre no se confirmó; Airi sigue disponible")
+                    log.error(f"El cierre no se confirmó; {character_name()} sigue disponible")
 
             asyncio.create_task(close_after_reply())
 
@@ -565,8 +569,16 @@ def create_client(
 
     @client.event
     async def on_ready():
+        nonlocal worker
         log.info("Bot conectado como %s", client.user)
         log.info("Canal autorizado: %s", channel_id)
+        if coordinated:
+            if worker is None:
+                from airi.coordinator.worker import DiscordWorker
+                worker = DiscordWorker(client, build_ctx, registry, channel_id, _wire_shutdown)
+                worker.task = asyncio.create_task(worker.run())
+                client._coordinator_worker = worker
+            return
         if not shutdown["started"]:
             channel = await _resolve_channel()
             if channel is not None:
@@ -583,6 +595,10 @@ def create_client(
 
     @client.event
     async def on_message(message):
+        if coordinated:
+            if worker is not None:
+                await worker.observe(message)
+            return
         with tracked_interaction() as tracker:
             if shutdown["started"]:
                 return
@@ -690,7 +706,7 @@ def create_client(
                             if channel is None:
                                 return
                             synthetic = type(
-                                "SyntheticUser", (), {"id": 0, "display_name": "Airi", "bot": False}
+                                "SyntheticUser", (), {"id": 0, "display_name": f"{character_name()}", "bot": False}
                             )()
                             try:
                                 await turn.run_user_turn(
@@ -923,6 +939,13 @@ def create_client(
         # espectador no adivina: se evalúan las otras señales.
         return False
 
+    if coordinated:
+        original_close = client.close
+        async def coordinated_close():
+            if worker is not None:
+                await worker.close()
+            await original_close()
+        client.close = coordinated_close
     return client
 
 
@@ -1129,7 +1152,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         user_message = (
             f"{display} te acaba de regalar «{item}». "
             f"Regalos recientes que ya te ha hecho: {recent_desc}. "
-            "Reacciona como Airi y decide, con tu criterio, si el regalo mueve tu "
+            f"Reacciona como {current_persona().name} y decide, con tu criterio, si el regalo mueve tu "
             "afinidad y cuánto."
         )
         messages = [
@@ -1143,7 +1166,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
                 schema=GIFT_JUDGE_SCHEMA,
             )
         except Exception:
-            log.exception("No se pudo consultar a Airi sobre el regalo")
+            log.exception(f"No se pudo consultar a {character_name()} sobre el regalo")
             return None
         parsed = extract_json_object(raw) if isinstance(raw, str) else None
         if not isinstance(parsed, dict):
@@ -1171,7 +1194,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         if event.lower() in ("", "none", "ninguno", "null"):
             delta = 0
         log.info(
-            "Airi juzga el regalo «%s»: delta %+d (motivo: %s)", item, delta, event
+            f"{character_name()} juzga el regalo «%s»: delta %+d (motivo: %s)", item, delta, event
         )
         return reply, delta, event
 
@@ -1334,7 +1357,7 @@ def build_date_glue(state, *, llm_base_url, request_timeout):
         else:
             when = f"en ~{int((seconds + 59) // 60)} min"
         return (
-            f"🌸 **Airi está en una cita ahora mismo.** Está con **{name}**. "
+            f"🌸 **{character_name()} está en una cita ahora mismo.** Está con **{name}**. "
             f"Su cita termina {when}. Vuelve un poco más tarde para hablar con ella~"
         )
 
@@ -1458,6 +1481,7 @@ def run_bot(argv=None):
     log = logging.getLogger(__name__)
 
     # Configuración
+    persona = current_persona()  # validate before connecting to Discord
     TOKEN = os.getenv("DISCORD_TOKEN")
     CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
     LLM_CFG = LlmConfig.from_env()
@@ -1476,7 +1500,7 @@ def run_bot(argv=None):
     CONFESS_THRESHOLD = int(os.getenv("CONFESS_THRESHOLD", "100"))
     manual_shutdown_reason = (
         os.getenv("AIRI_SHUTDOWN_REASON", "").strip()
-        or "😴 Airi se fue a dormir..."
+        or (f"😴 {character_name()} se fue a dormir..." if persona.legacy else persona.disconnected)
     )[:300]
 
     # Datos globales
@@ -1814,7 +1838,7 @@ def run_bot(argv=None):
         log.info("Proveedor LLM: %s — %s", LLM_CFG.provider, LLM_BASE_URL)
         _time_zone, time_zone_label, time_zone_source = resolve_zone(settings.timezone)
         log.info(
-            "Zona horaria de Airi: %s (origen: %s)",
+            f"Zona horaria de {character_name()}: %s (origen: %s)",
             time_zone_label,
             time_zone_source,
         )
@@ -1836,7 +1860,7 @@ def run_bot(argv=None):
             world_data.get("season"),
         )
         if world_data.get("winner_id"):
-            log.info("Airi ya tiene pareja: %s", world_data.get("winner_id"))
+            log.info(f"{character_name()} ya tiene pareja: %s", world_data.get("winner_id"))
         if OWNER_ID:
             log.info("Dueño autorizado para reiniciar temporada: %s", OWNER_ID)
         if not NEKOSBEST_CONTACT:

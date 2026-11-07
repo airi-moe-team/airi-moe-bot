@@ -8,6 +8,7 @@ from airi.discord_bot.persistence import async_state_transaction
 from airi.domain.constants import GIFT_COOLDOWN, MAX_RECENT_GIFTS
 from airi.domain.gifts import GIFTS, gift_effect
 from airi.domain.texts import gift_reaction
+from airi.persona import character_name
 
 
 async def handle(ctx, message):
@@ -39,7 +40,7 @@ async def handle(ctx, message):
     last_gift = float(entry.get("last_gift", 0.0) or 0.0)
     if now - last_gift < GIFT_COOLDOWN:
         await message.reply(
-            "Airi ya ha recibido un regalo tuyo hoy... guarda el siguiente "
+            f"{character_name()} ya ha recibido un regalo tuyo hoy... guarda el siguiente "
             "para mañana~",
             mention_author=False,
         )

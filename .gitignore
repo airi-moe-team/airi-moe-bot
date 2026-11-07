@@ -42,3 +42,6 @@ data/.airi.lock
 data/backups/
 data/quarantine/
 data/archive/
+data/**/*.sqlite3*
+data/coordination.sqlite3*
+data/coordinator.sqlite3*

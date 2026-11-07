@@ -3,6 +3,26 @@ name = "airi"
 version = "0.1.0"
 description = "Bot de Discord con LLM local (Airi) — arquitectura hexagonal"
 requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.3,<3",
+    "aiohttp>=3.9,<4",
+    "python-dotenv>=1.0,<2",
+    "tzdata>=2025.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[build-system]
+requires = ["setuptools>=77,<83"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.scripts]
 airi = "airi.__main__:main"
 airi-trace = "airi.observability.cli:main"

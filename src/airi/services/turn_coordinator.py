@@ -58,6 +58,7 @@ class TurnCoordinator:
         message_ids: Sequence[object],
         context: TurnContext,
         publisher: Publisher,
+        before_commit=None,
     ) -> TurnResult | None:
         now = float(self.clock())
         claim = self.journal.claim(channel_id, message_ids, now=now)
@@ -91,6 +92,12 @@ class TurnCoordinator:
             raise StaleTurnError(decision)
 
         async with self.commit_lock:
+            if before_commit is not None:
+                try:
+                    await before_commit()
+                except BaseException:
+                    self._mark_failed(turn_key, "coordinated turn cancelled before commit")
+                    raise
             try:
                 with self.persistence.transaction():
                     result = self.service.apply_turn(draft)

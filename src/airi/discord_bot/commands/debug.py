@@ -20,6 +20,7 @@ import discord
 
 from airi.observability.trace import TurnTrace
 from airi.observability.trace_store import load_events_from_dir
+from airi.persona import character_name
 
 MAX_LIST = 20
 MAX_ERRORS = 10
@@ -196,7 +197,7 @@ async def handle(ctx, message):
         if trace is None:
             await message.reply(
                 "No hay ningún turno registrado para ti todavía. "
-                "Habla primero con Airi y vuelve a intentarlo.",
+                f"Habla primero con {character_name()} y vuelve a intentarlo.",
                 mention_author=False,
             )
             return

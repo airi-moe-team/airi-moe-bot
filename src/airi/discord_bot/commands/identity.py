@@ -1,4 +1,4 @@
-"""Comandos de identidad de Airi: `!identidad-airi` (alias `!yo`)."""
+"""Comandos de identidad: `!identidad-<id del personaje>` y `!yo`."""
 
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ import aiohttp
 
 from airi.discord_bot import embeds
 from airi.domain.mood import render_mood_history
-from airi.domain.self_notes import recent_notes
 from airi.domain.self_model import (
     render_self_history,
     render_self_narrative,
     revert_self_update,
 )
+from airi.domain.self_notes import recent_notes
+from airi.persona import character_name, current_persona
 from airi.services.self_service import SelfService
 
 
@@ -46,7 +47,7 @@ async def handle_descubrimientos(ctx, message):
     if ctx.owner_id and message.author.id != ctx.owner_id:
         await message.reply(
             embed=embeds.system_embed(
-                "Solo el dueño del canal puede consultar los descubrimientos privados de Airi."
+                f"Solo el dueño del canal puede consultar los descubrimientos privados de {character_name()}."
             ),
             mention_author=False,
         )
@@ -92,7 +93,7 @@ def reflection_notice(outcome):
             "Me he quedado callada pensando en quién soy... pero esta vez no "
             "he cambiado nada de mí."
         )
-    lines = ["*Airi se ha mirado por dentro y algo ha cambiado:*"]
+    lines = [f"*{character_name()} se ha mirado por dentro y algo ha cambiado:*"]
     if outcome.discovery:
         lines.append(f"• **Descubrimiento:** {outcome.discovery}")
     if outcome.self_entry:
@@ -100,7 +101,7 @@ def reflection_notice(outcome):
         lines.append(
             f"• **Cambio:** `{entry['key']}` {entry['from']} → {entry['to']}"
         )
-    lines.append("Escribe `!identidad-airi` para verme completa.")
+    lines.append(f"Escribe `!identidad-{current_persona().id}` para verme completa.")
     return "\n".join(lines)
 
 

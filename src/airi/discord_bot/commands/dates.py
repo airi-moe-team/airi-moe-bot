@@ -9,6 +9,7 @@ from airi.discord_bot import embeds
 from airi.discord_bot.views import date as date_views
 from airi.domain.affinity import is_winner
 from airi.domain.constants import DATE_COOLDOWN
+from airi.persona import character_name
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ async def handle(ctx, message):
     if now - last_date < DATE_COOLDOWN:
         remaining = int((DATE_COOLDOWN - (now - last_date)) // 3600)
         await message.reply(
-            f"Airi ya ha salido contigo hace poco... dale un respiro "
+            f"{character_name()} ya ha salido contigo hace poco... dale un respiro "
             f"(en ~{remaining} h).",
             mention_author=False,
         )

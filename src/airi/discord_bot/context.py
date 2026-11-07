@@ -53,6 +53,8 @@ class BotContext:
     retention: Any = None
     turn_journal: Any = None
     commit_lock: Any = None
+    # Coordinated mode authorizes the draft before local state is committed.
+    before_commit: Any = None
 
     build_service: Callable[..., Any] = _noop
     settle_relationship: Callable[..., Any] = _anoop

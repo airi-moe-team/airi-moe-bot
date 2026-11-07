@@ -12,6 +12,7 @@ from airi.domain.diary import (
     format_relative_time,
     recent_diary,
 )
+from airi.persona import character_name
 
 
 async def handle(ctx, message):
@@ -43,7 +44,7 @@ async def handle(ctx, message):
             ctx.state.diary, message.author.id, limit=DIARY_VIEW_LIMIT
         )
         destination = message.channel
-        footer = "Recuerdos de Airi relacionados contigo"
+        footer = f"Recuerdos de {character_name()} relacionados contigo"
     if entries:
         listing = "\n".join(
             f"**{format_relative_time(e.get('ts'), now)} · "
@@ -51,7 +52,7 @@ async def handle(ctx, message):
             for e in entries
         )[:4000]
     else:
-        listing = "Airi todavía no tiene recuerdos guardados sobre ti~"
+        listing = f"{character_name()} todavía no tiene recuerdos guardados sobre ti~"
     try:
         await destination.send(embed=embeds.diary_embed(listing, footer=footer))
     except discord.Forbidden:
