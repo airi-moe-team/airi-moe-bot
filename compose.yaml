@@ -12,6 +12,7 @@ x-bot-environment: &bot-environment
   COORDINATOR_BOTS: '{"airi":"${BOT_A_DISCORD_ID:?Set BOT_A_DISCORD_ID}","luna":"${BOT_B_DISCORD_ID:?Set BOT_B_DISCORD_ID}"}'
   AIRI_DATA_DIR: /app/data
   AIRI_TRACE_DIR: /app/traces
+  TRACE_LLM_ARTIFACTS_DIR: "${TRACE_LLM_ARTIFACTS_DIR-/app/traces/private-llm-artifacts}"
   NO_PROXY: coordinator,localhost,127.0.0.1,host.docker.internal
 
 services:
@@ -23,7 +24,7 @@ services:
       COORDINATOR_BOTS: '{"airi":"${BOT_A_DISCORD_ID:?Set BOT_A_DISCORD_ID}","luna":"${BOT_B_DISCORD_ID:?Set BOT_B_DISCORD_ID}"}'
       COORDINATOR_TOKEN_AIRI: ${COORDINATOR_TOKEN_AIRI:?Set COORDINATOR_TOKEN_AIRI}
       COORDINATOR_TOKEN_LUNA: ${COORDINATOR_TOKEN_LUNA:?Set COORDINATOR_TOKEN_LUNA}
-      COORDINATOR_DB: /app/data/coordinator.sqlite3
+      COORDINATOR_DB: /app/data/coordinator-v2.sqlite3
       COORDINATOR_DEBOUNCE: ${COORDINATOR_DEBOUNCE:-3}
       COORDINATOR_PROACTIVE_ENABLED: ${COORDINATOR_PROACTIVE_ENABLED:-1}
       COORDINATOR_IDLE_SECONDS: ${COORDINATOR_IDLE_SECONDS:-1800}
@@ -50,7 +51,7 @@ services:
       AIRI_PERSONA_FILE: /app/config/airi.json
       COORDINATOR_TOKEN: ${COORDINATOR_TOKEN_AIRI:?Set COORDINATOR_TOKEN_AIRI}
     volumes: [bot-a-data:/app/data, bot-a-traces:/app/traces]
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    extra_hosts: ["host.docker.internal:172.21.0.1"]
     depends_on:
       coordinator: {condition: service_healthy}
     healthcheck:
@@ -68,7 +69,7 @@ services:
       AIRI_PERSONA_FILE: /app/config/luna.json
       COORDINATOR_TOKEN: ${COORDINATOR_TOKEN_LUNA:?Set COORDINATOR_TOKEN_LUNA}
     volumes: [bot-b-data:/app/data, bot-b-traces:/app/traces]
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    extra_hosts: ["host.docker.internal:172.21.0.1"]
     depends_on:
       coordinator: {condition: service_healthy}
     healthcheck:
@@ -79,7 +80,11 @@ services:
       start_period: 45s
 
 networks:
-  bots: {}
+  bots:
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
 volumes:
   coordinator-data: {}
   bot-a-data: {}

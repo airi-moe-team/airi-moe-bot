@@ -1,5 +1,9 @@
 # Especificaciones activas (SDD)
 
+- `coordinator-peer-typing-traces` — Mostrar el indicador de escritura durante respuestas coordinadas y capturar salidas LLM peer de forma opt-in en un volumen privado para diagnosticar fallos.
+  - Spec: `.kiro/specs/coordinator-peer-typing-traces/`
+- `coordinator-peer-response-repair` — Reparar una vez las respuestas JSON malformadas de Luna/Airi en la coordinación entre bots, sin convertir silencio válido en error ni publicar contenido inválido.
+  - Spec: `.kiro/specs/coordinator-peer-response-repair/`
 - `llm-esfuerzo-razonamiento` — Mantener reasoning siempre activo con presets cerrados `auto`, `low`, `medium` y `high`, y metadatos por llamada.
   - Spec: `.kiro/specs/llm-esfuerzo-razonamiento/`
 - `airi-temperatura-proveedor` — Dejar que cada proveedor LLM aplique su temperatura predeterminada, sin controlar temperatura desde Airi.

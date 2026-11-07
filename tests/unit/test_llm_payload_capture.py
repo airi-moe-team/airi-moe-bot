@@ -1,12 +1,12 @@
 import asyncio
 import hashlib
 import json
+import stat
 from pathlib import Path
 
 import pytest
 
 from airi.observability.llm_payload_capture import (
-    LLM_PAYLOAD_SCHEMA,
     LocalLlmPayloadCapture,
     load_llm_payload,
 )
@@ -40,7 +40,8 @@ def test_local_capture_round_trips_complete_payload_and_hash(tmp_path):
 
 def test_response_capture_preserves_full_content_and_loader_checks_identity(tmp_path):
     from airi.observability.llm_payload_capture import (
-        LLM_RESPONSE_SCHEMA, load_llm_response,
+        LLM_RESPONSE_SCHEMA,
+        load_llm_response,
     )
     context = LLMCallContext("cid", "primary", 2)
     output = {"content": "respuesta completa" * 1000,
@@ -157,3 +158,31 @@ def test_capture_failure_state_is_structured_and_never_contains_payload():
     assert result.status == "failed"
     assert result.artifact_ref is None
     assert "secret" not in (result.error or "")
+
+
+def test_capture_creates_private_directories_and_files(tmp_path):
+    base = tmp_path / "private" / "artifacts"
+    capture = LocalLlmPayloadCapture(base)
+
+    result = asyncio.run(
+        capture.capture_response(LLMCallContext("cid", "peer_primary", 1), {"content": "x"})
+    )
+
+    assert result.status == "captured"
+    assert stat.S_IMODE(base.stat().st_mode) == 0o700
+    assert stat.S_IMODE((base / "cid").stat().st_mode) == 0o700
+    assert stat.S_IMODE((base / result.artifact_ref).stat().st_mode) == 0o600
+
+
+def test_capture_does_not_change_permissions_of_existing_directories(tmp_path):
+    base = tmp_path / "existing"
+    base.mkdir(mode=0o755)
+    base.chmod(0o755)
+    capture = LocalLlmPayloadCapture(base)
+
+    asyncio.run(
+        capture.capture(LLMCallContext("cid", "peer_primary", 1), {"model": "m"})
+    )
+
+    assert stat.S_IMODE(base.stat().st_mode) == 0o755
+    assert stat.S_IMODE((base / "cid").stat().st_mode) == 0o700

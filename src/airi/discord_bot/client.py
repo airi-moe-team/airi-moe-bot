@@ -1511,6 +1511,10 @@ def run_bot(argv=None):
     trace_store = TraceStore(settings.trace_dir, settings.trace_keep_last)
     install_correlation_format()
     install_jsonl_logging()
+    if os.getenv("AIRI_COORDINATED") == "1":
+        from airi.coordinator.worker import install_worker_logging
+
+        install_worker_logging()
 
     run_lock = InstanceLock(settings.lock_path)
     try:

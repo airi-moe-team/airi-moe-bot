@@ -1155,6 +1155,10 @@ def test_build_llm_payload_capture_is_opt_in(monkeypatch, tmp_path):
     without_capture = http_llm.build_llm(_make_session())
     assert without_capture.payload_capture is None
 
+    monkeypatch.setenv("TRACE_LLM_ARTIFACTS_DIR", "")
+    disabled = http_llm.build_llm(_make_session())
+    assert disabled.payload_capture is None
+
     monkeypatch.setenv("TRACE_LLM_PAYLOAD_DIR", str(tmp_path))
     with_capture = http_llm.build_llm(_make_session())
     assert with_capture.payload_capture is not None

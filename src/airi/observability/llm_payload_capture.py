@@ -62,7 +62,7 @@ class LocalLlmPayloadCapture:
         raw = json.dumps(
             artifact, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        _make_private_dirs(destination.parent)
         fd, temp_name = tempfile.mkstemp(
             prefix=f".{destination.name}.", dir=destination.parent
         )
@@ -89,6 +89,23 @@ class LocalLlmPayloadCapture:
 def _safe_component(value: str) -> str:
     value = "".join(c for c in str(value) if c.isalnum() or c in "-_ ").strip()
     return value.replace(" ", "_")[:80] or "unknown"
+
+
+def _make_private_dirs(path: Path) -> None:
+    """Crea solo los directorios ausentes, con permisos 0700."""
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        directory.chmod(0o700)
 
 
 def load_llm_payload(
