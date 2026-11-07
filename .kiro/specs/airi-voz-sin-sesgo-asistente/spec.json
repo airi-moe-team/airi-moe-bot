@@ -1,0 +1,22 @@
+{
+  "feature_name": "airi-voz-sin-sesgo-asistente",
+  "created_at": "2026-11-06T00:00:00Z",
+  "updated_at": "2026-11-07T00:42:33Z",
+  "language": "es",
+  "phase": "implementation-complete",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}

@@ -40,3 +40,5 @@
 4. `spec-impl` → implementación TDD por tareas.
 
 No se avanza de fase sin aprobación explícita del humano.
+- `airi-voz-sin-sesgo-asistente` — Reducir cortesía, validación y servicialidad automáticas para que Airi conserve una voz de personaje, sin volverse hostil.
+  - Spec: `.kiro/specs/airi-voz-sin-sesgo-asistente/`
