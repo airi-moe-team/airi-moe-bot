@@ -421,6 +421,33 @@ Así se distingue la respuesta visible del coste de las reparaciones, sin guarda
 prompt, historial, contenido ni reasoning. En streaming el cliente pide `usage`
 al servidor (`stream_options`), de modo que `completion_tokens` deja de ser nulo;
 `reasoning_deltas` es un proxy por fragmento SSE, no un conteo exacto.
+
+### Plantilla de herramientas para llama.cpp
+
+Con `LLM_PROVIDER=llama`, el adaptador declara automáticamente la herramienta
+ficticia `get_datetime` y envía `tool_choice="none"` cuando no hay herramientas
+reales ni `tool_choice` explícito. Se aplica también a la conversación JSON:
+conserva prompt, parser, thinking y límites. No hay variable para activarlo ni
+desactivarlo; para revertirlo hay que desplegar una versión anterior. La
+herramienta no tiene ejecutor: si el backend la invoca, el adaptador registra
+la anomalía sin argumentos y la descarta.
+
+El benchmark A/B conserva un baseline anterior solo en su harness, comprueba
+que la llamada principal ON recibió la declaración y puede ejecutar seis
+escenarios conversacionales con cinco repeticiones por modo. Requiere
+llama-server y **no se ejecuta automáticamente**; el adaptador no fija `seed`:
+
+```bash
+python tools/tool_template_benchmark.py --live --repeat 5 \
+  --out /tmp/opencode/tool-template-benchmark.json
+```
+
+El resumen no guarda prompts ni respuestas. `--records-out` escribe un JSONL
+sensible de forma explícita para revisar coherencia y persona. El piloto de un
+saludo OFF/ON con el servicio real pasó parsing y respuesta visible en ambos
+modos, pero **un solo par no prueba estabilidad general ni calidad en todos los
+escenarios**. La evaluación ampliada queda pendiente; los tokens y la latencia
+por sí solos no bastan para declararla estable.
 `server_timings` y `ttft_ms` describen la primera llamada; `llm_ms` incluye las
 reparaciones.
 

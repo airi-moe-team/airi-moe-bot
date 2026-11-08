@@ -43,6 +43,23 @@ LLM_PROVIDERS = ("llama", "openai", "openai-compatible")
 #: Modos de razonamiento de `LLM_THINKING_MODE`.
 LLM_THINKING_MODES = ("auto", "low", "medium", "high")
 LLM_REASONING_BUDGETS = LLM_REASONING_PRESETS
+TOOL_TEMPLATE_TOOL_NAME = "get_datetime"
+#: Declaración ficticia: no tiene ejecutor ni efectos laterales.
+TOOL_TEMPLATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": TOOL_TEMPLATE_TOOL_NAME,
+        "description": (
+            "Returns the current local date and time in ISO 8601 format, "
+            "with the IANA time zone name"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+}
 
 _ERROR_DETAIL_LIMIT = 300
 
@@ -255,9 +272,7 @@ class LlmConfig:
         )
 
 
-def build_llm(
-    session, *, timeout=None, base_url=None, model=None
-) -> "HttpLlmClient":
+def build_llm(session, *, timeout=None, base_url=None, model=None) -> "HttpLlmClient":
     """Fábrica única del cliente LLM: config del entorno → adaptador.
 
     Los tres puntos de construcción del bot (conversation, glue de citas e
@@ -433,6 +448,20 @@ class HttpLlmClient:
             else os.environ.get("LLM_THINKING_MODE")
         )
 
+    def _tool_template_active(
+        self, *, schema, strict_schema, tools, tool_choice
+    ) -> bool:
+        """La declaración sintética solo cabe en llamadas sin contrato propio.
+
+        Nunca reemplaza herramientas reales ni se mezcla con salidas
+        estructuradas, cuyo parser no debe recibir una vía de tool calling.
+        """
+        return (
+            self.provider == "llama"
+            and not tools
+            and tool_choice is None
+        )
+
     async def post(
         self, payload: dict, *, call_context: LLMCallContext | None = None
     ) -> dict:
@@ -500,6 +529,12 @@ class HttpLlmClient:
                 "reasoning_budget_tokens debe ser un entero positivo"
             )
         effective_max_tokens = max_tokens or self.max_output_tokens
+        tool_template_active = self._tool_template_active(
+            schema=schema,
+            strict_schema=strict_schema,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
         payload = {
             "model": self.model,
             "messages": messages,
@@ -516,6 +551,11 @@ class HttpLlmClient:
                 # llama.cpp solo acepta tool_choice como string ("auto",
                 # "required", "none"); un objeto falla y se ignora.
                 payload["tool_choice"] = tool_choice
+        elif tool_template_active:
+            # La plantilla de llama.cpp recibe una herramienta declarativa
+            # que nunca se ejecuta, incluso en solicitudes con schema.
+            payload["tools"] = [TOOL_TEMPLATE_TOOL]
+            payload["tool_choice"] = "none"
         # Extensiones específicas de llama.cpp; reasoning siempre queda activo.
         effective_reasoning_budget = None
         if self.provider == "llama":
@@ -533,31 +573,55 @@ class HttpLlmClient:
                     effective_reasoning_budget + LLM_REASONING_OUTPUT_RESERVE_TOKENS,
                 )
         if stream:
-            return await self._chat_with_meta_stream(payload, call_context)
+            return await self._chat_with_meta_stream(
+                payload,
+                call_context,
+                ignore_synthetic_tool_calls=tool_template_active,
+            )
         data = await self.post(payload, call_context=call_context)
         choices = data.get("choices") or []
         if not choices:
             log.error("El servidor no devolvió choices")
             return "", LLMMeta(
                 reasoning_budget_tokens=effective_reasoning_budget,
+                tool_template_optimization=tool_template_active,
+                declared_tools=len(payload["tools"]) if "tools" in payload else None,
                 payload_capture=(call_context.payload_capture if call_context else None),
             )
         choice = choices[0]
         message = choice.get("message") or {}
         content = message.get("content")
         text = content if isinstance(content, str) else ""
+        reasoning = message.get("reasoning_content")
+        tool_calls = _normalize_tool_calls(message)
+        synthetic_ignored = None
+        if tool_template_active and tool_calls:
+            log.warning(
+                "El proveedor devolvió tool_calls para la herramienta "
+                "declarativa %r; se ignoran",
+                TOOL_TEMPLATE_TOOL_NAME,
+            )
+            tool_calls = None
+            synthetic_ignored = True
+            # La respuesta con tool call no es una respuesta conversacional:
+            # el servicio tratará el contenido vacío por su ruta de reparación.
+            text = ""
         meta = LLMMeta(
             finish_reason=choice.get("finish_reason"),
             usage=data.get("usage"),
             server_timings=_numeric_timings(data.get("timings")),
             reasoning_present=(
-                bool(message.get("reasoning_content"))
-                if isinstance(message.get("reasoning_content"), str)
+                bool(reasoning)
+                if isinstance(reasoning, str)
                 else None
             ),
             reasoning_tokens=_reasoning_token_count(data.get("usage")),
+            reasoning_chars=len(reasoning) if isinstance(reasoning, str) else None,
             reasoning_budget_tokens=effective_reasoning_budget,
-            tool_calls=_normalize_tool_calls(message),
+            tool_calls=tool_calls,
+            tool_template_optimization=tool_template_active,
+            declared_tools=len(payload["tools"]) if "tools" in payload else None,
+            synthetic_tool_call_ignored=synthetic_ignored,
             payload_capture=(call_context.payload_capture if call_context else None),
         )
         output = {
@@ -566,7 +630,6 @@ class HttpLlmClient:
             "usage": meta.usage,
             "tool_calls": meta.tool_calls,
         }
-        reasoning = message.get("reasoning_content")
         if isinstance(reasoning, str):
             output["reasoning_content"] = reasoning
         await self._capture_response(output, call_context)
@@ -574,7 +637,8 @@ class HttpLlmClient:
         return text, meta
 
     async def _chat_with_meta_stream(
-        self, payload, call_context: LLMCallContext | None = None
+        self, payload, call_context: LLMCallContext | None = None,
+        *, ignore_synthetic_tool_calls: bool = False,
     ):
         """Lee SSE y ensambla content y reasoning por separado."""
         url = chat_completions_url(self.base_url)
@@ -593,6 +657,7 @@ class HttpLlmClient:
             reasoning_present = None
             reasoning_deltas = 0
             content_deltas = 0
+            synthetic_tool_call_deltas = 0
             ttft_ms = None
             first_content_ms = None
             done = False
@@ -622,6 +687,8 @@ class HttpLlmClient:
                 delta = choice.get("delta") or {}
                 if not isinstance(delta, dict):
                     continue
+                if ignore_synthetic_tool_calls and delta.get("tool_calls"):
+                    synthetic_tool_call_deltas += 1
                 reasoning = delta.get("reasoning_content")
                 has_reasoning = isinstance(reasoning, str) and bool(reasoning)
                 if has_reasoning:
@@ -646,6 +713,15 @@ class HttpLlmClient:
             if not done:
                 raise ValueError("Stream SSE terminó sin el marcador [DONE]")
         text = "".join(content_parts)
+        reasoning_text = "".join(reasoning_parts)
+        if synthetic_tool_call_deltas:
+            log.warning(
+                "El stream devolvió %d delta(s) de tool_calls para la "
+                "herramienta declarativa %r; se ignoran",
+                synthetic_tool_call_deltas,
+                TOOL_TEMPLATE_TOOL_NAME,
+            )
+            text = ""
         meta = LLMMeta(
             finish_reason=finish_reason,
             usage=usage or {},
@@ -654,15 +730,21 @@ class HttpLlmClient:
             server_timings=server_timings,
             reasoning_present=reasoning_present,
             reasoning_tokens=_reasoning_token_count(usage),
+            reasoning_chars=len(reasoning_text) if reasoning_text else None,
             reasoning_deltas=reasoning_deltas,
             content_deltas=content_deltas,
             reasoning_budget_tokens=payload.get("thinking_budget_tokens"),
+            tool_template_optimization=ignore_synthetic_tool_calls,
+            declared_tools=len(payload["tools"]) if "tools" in payload else None,
+            synthetic_tool_call_ignored=(
+                True if synthetic_tool_call_deltas else None
+            ),
             payload_capture=(call_context.payload_capture if call_context else None),
         )
         output = {"content": text, "finish_reason": meta.finish_reason,
                   "usage": meta.usage}
-        if reasoning_parts:
-            output["reasoning_content"] = "".join(reasoning_parts)
+        if reasoning_text:
+            output["reasoning_content"] = reasoning_text
         await self._capture_response(output, call_context)
         meta.response_capture = call_context.response_capture if call_context else None
         return text, meta

@@ -614,6 +614,7 @@ async def _generate_records(
     model: str | None,
     prompt_variant: str,
     time_context_enabled: bool | None = None,
+    on_record=None,
 ) -> list[dict]:
     from airi.evaluation.runner import run_scenario
 
@@ -659,6 +660,8 @@ async def _generate_records(
                 record.update(metadata)
                 record["generated_at"] = datetime.now(timezone.utc).isoformat()
                 records.append(record)
+                if on_record is not None:
+                    on_record(record)
     return records
 
 
@@ -672,12 +675,16 @@ async def generate_live_records(
     model: str | None = None,
     prompt_variant: str = "current",
     time_context_enabled: bool | None = None,
+    on_record=None,
 ) -> list[dict]:
     """Genera los escenarios contra un LLM real o inyectado.
 
     Si ``llm`` es ``None`` se construye un ``HttpLlmClient`` con la config del
     entorno (o con ``base_url``/``model`` explícitos). No toca Discord ni
     persiste el estado: cada escenario parte de un ``AppState`` limpio.
+
+    ``on_record`` permite consumir cada registro en cuanto se genera, de modo
+    que una corrida interrumpida no pierda el progreso ya obtenido.
     """
     if llm is not None:
         return await _generate_records(
@@ -689,6 +696,7 @@ async def generate_live_records(
             model=model,
             prompt_variant=prompt_variant,
             time_context_enabled=time_context_enabled,
+            on_record=on_record,
         )
 
     import aiohttp
@@ -706,4 +714,5 @@ async def generate_live_records(
             model=model,
             prompt_variant=prompt_variant,
             time_context_enabled=time_context_enabled,
+            on_record=on_record,
         )

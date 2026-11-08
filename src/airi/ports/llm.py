@@ -29,6 +29,14 @@ class LLMMeta:
     #: Tool calls normalizadas: ``{"id", "name", "arguments"}``. ``arguments``
     #: es un dict ya parseado; si el JSON era inválido, queda ``{}``.
     tool_calls: list[dict] | None = None
+    #: Experimento de plantilla: la petición declaró una herramienta ficticia.
+    tool_template_optimization: bool | None = None
+    #: Número de herramientas declaradas en el request.
+    declared_tools: int | None = None
+    #: Longitud del razonamiento en caracteres (aproximación, no tokens).
+    reasoning_chars: int | None = None
+    #: True si se descartó una tool call de la herramienta declarativa.
+    synthetic_tool_call_ignored: bool | None = None
 
 
 @dataclass

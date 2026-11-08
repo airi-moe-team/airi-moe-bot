@@ -1741,11 +1741,24 @@ class ConversationService:
             "server_timings": getattr(meta, "server_timings", None),
             "reasoning_present": getattr(meta, "reasoning_present", None),
             "reasoning_tokens": getattr(meta, "reasoning_tokens", None),
+            "reasoning_chars": getattr(meta, "reasoning_chars", None),
             "reasoning_budget_tokens": self._reasoning_budget_effective(
                 reasoning_budget_tokens, quick_turn
             ),
             "reasoning_deltas": getattr(meta, "reasoning_deltas", None),
             "content_deltas": getattr(meta, "content_deltas", None),
+            "tool_template_optimization": getattr(
+                meta, "tool_template_optimization", None
+            ),
+            "declared_tools": getattr(meta, "declared_tools", None),
+            "synthetic_tool_call_ignored": getattr(
+                meta, "synthetic_tool_call_ignored", None
+            ),
+            "tool_calls_present": (
+                bool(getattr(meta, "tool_calls", None))
+                if meta is not None
+                else None
+            ),
             "max_tokens": (
                 effective_max if isinstance(effective_max, int) else None
             ),

@@ -70,6 +70,11 @@ CALL_METADATA_FIELDS = (
     "content_deltas",
     "max_tokens",
     "error_type",
+    "tool_template_optimization",
+    "declared_tools",
+    "reasoning_chars",
+    "synthetic_tool_call_ignored",
+    "tool_calls_present",
 )
 
 

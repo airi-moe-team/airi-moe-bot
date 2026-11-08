@@ -34,6 +34,7 @@ ENV_KEYS = (
     "LLM_MAX_TOKENS_FIELD",
     "LLM_HEALTH_CHECK",
     "LLM_THINKING_MODE",
+    "LLM_TOOL_TEMPLATE_OPTIMIZATION",
     "LLM_REASONING_BUDGET_LOW_TOKENS",
     "LLM_REASONING_BUDGET_MEDIUM_TOKENS",
     "LLM_REASONING_BUDGET_HIGH_TOKENS",
@@ -386,3 +387,27 @@ def test_health_remote_connection_error_does_not_block(caplog):
         )
     assert ok is False
     assert "inaccesible" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Optimización experimental de tool-template
+# ---------------------------------------------------------------------------
+
+
+def test_config_has_no_tool_template_flag():
+    cfg = LlmConfig.from_env()
+    assert not hasattr(cfg, "tool_template_optimization")
+
+
+@pytest.mark.parametrize("raw", ["0", "1", "invalid"])
+def test_config_tool_template_optimization_ignores_old_flag(raw, monkeypatch):
+    monkeypatch.setenv("LLM_TOOL_TEMPLATE_OPTIMIZATION", raw)
+    assert not hasattr(LlmConfig.from_env(), "tool_template_optimization")
+
+
+def test_build_llm_enables_tool_template_automatically_for_llama(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_TOOL_TEMPLATE_OPTIMIZATION", "0")
+    client = build_llm(_make_session())
+    assert client.provider == "llama"
+    assert not hasattr(client, "tool_template_optimization")

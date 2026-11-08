@@ -33,6 +33,7 @@ def _clear_llm_env(monkeypatch):
         "LLM_MAX_TOKENS_FIELD",
         "LLM_HEALTH_CHECK",
         "LLM_THINKING_MODE",
+        "LLM_TOOL_TEMPLATE_OPTIMIZATION",
         "LLM_REASONING_BUDGET_LOW_TOKENS",
         "LLM_REASONING_BUDGET_MEDIUM_TOKENS",
         "LLM_REASONING_BUDGET_HIGH_TOKENS",
@@ -1169,3 +1170,276 @@ def test_build_llm_payload_capture_is_opt_in(monkeypatch, tmp_path):
     monkeypatch.setenv("AIRI_TRACE_LLM_ARTIFACTS_DIR", str(canonical_dir))
     canonical = http_llm.build_llm(_make_session())
     assert canonical.payload_capture.base_dir == canonical_dir
+
+
+# ---------------------------------------------------------------------------
+# Optimización experimental de tool-template (llama.cpp)
+# ---------------------------------------------------------------------------
+
+
+def _declared_tools(payload):
+    return payload.get("tools")
+
+
+class _BaselineHttpLlmClient(HttpLlmClient):
+    """Solo para comparación en tests; no configura el cliente de producción."""
+
+    def _tool_template_active(self, *, schema, strict_schema, tools, tool_choice):
+        return False
+
+
+def test_tool_template_defaults_on_for_llama():
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}])
+    )
+
+    assert session._captured["tools"][0]["function"]["name"] == "get_datetime"
+    assert session._captured["tool_choice"] == "none"
+    assert meta.tool_template_optimization is True
+    assert meta.declared_tools == 1
+
+
+@pytest.mark.parametrize("value", ["0", "1", "false", "true", "invalid"])
+def test_tool_template_ignores_legacy_env_flag(monkeypatch, value):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_TOOL_TEMPLATE_OPTIMIZATION", value)
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}])
+    )
+
+    tools = _declared_tools(session._captured)
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "get_datetime"
+    assert tools[0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+    assert session._captured["tool_choice"] == "none"
+    assert meta.tool_template_optimization is True
+    assert meta.declared_tools == 1
+
+
+def test_tool_template_preserves_messages_thinking_and_tokens(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    monkeypatch.setenv("LLM_THINKING_MODE", "medium")
+    messages = [
+        {"role": "system", "content": "system prompt intacto"},
+        {"role": "user", "content": "hola"},
+    ]
+    baseline_session = _make_async_session()
+    baseline = _BaselineHttpLlmClient(
+        base_url="http://localhost:7000", session=baseline_session
+    )
+    baseline_content, baseline_meta = run(
+        baseline.chat_with_meta(messages, max_tokens=777)
+    )
+
+    optimized_session = _make_async_session()
+    optimized = HttpLlmClient(
+        base_url="http://localhost:7000", session=optimized_session
+    )
+    optimized_content, optimized_meta = run(
+        optimized.chat_with_meta(messages, max_tokens=777)
+    )
+
+    baseline_payload = dict(baseline_session._captured)
+    optimized_payload = dict(optimized_session._captured)
+    baseline_payload.pop("tools", None)
+    baseline_payload.pop("tool_choice", None)
+    optimized_payload.pop("tools", None)
+    optimized_payload.pop("tool_choice", None)
+
+    assert optimized_payload == baseline_payload
+    assert optimized_session._captured["messages"] == messages
+    assert optimized_session._captured["messages"] == baseline_session._captured["messages"]
+    assert optimized_meta.reasoning_budget_tokens == baseline_meta.reasoning_budget_tokens
+    assert baseline_content == optimized_content == "hi"
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai-compatible"])
+def test_tool_template_never_applies_to_other_providers(monkeypatch, provider):
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}])
+    )
+
+    assert "tools" not in session._captured
+    assert "tool_choice" not in session._captured
+    assert meta.tool_template_optimization is False
+
+
+def test_tool_template_preserves_real_tools(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+    real_tools = [{"type": "function", "function": {"name": "buscar_web"}}]
+
+    _content, meta = run(
+        client.chat_with_meta(
+            [{"role": "user", "content": "busca"}],
+            tools=real_tools,
+            tool_choice="auto",
+        )
+    )
+
+    assert session._captured["tools"] == real_tools
+    assert session._captured["tool_choice"] == "auto"
+    assert meta.tool_template_optimization is False
+
+
+def test_tool_template_applies_to_structured_output_calls(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta(
+            [{"role": "user", "content": "json"}],
+            schema={"type": "object"},
+            strict_schema=True,
+        )
+    )
+
+    assert session._captured["tools"][0]["function"]["name"] == "get_datetime"
+    assert session._captured["tool_choice"] == "none"
+    assert meta.tool_template_optimization is True
+
+
+@pytest.mark.parametrize("schema,strict", [({"type": "object"}, False), (None, True)])
+def test_tool_template_applies_to_each_structured_option(schema, strict):
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session,
+                           provider="llama")
+
+    _content, meta = run(client.chat_with_meta(
+        [{"role": "user", "content": "json"}], schema=schema,
+        strict_schema=strict,
+    ))
+
+    assert session._captured["tool_choice"] == "none"
+    assert meta.tool_template_optimization is True
+    assert meta.declared_tools == 1
+
+
+def test_tool_template_respects_explicit_tool_choice_without_tools():
+    session = _make_async_session()
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session,
+                           provider="llama")
+
+    _content, meta = run(client.chat_with_meta(
+        [{"role": "user", "content": "hola"}], tool_choice="none",
+    ))
+
+    assert "tools" not in session._captured
+    assert meta.tool_template_optimization is False
+
+
+def test_tool_template_streaming_ignores_synthetic_tool_calls(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_streaming_session([
+        b'data: {"choices":[{"delta":{"reasoning_content":"pienso"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"get_datetime","arguments":"{"}}]},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"content":"hola"},"finish_reason":"stop"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ])
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    with caplog.at_level(logging.WARNING, logger="airi.adapters.http_llm"):
+        content, meta = run(
+            client.chat_with_meta([{"role": "user", "content": "hola"}], stream=True)
+        )
+
+    assert content == ""
+    assert session._captured["tool_choice"] == "none"
+    assert meta.tool_calls is None
+    assert meta.synthetic_tool_call_ignored is True
+    assert meta.reasoning_present is True
+    assert meta.finish_reason == "stop"
+    assert any("get_datetime" in record.getMessage() for record in caplog.records)
+
+
+def test_tool_template_non_stream_ignores_synthetic_tool_calls(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": "texto visible",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "get_datetime", "arguments": "{}"},
+                }],
+            },
+        }],
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    with caplog.at_level(logging.WARNING, logger="airi.adapters.http_llm"):
+        content, meta = run(
+            client.chat_with_meta([{"role": "user", "content": "hola"}])
+        )
+
+    assert content == ""
+    assert meta.tool_calls is None
+    assert meta.synthetic_tool_call_ignored is True
+    assert any("get_datetime" in record.getMessage() for record in caplog.records)
+
+
+def test_tool_template_keeps_real_tool_call_parsing(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "buscar_web", "arguments": '{"query":"x"}'},
+                }],
+            },
+        }],
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta(
+            [{"role": "user", "content": "busca"}],
+            tools=[{"type": "function", "function": {"name": "buscar_web"}}],
+            tool_choice="auto",
+        )
+    )
+
+    assert meta.synthetic_tool_call_ignored is None
+    assert meta.tool_calls == [
+        {"id": "call-1", "name": "buscar_web", "arguments": {"query": "x"}}
+    ]
+
+
+def test_tool_template_reports_reasoning_chars_not_tokens(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "llama")
+    session = _make_async_session({
+        "choices": [{"finish_reason": "stop", "message": {
+            "content": "hola", "reasoning_content": "pienso",
+        }}],
+        "usage": {"completion_tokens": 9},
+    })
+    client = HttpLlmClient(base_url="http://localhost:7000", session=session)
+
+    _content, meta = run(
+        client.chat_with_meta([{"role": "user", "content": "hola"}])
+    )
+
+    assert meta.reasoning_chars == len("pienso")
+    assert meta.reasoning_tokens is None

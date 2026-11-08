@@ -14,6 +14,7 @@ import json
 
 import aiohttp
 
+from airi.adapters.http_llm import HttpLlmClient
 from airi.ports.llm import LLMCallContext, LLMMeta, PayloadCaptureResult
 from airi.services.conversation import ConversationService, TurnContext
 from airi.testing import FakeLLM, FakeUser, llm_json, make_state
@@ -37,6 +38,11 @@ CALL_FIELDS = {
     "content_deltas",
     "max_tokens",
     "error_type",
+    "tool_template_optimization",
+    "declared_tools",
+    "reasoning_chars",
+    "synthetic_tool_call_ignored",
+    "tool_calls_present",
 }
 
 
@@ -64,6 +70,44 @@ def test_normal_turn_records_one_primary_call():
     assert isinstance(call["duration_ms"], int)
     assert call["duration_ms"] >= 0
     assert set(call) == CALL_FIELDS
+
+
+def test_llama_conversation_json_primary_declares_synthetic_tool():
+    """La ruta real con strict_schema sigue parseando una respuesta válida."""
+    class Session:
+        payloads = []
+
+        def post(self, url, *, json, **kwargs):
+            self.payloads.append(json)
+
+            class Response:
+                def raise_for_status(self):
+                    pass
+
+                async def json(self):
+                    return {"choices": [{"finish_reason": "stop", "message": {
+                        "content": llm_json("hola"),
+                    }}]}
+
+            class Context:
+                async def __aenter__(self):
+                    return Response()
+
+                async def __aexit__(self, *args):
+                    return False
+
+            return Context()
+
+    session = Session()
+    client = HttpLlmClient("http://localhost:7000", session, provider="llama")
+    trace = _turn(client, message=PRIVATE_TOKEN + " x" * 100)
+
+    primary = [call for call in trace.llm_calls if call["purpose"] == "primary"]
+    assert len(primary) == 1
+    assert primary[0]["tool_template_optimization"] is True
+    assert primary[0]["declared_tools"] == 1
+    assert trace.llm_finish_reason == "stop"
+    assert any(payload.get("tool_choice") == "none" for payload in session.payloads)
 
 
 def test_truncated_first_call_keeps_its_finish_reason_and_repair_purpose():
