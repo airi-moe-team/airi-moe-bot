@@ -31,7 +31,6 @@ def _clear_llm_env(monkeypatch):
         "LLM_API_KEY",
         "OPENAI_API_KEY",
         "LLM_MAX_TOKENS_FIELD",
-        "LLM_RESPONSE_FORMAT",
         "LLM_HEALTH_CHECK",
         "LLM_THINKING_MODE",
         "LLM_REASONING_BUDGET_LOW_TOKENS",
@@ -327,14 +326,13 @@ def test_native_tool_calls_are_sent_and_parsed():
     }]
 
 
-def test_native_tools_reject_schema_and_streaming():
+def test_native_tools_allow_schema_but_reject_streaming():
     client = HttpLlmClient(
         base_url="http://localhost:7000", session=_make_async_session()
     )
     messages = [{"role": "user", "content": "hola"}]
 
-    with pytest.raises(ValueError, match="tools y response_format"):
-        run(client.chat_with_meta(messages, tools=[{}], schema={"type": "object"}))
+    run(client.chat_with_meta(messages, tools=[{}], schema={"type": "object"}))
     with pytest.raises(ValueError, match="tools no está soportado en streaming"):
         run(client.chat_with_meta(messages, tools=[{}], stream=True))
 
@@ -907,16 +905,14 @@ def test_post_strips_temperature_from_caller_payload():
     assert "temperature" not in session._captured
 
 
-def test_response_format_disabled_by_env(monkeypatch):
-    monkeypatch.setenv("LLM_RESPONSE_FORMAT", "0")
+def test_schema_is_not_sent_in_payload():
     session = _make_async_session()
     client = HttpLlmClient(base_url="http://localhost:8080", session=session)
     _chat(client, schema={"type": "object"}, strict_schema=True)
     assert "response_format" not in session._captured
 
 
-def test_response_format_strict_json_schema(monkeypatch):
-    """El perfil `openai` admite `json_schema` estricto (igual que llama.cpp)."""
+def test_schema_is_not_sent_for_openai_profile(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     session = _make_async_session()
     client = HttpLlmClient(base_url="https://api.openai.com/v1", session=session)
@@ -925,9 +921,7 @@ def test_response_format_strict_json_schema(monkeypatch):
         schema={"type": "object", "properties": {}},
         strict_schema=True,
     )
-    rf = session._captured["response_format"]
-    assert rf["type"] == "json_schema"
-    assert rf["json_schema"]["strict"] is True
+    assert "response_format" not in session._captured
 
 
 # ---------------------------------------------------------------------------
@@ -1117,7 +1111,7 @@ def test_payload_capture_matches_effective_non_streaming_post_body():
 
     assert capture.payload == session._captured
     assert capture.payload["model"] == client.model
-    assert capture.payload["response_format"]["json_schema"]["strict"] is True
+    assert "response_format" not in capture.payload
     assert "top-secret-header-only" not in json.dumps(capture.payload)
     assert meta.payload_capture.artifact_ref == "cid/call.json"
     assert context.payload_capture.status == "captured"

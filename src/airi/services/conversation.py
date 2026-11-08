@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 import traceback
@@ -10,8 +9,6 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Callable
-
-import aiohttp
 
 from airi.config import Settings
 from airi.domain import memories as domain_memories
@@ -281,11 +278,6 @@ _QUICK_BLOCKED_HINTS = (
     "relación",
     "relacion",
 )
-
-# Errores HTTP que sí justifican reintentar sin salida estricta (servidor que
-# no soporta json_schema). Un timeout o un fallo de conexión NO se reintenta:
-# repetir la espera duplicaría la latencia sin cambiar el resultado.
-_STRICT_RETRY_STATUSES = (400, 404, 405, 415, 422, 501)
 
 #: Niveles de afinidad negativos: el GIF de respaldo refleja ese malestar.
 _NEGATIVE_AFFINITY_LEVELS = ("Distante", "Molesta", "Enfadada", "Bloqueada")
@@ -1627,20 +1619,6 @@ class ConversationService:
                     mixed_reply_to = True
         return bool(other_authors or mixed_reply_to)
 
-    @staticmethod
-    def _can_retry_without_strict(exc):
-        """Solo reintenta si el fallo apunta a un json_schema no soportado."""
-        if isinstance(
-            exc,
-            (asyncio.TimeoutError, aiohttp.ClientConnectionError,
-             aiohttp.ServerTimeoutError),
-        ):
-            return False
-        status = getattr(exc, "status", None)
-        if isinstance(status, int) and status not in _STRICT_RETRY_STATUSES:
-            return False
-        return True
-
     async def _chat(
         self,
         calls,
@@ -1654,11 +1632,7 @@ class ConversationService:
         stream_llm=False,
         repair_reason=None,
     ):
-        """Una invocación al modelo, registrada en `calls` con su propósito.
-
-        Encapsula el reintento de `json_schema` a `json_object` para que la
-        traza refleje cuántas peticiones se hicieron de verdad y por qué.
-        """
+        """Una invocación al modelo, registrada en `calls` con su propósito."""
         stream_kwargs = {"stream": True} if stream_llm else {}
         # Cada reparación solicita presupuesto medium, sin apagar reasoning. El
         # override queda acotado a esta petición y no cambia el modo global.
@@ -1711,8 +1685,6 @@ class ConversationService:
             return raw, meta
         started = time.perf_counter()
         try:
-            # Salida estricta: la gramática del servidor garantiza JSON aunque
-            # el modelo quiera responder en texto plano.
             raw, meta = await self.llm.chat_with_meta(
                 messages,
                 schema=schema,
@@ -1731,40 +1703,7 @@ class ConversationService:
                 repair_reason=repair_reason,
                 call_context=call_context,
             )
-            if not self._can_retry_without_strict(exc):
-                raise
-            log.warning(
-                "La salida estricta no está soportada por el servidor; "
-                "se reintenta en modo json_object.",
-                exc_info=True,
-            )
-            started = time.perf_counter()
-            retry_context = None
-            if getattr(self.llm, "payload_capture", None) is not None:
-                retry_purpose = f"{purpose}:json_object_retry"
-                retry_context = LLMCallContext(
-                    correlation_id=get_correlation_id(),
-                    purpose=retry_purpose,
-                    call_index=len(calls or []) + 1,
-                    model=getattr(self.llm, "model", None),
-                    provider=getattr(self.llm, "provider", None),
-                )
-            raw, meta = await self.llm.chat_with_meta(
-                messages,
-                schema=schema,
-                max_tokens=max_tokens,
-                reasoning_budget_tokens=requested_reasoning_budget,
-                quick_turn=requested_quick_turn,
-                **stream_kwargs,
-                **({"call_context": retry_context} if retry_context else {}),
-            )
-            self._record_call(
-                calls, f"{purpose}:json_object_retry", meta, started,
-                max_tokens, requested_reasoning_budget, requested_quick_turn,
-                repair_reason=repair_reason,
-                call_context=retry_context,
-            )
-            return raw, meta
+            raise
         self._record_call(
             calls, purpose, meta, started, max_tokens,
             requested_reasoning_budget, requested_quick_turn,

@@ -23,7 +23,6 @@ ENV_KEYS = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "LLM_MAX_TOKENS_FIELD",
-    "LLM_RESPONSE_FORMAT",
     "LLM_HEALTH_CHECK",
     "LLM_THINKING_MODE",
     "LLM_MAX_TOKENS",
@@ -112,8 +111,7 @@ def test_llama_mode_payload_unchanged():
     assert "temperature" not in payload
     assert payload["thinking_budget_tokens"] == 256
     assert payload["chat_template_kwargs"] == {"enable_thinking": True}
-    assert payload["response_format"]["type"] == "json_schema"
-    assert payload["response_format"]["json_schema"]["strict"] is True
+    assert "response_format" not in payload
     # El flujo completo devuelve el juicio parseado.
     assert reply == "¡gracias!"
     assert delta == 2
@@ -141,6 +139,6 @@ def test_openai_mode_payload(monkeypatch):
     assert "max_tokens" not in payload
     assert "chat_template_kwargs" not in payload
     assert "temperature" not in payload
-    assert payload["response_format"]["type"] == "json_schema"
+    assert "response_format" not in payload
     assert reply == "¡gracias!"
     assert delta == 2

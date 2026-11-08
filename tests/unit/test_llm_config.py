@@ -32,7 +32,6 @@ ENV_KEYS = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "LLM_MAX_TOKENS_FIELD",
-    "LLM_RESPONSE_FORMAT",
     "LLM_HEALTH_CHECK",
     "LLM_THINKING_MODE",
     "LLM_REASONING_BUDGET_LOW_TOKENS",
@@ -72,7 +71,6 @@ def test_config_defaults_are_llama_profile():
     assert cfg.api_key == ""
     assert cfg.model == DEFAULT_MODEL
     assert cfg.max_tokens_field == "max_tokens"
-    assert cfg.response_format is True
     assert cfg.health_check is True
 
 
@@ -175,20 +173,22 @@ def test_config_model_from_env(monkeypatch):
     ],
 )
 def test_config_boolean_flags(raw, expected, monkeypatch):
-    monkeypatch.setenv("LLM_RESPONSE_FORMAT", raw)
     monkeypatch.setenv("LLM_HEALTH_CHECK", raw)
     cfg = LlmConfig.from_env()
-    assert cfg.response_format is expected
     assert cfg.health_check is expected
 
 
 def test_config_empty_flags_mean_defaults(monkeypatch):
-    """Flag vacía (`VAR=`) = sin definir → default de cada flag."""
-    monkeypatch.setenv("LLM_RESPONSE_FORMAT", "")
+    """Flag vacía (`VAR=`) = sin definir → default del health check."""
     monkeypatch.setenv("LLM_HEALTH_CHECK", "")
     cfg = LlmConfig.from_env()
-    assert cfg.response_format is True
     assert cfg.health_check is True
+
+
+def test_legacy_response_format_env_is_ignored(monkeypatch):
+    monkeypatch.setenv("LLM_RESPONSE_FORMAT", "1")
+    cfg = LlmConfig.from_env()
+    assert not hasattr(cfg, "response_format")
 
 
 # ---------------------------------------------------------------------------

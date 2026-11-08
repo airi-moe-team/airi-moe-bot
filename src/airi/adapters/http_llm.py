@@ -228,7 +228,6 @@ class LlmConfig:
     api_key: str = ""
     model: str = DEFAULT_MODEL
     max_tokens_field: str = "max_tokens"
-    response_format: bool = True
     health_check: bool = True
     thinking_mode: str = "auto"
     generation_profile: str = LLM_GENERATION_PROFILE_DEFAULT
@@ -246,7 +245,6 @@ class LlmConfig:
             model=_env_str("LLM_MODEL", default=DEFAULT_MODEL),
             max_tokens_field=_env_str("LLM_MAX_TOKENS_FIELD")
             or default_max_tokens_field(provider),
-            response_format=_env_flag("LLM_RESPONSE_FORMAT", True),
             health_check=_env_flag("LLM_HEALTH_CHECK", True),
             thinking_mode=resolve_thinking_mode(
                 os.environ.get("LLM_THINKING_MODE")
@@ -285,7 +283,6 @@ def build_llm(
         provider=cfg.provider,
         api_key=cfg.api_key,
         max_tokens_field=cfg.max_tokens_field,
-        response_format=cfg.response_format,
         thinking_mode=cfg.thinking_mode,
         generation_profile=cfg.generation_profile,
         payload_capture=payload_capture,
@@ -385,7 +382,6 @@ class HttpLlmClient:
         provider: str | None = None,
         api_key: str | None = None,
         max_tokens_field: str | None = None,
-        response_format: bool | None = None,
         thinking_mode: str | None = None,
         generation_profile: str | None = None,
         payload_capture: LlmPayloadCapture | None = None,
@@ -430,11 +426,6 @@ class HttpLlmClient:
             max_tokens_field
             or _env_str("LLM_MAX_TOKENS_FIELD")
             or default_max_tokens_field(self.provider)
-        )
-        self.response_format = (
-            response_format
-            if response_format is not None
-            else _env_flag("LLM_RESPONSE_FORMAT", True)
         )
         self.thinking_mode = resolve_thinking_mode(
             thinking_mode
@@ -496,11 +487,6 @@ class HttpLlmClient:
                              quick_turn: bool = False, strict_schema: bool = False,
                              stream: bool = False, tools=None, tool_choice=None,
                              call_context: LLMCallContext | None = None):
-        if tools and schema is not None:
-            raise ValueError(
-                "tools y response_format no son compatibles en este backend; "
-                "usa dos llamadas (decisión + generación)"
-            )
         if tools and stream:
             raise ValueError("tools no está soportado en streaming")
         if tool_choice is not None and not isinstance(tool_choice, str):
@@ -530,20 +516,6 @@ class HttpLlmClient:
                 # llama.cpp solo acepta tool_choice como string ("auto",
                 # "required", "none"); un objeto falla y se ignora.
                 payload["tool_choice"] = tool_choice
-        if schema is not None:
-            if not self.response_format:
-                log.debug("response_format omitido (LLM_RESPONSE_FORMAT=0)")
-            elif strict_schema:
-                payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "structured_output",
-                        "strict": True,
-                        "schema": schema,
-                    },
-                }
-            else:
-                payload["response_format"] = {"type": "json_object"}
         # Extensiones específicas de llama.cpp; reasoning siempre queda activo.
         effective_reasoning_budget = None
         if self.provider == "llama":

@@ -14,11 +14,6 @@ import time
 from airi.discord_bot.client import build_date_glue
 from airi.domain.constants import DATE_MAX_SECONDS, DATE_SCENE_MAX_TOKENS, DATE_SCENES
 from airi.domain.dates import new_date_session
-from airi.domain.prompts import (
-    DATE_INVITATION_DECISION_SCHEMA,
-    GIFT_JUDGE_SCHEMA,
-    SCENE_PROPOSAL_SCHEMA,
-)
 from airi.testing import FakeUser, make_state
 
 ANA = FakeUser(1, "Ana")
@@ -130,10 +125,7 @@ def test_propose_scenes_sends_model_and_low_reasoning_budget():
     expected_model = os.environ.get("LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S")
     assert payload["model"] == expected_model
     assert payload["thinking_budget_tokens"] == 256
-    assert payload["response_format"]["type"] == "json_schema"
-    assert payload["response_format"]["json_schema"]["strict"] is True
-    assert payload["response_format"]["json_schema"]["name"] == "structured_output"
-    assert payload["response_format"]["json_schema"]["schema"] == SCENE_PROPOSAL_SCHEMA
+    assert "response_format" not in payload
     assert "json_schema" not in payload
     # El límite de reasoning reserva espacio para completar la respuesta JSON.
     assert payload["max_tokens"] == max(DATE_SCENE_MAX_TOKENS, 256 + 512)
@@ -151,7 +143,7 @@ def test_evaluate_date_invitation_parses_decision_and_provides_affinity_context(
     assert decision.decision == "accept"
     assert decision.reply == "¡Sí, vamos!"
     payload = session.payloads[-1]
-    assert payload["response_format"]["json_schema"]["schema"] == DATE_INVITATION_DECISION_SCHEMA
+    assert "response_format" not in payload
     prompt = " ".join(item["content"] for item in payload["messages"])
     assert "2" in prompt
     assert "umbral" in prompt.lower()
@@ -231,10 +223,7 @@ def test_judge_gift_sends_model_and_low_reasoning_budget():
     expected_model = os.environ.get("LLM_MODEL", "Qwen3.6-35B-A3B-MTP-UD-IQ3_S")
     assert payload["model"] == expected_model
     assert payload["thinking_budget_tokens"] == 256
-    assert payload["response_format"]["type"] == "json_schema"
-    assert payload["response_format"]["json_schema"]["strict"] is True
-    assert payload["response_format"]["json_schema"]["name"] == "structured_output"
-    assert payload["response_format"]["json_schema"]["schema"] == GIFT_JUDGE_SCHEMA
+    assert "response_format" not in payload
     assert "json_schema" not in payload
 
 

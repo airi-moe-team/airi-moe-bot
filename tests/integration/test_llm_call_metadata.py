@@ -137,8 +137,8 @@ def test_question_close_is_repaired_deterministically_without_extra_call():
     assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [1024]
 
 
-def test_repair_override_survives_json_schema_fallback():
-    class StrictRepairFallbackLLM(FakeLLM):
+def test_repair_failure_does_not_retry_as_json_object():
+    class StrictRepairFailureLLM(FakeLLM):
         async def chat_with_meta(self, messages, **kwargs):
             if kwargs.get("tools"):
                 self.decision_calls.append({"messages": messages, **kwargs})
@@ -147,22 +147,14 @@ def test_repair_override_survives_json_schema_fallback():
             self.calls.append(call)
             if len(self.calls) == 1:
                 return "", LLMMeta(finish_reason="stop")
-            if kwargs.get("strict_schema"):
-                raise ValueError("json_schema unsupported")
-            return llm_json("reparada"), LLMMeta(finish_reason="stop")
+            raise ValueError("request failed")
 
-    llm = StrictRepairFallbackLLM()
+    llm = StrictRepairFailureLLM()
     trace = _turn(llm, message=PRIVATE_TOKEN + " x" * 100, thinking_mode="auto")
 
-    assert [call["purpose"] for call in trace.llm_calls] == [
-        "primary",
-        "parse_repair",
-        "parse_repair:json_object_retry",
-    ]
-    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 1024, 1024]
-    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [
-        None, 1024, 1024,
-    ]
+    assert [call["purpose"] for call in trace.llm_calls] == ["primary", "parse_repair"]
+    assert [call["reasoning_budget_tokens"] for call in llm.calls] == [None, 1024]
+    assert [call["reasoning_budget_tokens"] for call in trace.llm_calls] == [None, 1024]
 
 
 def test_primary_budget_policy_is_not_changed_by_repair_override():

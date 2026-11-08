@@ -271,21 +271,19 @@ def test_timeout_is_not_retried():
     assert len(llm.calls) == 1
 
 
-def test_turn_falls_back_when_strict_schema_unsupported():
-    """Si el servidor rechaza la salida estricta, se reintenta en modo clásico."""
+def test_turn_does_not_retry_when_request_fails():
+    """Un error de petición no provoca un reintento idéntico sin response_format."""
     state, _ = make_state()
     llm = FakeLLM(
-        replies=[llm_json("hola tras el fallback")],
         strict_error=RuntimeError("400 Bad Request: json_schema"),
     )
     svc = make_service(llm, state, notifier=FakeNotifier())
 
-    result = run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
+    with pytest.raises(RuntimeError, match="json_schema"):
+        run(svc.run_turn(DAVID, [(DAVID, "hola")], TurnContext()))
 
-    assert result.reply == "hola tras el fallback"
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
     assert llm.calls[0]["strict_schema"] is True
-    assert llm.calls[1]["strict_schema"] is False
 
 
 # ---------------------------------------------------------------------------
